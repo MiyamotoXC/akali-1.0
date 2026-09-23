@@ -2817,10 +2817,11 @@ def _handle_ship_attr_query(tools, msg, agent=None, overrides=None):
 
 
 def _pvp_form_reply():
-    """模拟PVP 空表单引导（6 人 + 旗舰 + 防守角色）。供 争锋竞技场/模拟PVP 伤害意图复用。"""
-    return {'reply': '模拟PVP：选 6 人、1 名旗舰（必填）、1 个防守角色（不分前后排、不算支援技，普攻/通常技/必杀技），'
-                     '无需 buff，直接计算一定时间内的全队伤害。'
-                     '战斗时长总 120s：填「白天」（0~120），黑夜自动 = 120 − 白天。请填写：',
+    """模拟PVP 空表单引导（6 人 + 旗舰 + 防守角色）。供 争锋竞技场/模拟PVP 伤害意图复用。
+
+    文案只做一句话引导：规则细节（不分前后排 / 不算支援技 / 无需 buff / 黑夜自动 = 120−白天）
+    与填写说明统一由前端表单提示承载 —— 避免气泡与表单两处重复同一段话（用户口径 2026-09-23）。"""
+    return {'reply': '指挥官，模拟 PVP。请填写防守角色、白天时长与 6 人名单（含 1 名旗舰）：',
             'tool_outputs': [], 'suggestions': [],
             'fill_form': [], 'encounter_form': [
                 {'key': 'defender', 'label': '防守角色', 'placeholder': '角色名', 'required': True, 'value': ''},
