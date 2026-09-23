@@ -26,7 +26,8 @@
 │   ├── web/index.html            # 前端聊天界面（页内 token 输入）
 │   ├── agent/agent_app.py        # CLI 调试入口
 │   ├── user_data.json            # 用户数据（自定义角色/练度等）
-│   ├── 启动拂晓服务.bat           # 一键启动脚本
+│   ├── 启动拂晓服务.bat           # 一键启动脚本（Windows 本地）
+│   ├── 启动拂晓服务_云端.sh       # 云端启动脚本（Linux / macOS）
 │   └── workspace/                # 运行期产物（临时）
 │
 ├── 开发者入口/                    # 开发者工具（Streamlit Web 应用）
@@ -97,8 +98,14 @@
 │   ├── 测试集/                  # 本次种子生成的可复现 JSONL 输入
 │   └── 测试结果/              # 工具调用、LLM 置信度、计算输出与汇总
 │
-├── .env.example                  # 环境变量配置模板
+├── deploy/                       # 云部署件
+│   └── nginx.conf                # 反向代理（真实 IP 透传，云端按 IP 限额依赖）
+├── .env.example                  # 环境变量配置模板（末尾含「云部署链接汇总」，值全空）
+├── Dockerfile                    # 云端镜像（Python 3.12 + 依赖分层，自带知识库兜底）
+├── docker-compose.yml            # 云端编排：akali(FastAPI) + nginx + redis
+├── .dockerignore / .gitignore    # 构建忽略（密钥零进镜像）/ 闭源入库规则
 ├── build_package.py              # 闭源打包脚本（Nuitka + PyInstaller）
+├── 一键发布到GitHub.bat           # git add + commit + push 三连（双击即发布）
 ├── README.md                     # 本文件
 │
 ├── AGENT/                        # 历史遗留（死代码，仅个别路径被引用，勿改动）
@@ -318,6 +325,34 @@ python 调试\随机测试.py --suite all            # 三类随机测试
 | 多用户 | `FX_CLOUD_MODE=on`，前端每请求带游戏 `uid`（写入 `ChatRequest.uid`）；把 `quota.get_user_plan` 换成真实订阅查询（保持 `uid→'free'/'month'` 接口） |
 | 部署 | Docker 镜像打包（含知识库）+ gunicorn/uvicorn 多 worker + 前置 nginx；新增 `GET /api/quota` 查剩余额度 |
 | 鉴权 | 沿用页内 `API_TOKEN`；多用户建议替换为正式账号体系（当前 `uid` 为前端传入，需服务端校验） |
+
+### 仓库与版本管理（GitHub 私有闭源）
+
+本仓库为**私有仓库**（`akali-1.0`），只放源码与部署件；知识库与密钥一律不入库。
+
+| 入库 | 不入库（见 `.gitignore`） |
+|------|--------------------------|
+| `用户端特用/`、`通用工具/`、`开发者入口/` 源码 | `.env`（LLM Key / 邀请口令等全部密钥） |
+| `Dockerfile` / `docker-compose.yml` / `deploy/nginx.conf` | `知识库/`（约 489MB，部署时单独提供） |
+| `.env.example`（模板，所有值留空） | 各类 `.bak` 备份、`调试/`、运行时 `user_data.json` / `reminder_state.json` |
+
+入库规模约 **190 个文件 / 5.5MB**（对比知识库 489MB）。
+
+**部署时知识库从哪来**（仓库内没有）：① 直接上传 `知识库/` 目录（compose 已挂载 `./知识库:/app/知识库`）；② 对象存储 + 启动同步（`FX_KB_BASE_URL` / `FX_KB_MANIFEST_URL`）。
+
+**所有对外地址都不写死在代码里**，统一由 `.env` 注入 —— 链接类配置集中在 `.env.example` 末尾的「云部署链接汇总」，部署前保持留空。
+
+#### 本地更新 → GitHub（git 不会自动同步）
+
+改动不会自己上云，必须手动三步：
+
+```bash
+git add -A
+git commit -m "改了什么"
+git push
+```
+
+懒得敲就双击项目根的 `一键发布到GitHub.bat`（等价于上面三步，自动附时间戳说明）；想只发一句说明就拖一个参数：`一键发布到GitHub.bat "修了攻略输出的类数"`。
 
 ---
 
