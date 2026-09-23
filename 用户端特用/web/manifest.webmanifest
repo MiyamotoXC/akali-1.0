@@ -1,0 +1,32 @@
+{
+  "name": "阿卡莉 拂晓智能小秘书",
+  "short_name": "阿卡莉",
+  "description": "拂晓胜利之刻 智能小秘书：攻略查询 / 伤害计算 / 遭遇战模拟",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#f4f6f8",
+  "theme_color": "#6b8caa",
+  "lang": "zh-CN",
+  "icons": [
+    {
+      "src": "/kb/图片素材/表情差分/常态.jpg",
+      "sizes": "192x192",
+      "type": "image/jpeg",
+      "purpose": "any"
+    },
+    {
+      "src": "/kb/图片素材/表情差分/常态.jpg",
+      "sizes": "512x512",
+      "type": "image/jpeg",
+      "purpose": "any"
+    },
+    {
+      "src": "/kb/图片素材/表情差分/常态.jpg",
+      "sizes": "512x512",
+      "type": "image/jpeg",
+      "purpose": "maskable"
+    }
+  ]
+}

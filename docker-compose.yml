@@ -1,0 +1,62 @@
+# =============================================================================
+# 阿卡莉 1.0 云端编排：akali(FastAPI) + nginx(反代/真实IP透传) + redis(配额共享)
+#
+# 启动：docker compose up -d --build
+# 访问：http://<云主机IP>/           （网页端打开 / 手机「添加到主屏幕」）
+# 日志：docker compose logs -f akali
+#
+# 说明：
+# - 凭证（LLM Key / API_TOKEN / 邀请口令）统一放同目录 .env，由 env_file 注入。
+# - 知识库二选一：① 直接挂载宿主机 知识库/（见下方 volume，最省事）
+#                 ② 配 FX_KB_BASE_URL + FX_KB_MANIFEST_URL 走对象存储启动同步。
+# =============================================================================
+services:
+  akali:
+    build: .
+    image: akali:1.0
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      AKALI_RUN_MODE: cloud          # 云端模式：客户端面板 + 按 IP 限额 + 邀请口令
+      AKALI_ROUTE_MODE: agent        # 大模型先分析意图，再选择数据/检索工具
+      HOST: 0.0.0.0
+      PORT: "8000"
+      AKALI_NO_BROWSER: "1"
+      # 配额后端：redis（多实例/重启不丢）；redis 不可用时自动降级本地文件
+      FX_QUOTA_BACKEND: redis
+      FX_REDIS_URL: redis://redis:6379/0
+      FX_QUOTA_DIR: /data/quota
+      # 跨域白名单（网页端/iframe 从他域访问本服务时填；同源部署可留空）
+      # AKALI_ALLOW_ORIGINS: "https://your-front.example.com"
+    volumes:
+      - akali_data:/data
+      # ① 知识库直接挂载（若采用对象存储同步方案，可注释掉本行）
+      - ./知识库:/app/知识库
+    expose:
+      - "8000"
+    depends_on:
+      - redis
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--save", "60", "1", "--appendonly", "no"]
+    volumes:
+      - redis_data:/data
+
+  nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      # 有域名 + 证书时再开 443，并挂载证书目录
+      # - "443:443"
+    volumes:
+      - ./deploy/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - akali
+
+volumes:
+  akali_data:
+  redis_data:

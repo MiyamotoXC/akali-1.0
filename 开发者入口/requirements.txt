@@ -1,0 +1,18 @@
+# ===== 用户端服务（用户端特用/web_app.py）=====
+fastapi>=0.110.0
+uvicorn>=0.27.0
+qwen-agent>=0.0.34
+openai>=2.45.0,<4.0.0
+python-dotenv>=1.0.0
+
+# ===== 路由层：LangChain function calling（AKALI_ROUTE_MODE=agent 时启用）=====
+# 仅用于 function calling 的"选工具 + 抽参数"；编排由 core/route_dispatch 手写，不依赖 langgraph
+# （langgraph 尚未声明支持 Python 3.14，本环境为 3.14.6，故不引入）
+langchain-core>=1.6,<2.0
+langchain-openai>=1.6,<2.0
+
+# ===== 开发者入口（开发者入口/app.py）=====
+streamlit>=1.28.0
+pandas>=1.5.0
+openpyxl>=3.0.0
+pypinyin>=0.50.0

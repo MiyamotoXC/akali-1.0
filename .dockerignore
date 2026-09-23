@@ -1,0 +1,37 @@
+# =============================================================================
+# Docker 构建忽略清单
+# 背景：Dockerfile 是 COPY . .，没有本文件时下列内容会全部进镜像——
+#       其中 .env（LLM Key / API_TOKEN / 邀请口令）属于密钥泄露，.venv 会让镜像虚胖。
+# 注意：知识库/ **不排除**（镜像自带 KB，未配 CDN 时也能独立跑，见 README）。
+# =============================================================================
+
+# ---- 密钥与本地配置：绝不能进镜像 ----
+# 云端凭证由 docker-compose 的 env_file: .env 在宿主机注入，不进镜像层
+.env
+.env.*
+!.env.example
+
+# ---- 本地虚拟环境 / Python 缓存 ----
+.venv/
+venv/
+**/__pycache__/
+*.py[cod]
+*.pyi
+
+# ---- IDE / 工具链 ----
+.idea/
+.vscode/
+.codex/
+.workbuddy/
+.git/
+.gitignore
+
+# ---- 备份、临时与调试产物 ----
+_rollback_bak_*/
+_trash_bak_*/
+_gkscrape/
+调试/
+*.log
+_ls2.txt
+_t.txt
+schema_used_range.txt

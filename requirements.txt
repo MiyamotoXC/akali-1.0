@@ -1,0 +1,42 @@
+# =============================================================================
+# 阿卡莉 1.0 依赖清单（云端部署 / 本地重建 .venv 通用）
+# 安装：python -m pip install -r requirements.txt
+# 说明：
+#   - 本环境为 Python 3.14.6；langgraph 尚未声明支持 3.14，故不引入（路由编排手写在
+#     core/route_dispatch.py，不依赖 langgraph）。
+#   - 云端配额若使用 Redis 后端，需额外安装 redis（见文件末「可选」段）。
+# =============================================================================
+
+# ===== 服务端核心（用户端特用/web_app.py）=====
+fastapi>=0.110.0
+uvicorn>=0.27.0
+pydantic>=2.0.0
+qwen-agent>=0.0.34
+# qwen-agent imports soundfile at startup but does not declare it as a dependency.
+soundfile>=0.14.0
+# qwen-agent's Python executor imports tqdm at startup; it is also undeclared upstream.
+tqdm>=4.70.0
+openai>=2.45.0,<4.0.0
+python-dotenv>=1.0.0
+
+# ===== 计算 / 数据（通用工具）=====
+numpy>=1.24.0
+openpyxl>=3.0.0
+pypinyin>=0.50.0
+
+# ===== 攻略 docx 网页预览（web_app 内 docx→HTML，零 LLM）=====
+python-docx>=1.1.0
+
+# ===== 路由层：LangChain function calling（AKALI_ROUTE_MODE=agent 时启用）=====
+langchain-core>=1.6,<2.0
+langchain-openai>=1.6,<2.0
+
+# ===== 开发者入口（开发者入口/app.py，数据管理工具；服务端可不装）=====
+streamlit>=1.28.0
+pandas>=1.5.0
+python-calamine>=0.2.0
+zhconv>=1.4.3
+
+# ===== 可选：云端多实例配额共享（FX_QUOTA_BACKEND=redis）=====
+# 未安装时 quota 自动降级「本地文件 → 内存」后端，不影响单实例运行。
+# redis>=5.0.0
