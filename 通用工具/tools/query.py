@@ -654,8 +654,14 @@ import re
 # 素材库根：query.py 位于 阿卡莉1.0/通用工具/tools/，上溯 2 级即 阿卡莉1.0
 _PROJECT_ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..'))  # 阿卡莉1.0
 _KB_IMG_DIR = os.path.normpath(os.path.join(_PROJECT_ROOT, '知识库', '图片素材'))  # 头像库根（相对路径基准）
-AVATAR_ROOT = os.path.join(_KB_IMG_DIR, '头像')           # 原版父目录（扫描用）
-AVATAR_DIR = os.path.join(AVATAR_ROOT, '头像')            # 原版：065女灶神.png …
+AVATAR_ROOT = os.path.join(_KB_IMG_DIR, '头像')           # 原版头像根目录
+# 原版素材有两种历史布局，**两种都兼容**（用户口径 2026-09-23：素材目录被外部工具移动过）：
+#   ① 平铺（当前实际）：知识库/图片素材/头像/001岛风.png、016敷波/…
+#   ② 嵌套（旧版设计）：知识库/图片素材/头像/头像/001岛风.png
+# 有嵌套层就用嵌套层，否则用 头像/ 本身；相对路径前缀随之切换，保证 /avatar/ 路由能命中文件。
+_AVATAR_NESTED = os.path.join(AVATAR_ROOT, '头像')
+AVATAR_DIR = _AVATAR_NESTED if os.path.isdir(_AVATAR_NESTED) else AVATAR_ROOT
+_AVATAR_REL_PREFIX = '头像/头像/' if AVATAR_DIR == _AVATAR_NESTED else '头像/'
 AVATAR_KAI_DIR = os.path.join(_KB_IMG_DIR, '头像（改）')  # 改版：与 头像/ 平级
 
 # 昵称数据统一由 name_service 加载（唯一数据源；原 NICK_FILE/_nicknames 已合并入 name_service）
@@ -691,14 +697,14 @@ def _build_index() -> dict:
         for fn in os.listdir(AVATAR_DIR):
             p = os.path.join(AVATAR_DIR, fn)
             if os.path.isfile(p) and fn.lower().endswith('.png'):
-                idx.setdefault(_norm_name(fn), '头像/头像/' + fn)
+                idx.setdefault(_norm_name(fn), _AVATAR_REL_PREFIX + fn)
             elif os.path.isdir(p):
                 # 子目录头像（敷波/沃克兰/Z21 等）：取目录内 A01.png 或唯一 png
                 inner = [f for f in os.listdir(p) if f.lower().endswith('.png')]
                 if inner:
                     inner.sort()
                     pick = next((f for f in inner if re.match(r'^A0*1', f, re.I)), inner[0])
-                    idx.setdefault(_norm_name(fn), '头像/头像/' + fn + '/' + pick)
+                    idx.setdefault(_norm_name(fn), _AVATAR_REL_PREFIX + fn + '/' + pick)
     # 改版目录
     if os.path.isdir(AVATAR_KAI_DIR):
         for fn in os.listdir(AVATAR_KAI_DIR):
