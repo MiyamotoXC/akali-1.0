@@ -73,15 +73,18 @@ class QueryEquipment(BaseTool):
         lines.append(f"数据源: {EQUIPMENT_FILE}")
         return "\n".join(lines)
 
-# 攻略三大类（用户定义）：
-# 新人相关（新手向入门/养成/推荐）/ 知识图表（速查表/数值表/教程图）/ 进阶（5 篇指定）
+# 攻略四大类（用户口径 2026-09-22：窗口就是四类，工具口径必须与其一致）。
+# 类目与归属**不在这里硬编码**：直接取 guide_index.json 的 category 字段
+# （与前端攻略库面板同一数据源、同一 tab 顺序），避免"窗口四类、工具三类"两套口径。
+_CATEGORY_ORDER = ['萌新入坑', '一图速查', '练级须知', '进阶必备']
+# 兜底：guide_index 未收录该篇时，用旧的三类 id 映射折算到四类
 _GUIDE_CATEGORY_ADV = {'D20', 'D21', 'D22', 'D23', 'D25'}          # 进阶：争锋竞技场/遭遇战/无尽/伤害计算/拉古兹
 _GUIDE_CATEGORY_CHART = {'D06', 'D08', 'D12', 'D13', 'D14a', 'D14b', 'D14c', 'D15'}  # 知识图表：速查/数值/装填/问答/教程
-_CATEGORY_ORDER = ['新人相关', '知识图表', '进阶']
+_LEGACY_CAT_MAP = {'新人相关': '萌新入坑', '知识图表': '一图速查', '进阶': '进阶必备'}
 
 
-def _category_of(doc_id: str) -> str:
-    """文档所属大类：进阶 / 知识图表 / 新人相关（默认）。"""
+def _legacy_category_of(doc_id: str) -> str:
+    """旧三类 id 映射：进阶 / 知识图表 / 新人相关（仅供兜底）。"""
     if doc_id in _GUIDE_CATEGORY_ADV:
         return '进阶'
     if doc_id in _GUIDE_CATEGORY_CHART:
@@ -89,12 +92,53 @@ def _category_of(doc_id: str) -> str:
     return '新人相关'
 
 
+def _guide_cat_maps() -> tuple:
+    """返回 (path→类, title→类)。数据源 guide_index.json，与前端窗口同源。"""
+    by_path, by_title = {}, {}
+    try:
+        from .common import _load_guide_index
+        for g in (_load_guide_index() or []):
+            cat = (g.get('category') or '').strip()
+            if not cat:
+                continue
+            p = (g.get('path') or '').strip()
+            if p:
+                by_path[os.path.normpath(p)] = cat
+            t = (g.get('title') or '').strip()
+            if t:
+                by_title[t] = cat
+    except Exception:
+        pass
+    return by_path, by_title
+
+
+def _category_of(doc, maps=None) -> str:
+    """文档所属大类（四类，与窗口一致）：file 路径 → 标题 → 旧三类折算兜底。"""
+    if isinstance(doc, str):          # 兼容只传 doc_id 的旧调用
+        doc = {'id': doc}
+    by_path, by_title = maps if maps else _guide_cat_maps()
+    p = (doc.get('file') or '').strip()
+    if p:
+        c = by_path.get(os.path.normpath(p))
+        if c:
+            return c
+    t = (doc.get('title') or '').strip()
+    if t and t in by_title:
+        return by_title[t]
+    return _LEGACY_CAT_MAP.get(_legacy_category_of(doc.get('id', '')), '一图速查')
+
+
 def _group_by_category(docs: list) -> dict:
-    """把文档列表按三大类分组，返回 {大类: [docs, ...]}（保持顺序）。"""
-    groups = {c: [] for c in _CATEGORY_ORDER}
+    """把文档列表按四大类分组，返回 {大类: [docs, ...]}（按窗口 tab 顺序，未知类排最后）。"""
+    maps = _guide_cat_maps()
+    groups = {}
     for d in docs:
-        groups[_category_of(d.get('id', ''))].append(d)
-    return {c: v for c, v in groups.items() if v}
+        groups.setdefault(_category_of(d, maps), []).append(d)
+    out = {c: groups[c] for c in _CATEGORY_ORDER if c in groups}
+    for c, v in groups.items():
+        if c not in out:
+            out[c] = v
+    return out
 
 
 # ======================================================================
@@ -196,15 +240,15 @@ def _single_guide_lines(doc: dict) -> str:
 
 
 class QueryGuide(BaseTool):
-    """【攻略】按类型从索引库定位攻略文档。不带 keyword 时列出全部攻略清单；带 keyword 时按
+    """【攻略】按类型从索引库定位攻略文档。不带 keyword 时只给四大类概览（不列全目录）；带 keyword 时按
     标题/标签匹配。**只做定位，不读取、不转述任何正文**：查询到攻略时输出 <<GUIDE_LIB>> 标记
     （可带聚焦词，如 <<GUIDE_LIB>>遭遇战），前端会打开攻略库面板由用户直接查看文档内容。"""
     name = 'query_guide'
-    description = '【攻略】查询拂晓攻略知识库（拂晓攻略知识库_精简版.json）。参数：keyword（主题关键词，如 新人/萌新/遭遇战/练级/配装/装备/PVE/伤害计算/拉古兹/竞技场/无尽；可空则列出全部攻略清单）。泛化询问舰灵改造优先级、哪些舰灵值得优先改造或要求总结改造原图时，keyword 必须用“舰灵改造优先级”。笼统说法（如"新人"）返回该主题全部文档（大全）；指名具体话题定位原文档，仅可附带已标记为人工核验的原文摘要，不得自行补充。查询到攻略时在回复末尾输出 <<GUIDE_LIB>>聚焦关键词标记，前端自动打开攻略库面板。'
+    description = '【攻略】查询拂晓攻略知识库（拂晓攻略知识库_精简版.json）。参数：keyword（主题关键词，如 新人/萌新/遭遇战/练级/配装/装备/PVE/伤害计算/拉古兹/竞技场/无尽；可空则只给四大类概览，不列全目录）。泛化询问舰灵改造优先级、哪些舰灵值得优先改造或要求总结改造原图时，keyword 必须用“舰灵改造优先级”。笼统说法（如"新人"）返回该主题全部文档（大全）；指名具体话题定位原文档，仅可附带已标记为人工核验的原文摘要，不得自行补充。查询到攻略时在回复末尾输出 <<GUIDE_LIB>>聚焦关键词标记，前端自动打开攻略库面板。'
     parameters = {
         'type': 'object',
         'properties': {
-            'keyword': {'type': 'string', 'description': '攻略类型/主题关键词，如 新人/萌新/遭遇战/练级/配装/装备/PVE/伤害计算/拉古兹/竞技场/无尽（可空则列出全部攻略清单）'},
+            'keyword': {'type': 'string', 'description': '攻略类型/主题关键词，如 新人/萌新/遭遇战/练级/配装/装备/PVE/伤害计算/拉古兹/竞技场/无尽（可空则只给四大类概览，不列全目录）'},
         },
         'required': [],
     }
@@ -247,18 +291,13 @@ class QueryGuide(BaseTool):
             return text
 
         if not keyword:
-            # 全部攻略：按三大类分组（新人相关/知识图表/进阶），编号 + 《标题》
-            lines = [f"拂晓攻略知识库（共 {len(docs)} 篇，三大类）："]
+            # 全部攻略：只给「四大类 + 各类篇数」概览，不逐条贴全目录
+            # （用户口径 2026-09-22：查攻略不要输出全部的目录名字——前端滑块面板
+            #  已按分类展示全部攻略，工具再贴 25 行只是刷屏；要点名看哪篇就带类型/篇名）
             groups = _group_by_category(docs)
-            n = 0
-            for cat in _CATEGORY_ORDER:
-                gdocs = groups.get(cat, [])
-                if not gdocs:
-                    continue
-                lines.append(f"【{cat}】")
-                for g in gdocs:
-                    n += 1
-                    lines.append(f"  {n}.《{g['title']}》")
+            lines = [f"拂晓攻略知识库（共 {len(docs)} 篇，{len(groups)} 类）："]
+            for cat, gdocs in groups.items():
+                lines.append(f"【{cat}】{len(gdocs)} 篇")
             lines.append("输入攻略类型（如「新人」「练级」「遭遇战」「拉古兹」）可查看对应文档；也可点击下方目录查看详情。")
             lines.append("<<GUIDE_LIB>>")
             return "\n".join(lines)
@@ -304,12 +343,15 @@ class QueryGuide(BaseTool):
             return f"未找到与「{keyword}」相关的攻略。可用主题：萌新入门、练级攻略、装备系统、阵容阵型、PVP天赋/争锋、舰灵改造、活动、PVE配队、遭遇战、无尽海域、数值机制、伤害计算、拉古兹等；输入「攻略」可查看全部清单。"
 
 
-        # 先指引三大类之一，再给细分：目录标注所属大类
-        cats = sorted({_category_of(g.get('id', '')) for g in matched_docs}, key=_CATEGORY_ORDER.index)
+        # 先指引所属大类，再给细分：目录标注所属大类（四类，与窗口一致）
+        _maps = _guide_cat_maps()
+        cats = sorted({_category_of(g, _maps) for g in matched_docs},
+                      key=lambda c: _CATEGORY_ORDER.index(c) if c in _CATEGORY_ORDER else len(_CATEGORY_ORDER))
         cat_note = "【" + "/".join(cats) + "】" if cats else ""
         lines = [f"攻略「{keyword}」对应文档（{len(matched_docs)} 篇）{cat_note}："]
-        for i, g in enumerate(matched_docs, 1):
-            lines.append(f"  {i}.《{g['title']}》")
+        # 指定类型的文档可以列出，但不加序号（用户口径 2026-09-22：不要序号）
+        for g in matched_docs:
+            lines.append(f"  ·《{g['title']}》")
         # 对应可下载文件：按标题从 guide_index 匹配路径，输出 <<GUIDE_FILE>> 标记（前端渲染目录卡片）
         file_lines = _guide_file_lines(matched_docs)
         if file_lines:
