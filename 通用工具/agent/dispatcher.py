@@ -301,6 +301,18 @@ def route_work_agent(tools, overrides, msg, agent=None, history=None):
     if handled:
         return res
 
+    # 悬浮球「计算工具」按钮直通（用户口径 2026-09-23）：
+    # 前端该按钮发的就是这个固定短语，语义唯一、不需要模型理解。实测路由模型会偶发
+    # 把它判成 intent=casual + no_tool（[route] input='计算工具' intent=casual tool=no_tool），
+    # 于是落到闲聊自由生成链路 —— 回一句「系统异常。」且不弹子菜单（用户点按钮必现/偶现）。
+    # 固定指令一律不走 LLM 判意图，直接交 legacy 确定性分支（calc_flow._handle_calc_menu）。
+    try:
+        if re.search(r'计算工具|计算菜单', msg or ''):
+            return _legacy_route_work(tools, overrides, msg, agent=agent,
+                                      allow_intent_llm=False, update_recent=False)
+    except Exception:
+        pass
+
     # 普通对话每轮都重新判定意图。历史只用来理解指代、省略、纠正与话题切换，
     # 不保存“上一轮路由”。只有 guard 中的明确工具状态机会跳过本层。
     recent_prev = list((overrides or {}).get('_recent') or [])
