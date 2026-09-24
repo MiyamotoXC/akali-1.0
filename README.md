@@ -335,6 +335,18 @@ python 调试\随机测试.py --suite all            # 三类随机测试
 | 部署 | Docker 镜像打包（含知识库）+ gunicorn/uvicorn 多 worker + 前置 nginx；新增 `GET /api/quota` 查剩余额度 |
 | 鉴权 | 沿用页内 `API_TOKEN`；多用户建议替换为正式账号体系（当前 `uid` 为前端传入，需服务端校验） |
 
+### 云端部署踩坑（实盘记录 · 2026-09-24 · 腾讯云轻量 Ubuntu 24.04 / 2核2G）
+
+| 现象 | 根因 | 对策（已落到仓库） |
+|------|------|-------------------|
+| 镜像构建卡 10 分钟以上 | `deb.debian.org` / `pypi.org` 在国内被限速甚至超时 | `Dockerfile` 默认走腾讯云镜像，并提供 `--build-arg APT_MIRROR=... / PIP_INDEX=...` 覆盖；换源后 apt + pip **共 41 秒**完成 |
+| nginx 容器无限重启、首页打不开 | `log_format` 被写在 `server {}` 块内，而它**只能定义在 http 上下文** | `deploy/nginx.conf` 已把 `log_format` 移到 server 块**之外**（文件顶部） |
+| 服务器拉大文件（知识库 355MB）极慢 | 服务器直连 GitHub 实测仅 **893 B/s**；cpolar 免费隧道约 130 KB/s 且单连接限流、断线换域名 | 改用 **cloudflared** 临时隧道 + 本机 HTTP 服务，实测 **2.9 MB/s**（快 22 倍）；生产建议走对象存储/CDN |
+| 分段并行下载收益有限 | cpolar 免费版每连接约 10~24MB 后限流 | 换 cloudflared 后可单连接直取；仍慢时用「小块分段 + 多路并行 + 每段重试」 |
+
+> 本机需提供 HTTP 服务时，**不要**用 `python -m http.server`（不支持 Range，无法断点续传/分段并发）；
+> 也慎用 `rangehttpserver` 模块（实测 8 路并发 Range 下会崩）。可用 `调试/` 下自写的 Range 服务实现。
+
 ### 客户端形态（三种，可并存）
 
 | 形态 | 怎么用 | 说明 |

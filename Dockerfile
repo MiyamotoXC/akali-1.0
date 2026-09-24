@@ -13,7 +13,12 @@ ENV PYTHONUNBUFFERED=1 \
     AKALI_NO_BROWSER=1
 
 # 基础系统依赖（时区/证书）；如需 docx 转 HTML 的中文字体可再追加 fonts-noto-cjk
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# apt 源：默认切到腾讯云公网镜像 —— deb.debian.org 在国内常慢到超时（实测卡住 5 分钟以上），
+# 换源后秒级完成。境外或其他云可用 --build-arg APT_MIRROR=deb.debian.org 还原。
+ARG APT_MIRROR=mirrors.cloud.tencent.com
+RUN sed -i "s|deb.debian.org|$APT_MIRROR|g; s|security.debian.org|$APT_MIRROR|g" \
+        /etc/apt/sources.list.d/debian.sources 2>/dev/null || true \
+    && apt-get update && apt-get install -y --no-install-recommends \
         tzdata ca-certificates \
     && ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone \
     && rm -rf /var/lib/apt/lists/*
@@ -22,7 +27,10 @@ WORKDIR /app
 
 # 依赖层独立，便于缓存
 COPY requirements.txt ./
-RUN pip install -r requirements.txt
+# pip 源：默认走腾讯云公网镜像 —— 国内构建时 pypi.org 常被限速到几十 KB/s，
+# 实测国内源快两个数量级。境外或其他云可用 --build-arg PIP_INDEX=https://pypi.org/simple 覆盖。
+ARG PIP_INDEX=https://mirrors.cloud.tencent.com/pypi/simple
+RUN pip install -r requirements.txt -i $PIP_INDEX
 
 # 项目代码 + 知识库（KB 也可不打包，改由启动同步从对象存储拉取）
 COPY . .
