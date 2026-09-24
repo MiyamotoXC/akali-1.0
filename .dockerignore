@@ -10,6 +10,7 @@
 .env
 .env.*
 !.env.example
+!.env.cloud.example
 
 # ---- 本地虚拟环境 / Python 缓存 ----
 .venv/

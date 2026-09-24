@@ -30,27 +30,17 @@ if "%SKIP%"=="0" (
     timeout /t 6 /nobreak >nul
 )
 
-rem cpolar 隧道（免费版随机分配地址，每次启动可能变化，以窗口输出为准）
-rem 自动探测：先用 PATH 里的 cpolar，其次找 D:\cpolar\cpolar.exe；都没有则提示下载
-set "CPOLAR_DIR="
-where cpolar >nul 2>&1
-if "%errorlevel%"=="0" set "CPOLAR_DIR=."
-if not defined CPOLAR_DIR if exist "D:\cpolar\cpolar.exe" set "CPOLAR_DIR=D:\cpolar"
-
-if defined CPOLAR_DIR (
-    echo [隧道] cpolar 已启动，公网地址请在该窗口内查看（免费版每次启动都会变化）...
-    start "cpolar隧道" /D "%CPOLAR_DIR%" cmd /k "chcp 65001 >nul && cpolar.exe http 8000 -log=stdout"
-) else (
-    echo [隧道] 未找到 cpolar，请到 https://www.cpolar.com/ 下载安装
-)
+rem ── 关于内网穿透（cpolar 隧道）：已移除 ──
+rem 用户口径 2026-09-24：已有正式云服务器（docker compose 常驻运行），
+rem 本机不再需要把 8000 端口穿到公网；原 cpolar 自动启动逻辑一并删除。
+rem 若日后仍需临时暴露本机（例如给云服务器传大文件），见 README「传输大文件到服务器」一节，
+rem 按需临时搭建即可，不做成常驻功能。
 
 echo.
 echo ============================================
 echo  拂晓用户端启动完成
-echo   1. 本地服务：浏览器打开 http://127.0.0.1:8000
-echo   2. cpolar公网地址：以隧道窗口输出为准
-echo      形如 https://xxxx.r7.cpolar.top/?token=...
-echo  关闭：在两个窗口分别 Ctrl+C 退出即可
-echo  注意：公网隧道地址每次启动会变化
+echo   本地服务：浏览器打开 http://127.0.0.1:8000
+echo   云端服务：部署在云服务器上（docker compose 常驻，无需在本机启动）
+echo   关闭：在服务窗口按 Ctrl+C 退出即可
 echo ============================================
 pause

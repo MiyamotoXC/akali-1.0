@@ -109,7 +109,8 @@
 ├── 接口契约.md                    # 给插件 / 外部客户端的接口约定（鉴权/字段/限额）
 ├── deploy/                       # 云部署件
 │   └── nginx.conf                # 反向代理（真实 IP 透传，云端按 IP 限额依赖）
-├── .env.example                  # 环境变量配置模板（末尾含「云部署链接汇总」，值全空）
+├── .env.example                  # 【本地自用】env 模板（复制为 .env 即可跑，默认无需改）
+├── .env.cloud.example            # 【云服务器】env 模板（cp 后填 3 项必填，配 docker compose）
 ├── Dockerfile                    # 云端镜像（Python 3.12 + 依赖分层，自带知识库兜底）
 ├── docker-compose.yml            # 云端编排：akali(FastAPI) + nginx + redis
 ├── .dockerignore / .gitignore    # 构建忽略（密钥零进镜像）/ 闭源入库规则
@@ -191,7 +192,11 @@ cd 用户端特用
 python web_app.py            # 或双击 启动拂晓服务.bat
 ```
 
-浏览器访问：`http://127.0.0.1:8000`（首次进入按提示页内输入 `API_TOKEN`；对外可配合 cpolar 内网穿透，鉴权走页内 token，不走 URL 参数）
+浏览器访问：`http://127.0.0.1:8000`（本机自用；邀请口令见 `.env` 的 `AKALI_INVITE_CODE`，留空则不校验）
+
+> 对外提供服务的正式做法是**部署到云服务器**（见上文「云端部署」与 `docker-compose.yml`），
+> 不再使用内网穿透（cpolar）把本机端口暴露到公网 —— 该功能已于 2026-09-24 移除。
+> 若需临时把本机文件传给云服务器，见「传输大文件到服务器」一节。
 
 ### 5. 启动开发者端（Streamlit 工具）
 
@@ -346,6 +351,25 @@ python 调试\随机测试.py --suite all            # 三类随机测试
 
 > 本机需提供 HTTP 服务时，**不要**用 `python -m http.server`（不支持 Range，无法断点续传/分段并发）；
 > 也慎用 `rangehttpserver` 模块（实测 8 路并发 Range 下会崩）。可用 `调试/` 下自写的 Range 服务实现。
+
+### 传输大文件到服务器（更新知识库时用）
+
+仓库里**不含知识库**（355MB），服务器上的 `知识库/` 是单独传的。改了底层数据后要同步上去：
+
+**为什么不能直接传**：服务器直连 GitHub 仅 ~893 B/s；而服务器 ↔ 国内镜像是 GB/s 级 —— 瓶颈在**本机上行**。
+所以做法是：**本机起 HTTP 服务 + 临时隧道，让服务器主动来拉**。
+
+| 步骤 | 在哪执行 | 命令/说明 |
+|---|---|---|
+| 1 | 本机 | 打包待传文件（tar.gz），并起一个**支持 Range** 的 HTTP 服务：`python deploy/http_range_server.py 8080 <目录>`（端口 8080，目录指向待传文件所在处） |
+| 2 | 本机 | 开临时隧道：`cloudflared tunnel --url http://localhost:8080` → 得到一个 `https://xxx.trycloudflare.com` |
+| 3 | 服务器 | `curl -L -o /tmp/kb.tar.gz "<隧道地址>/kb.tar.gz"` → `tar -xzf /tmp/kb.tar.gz -C /root/akali/` |
+| 4 | 本机 | 传完关掉隧道与本地服务（**一次性**，不做成常驻功能） |
+
+> 实测对比：cpolar 免费版约 **130 KB/s** 且单连接限流、断线换域名；**cloudflared 约 2.9 MB/s（快 22 倍）**，推荐。
+> 传 355MB 知识库：cloudflared ≈ 2 分钟，cpolar ≈ 45 分钟。
+>
+> 注意：`python -m http.server` **不支持 Range**（无法断点续传/分段并发），请用 `deploy/http_range_server.py`。
 
 ### 客户端形态（三种，可并存）
 
