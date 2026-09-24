@@ -116,7 +116,8 @@
 ├── .dockerignore / .gitignore    # 构建忽略（密钥零进镜像）/ 闭源入库规则
 ├── build_package.py              # 闭源打包脚本（Nuitka + PyInstaller）
 ├── 一键发布到GitHub.bat           # git add + commit + push 三连（双击即发布）
-├── README.md                     # 本文件
+├── README.md                     # 本文件（项目说明：架构 / 功能 / 本地运行 / 开发）
+├── 云端部署运维.md                # 云服务器部署与运维手册（部署步骤 + 命令速查 + 踩坑记录）
 │
 ├── AGENT/                        # 历史遗留（死代码，仅个别路径被引用，勿改动）
 └── .workbuddy/                   # 工作记忆/协作数据（勿删）
@@ -182,7 +183,8 @@ pip install streamlit python-calamine    # 开发者端实际运行依赖
 ### 3. 配置环境变量
 
 ```bash
-copy .env.example .env       # 填入 .env（见下方配置说明）
+copy .env.example .env       # 【本地自用】模板：复制即可，默认一项都不用改
+# 部署到云服务器则改用：cp .env.cloud.example .env   （详见 云端部署运维.md）
 ```
 
 ### 4. 启动用户端（Web 聊天）
@@ -256,7 +258,8 @@ python 调试\随机测试.py --suite all            # 三类随机测试
 
 ### 环境变量
 
-在根目录 `.env` 中配置（完整清单见 `.env.example`）：
+在根目录 `.env` 中配置。模板二选一：**本地自用** `.env.example`、**云服务器** `.env.cloud.example`
+（云端那一套及运维操作见 [`云端部署运维.md`](云端部署运维.md)）：
 
 | 变量 | 必填 | 说明 |
 |------|------|------|
@@ -291,85 +294,13 @@ python 调试\随机测试.py --suite all            # 三类随机测试
 
 项目从「本地个人使用」演进到「可云端多用户」。所有云端能力通过**环境变量开关**启用，本地默认行为完全不变。
 
-### 多用户算力配额（核心新增）
-
-按游戏 `uid` 隔离多用户，限制每天 LLM 闲聊消耗（基础工具——查询/计算/攻略/遭遇战——走确定性路由，**不受配额影响、照常工作**）：
-
-| 用户类型 | 每日限额 | 超限行为 |
-|----------|----------|----------|
-| 免费用户 | **≤15 轮** LLM 对话 | 停用 LLM，返回「今日算力已用尽…基础功能仍可用，明日零点恢复」；次日本地日期自动恢复 |
-| 月卡用户 | **≤0.3 元**（qwen3.6-plus 实测定价：输入 0.0024 元/千 tok、输出 0.0144 元/千 tok） | 同上，按实时成本累加精确判定（非轮数） |
-
-> 预算换算：0.3 元按典型一轮（输入 ~3100 + 输出 ~120 token ≈ 0.0092 元）约 **33 轮/天**；月卡仅卡金额这一个硬闸，达到 0.30 元即停（实测 33 轮、成本 ≈0.3025 元越界）。
-
-**开关与行为**：
-- `FX_CLOUD_MODE` 未设 → 本地个人模式：不限制、仍保留 token 统计，行为与改造前完全一致。
-- `FX_CLOUD_MODE=on` → 启用多用户配额：闲聊前检查额度，超限不调 LLM。
-- 按日分桶 `date|uid` 存储，**次日零点（本地日期）自动归零**，无需定时任务。
-
-### 配额存储后端（可插拔，云端预留）
-
-`通用工具/core/quota.py` 抽象 `QuotaStore` 三选一，由 `FX_QUOTA_BACKEND` 选择，本地零回归：
-
-| 后端 | 说明 | 适用 |
-|------|------|------|
-| `memory` | 进程内字典（默认本地） | 本地个人 / 单实例 |
-| `local` | 落盘 JSON（`FX_QUOTA_DIR`） | 本地多会话持久化、无 Redis 的轻量部署 |
-| `redis` | Redis（`FX_REDIS_URL`） | **云端多实例**，跨进程/跨重启共享，不丢额度 |
-
-云端 `FX_CLOUD_MODE=on` 未显式指定后端时**默认尝试 Redis**；若未安装 `redis` 包或连接失败，自动降级 `memory` 并打 stderr 告警（不会崩溃）。
-
-### 资源去本地化（CDN 直链）
-
-静态资源（头像/表情/攻略图）原本由本机 `/kb/`、`/avatar/` 路由直读磁盘。云端通过 `FX_CDN_BASE` 接入对象存储 + CDN：
-
-- `FX_CDN_BASE=https://cdn.xxx.com/kb`（指向 `知识库/图片素材/`）；
-- 服务启动时 `index()` 注入 `window.ASSET_BASE`，并把静态 HTML 内的 `/kb/`（排除 `/kb_html/`）、`/avatar/` 重写为 CDN 直链；
-- 前端新增 `resolveAsset()` 覆盖**运行时由 API 返回**的资源（表情差分头像、查询头像标记、sticker、伤害公式图、guide 图/下载、默认头像）；
-- `/kb/`、`/avatar/` 路由**保留**作云端兜底（Docker 镜像自带知识库，即使不配 CDN 也能跑）。
-
-> 注：docx 攻略 `/kb_html/` 嵌套图片仍走服务器渲染（云端由本机 `/kb/` 兜底）；若要彻底去本机，把攻略文档也同步对象存储并 rewrite 内嵌图片即可（暂未做）。
-
-### 云端部署清单（租服务器后）
-
-| 项 | 操作 |
-|----|------|
-| 资源 | 把 `知识库/图片素材/` 整目录同步到对象存储（OSS/COS/S3）+ CDN，设 `FX_CDN_BASE=https://cdn域名/kb` |
-| 配额状态 | 装 `redis`，设 `FX_QUOTA_BACKEND=redis` + `FX_REDIS_URL=redis://...`（多实例共享、跨重启不丢） |
-| 多用户 | `FX_CLOUD_MODE=on`，前端每请求带游戏 `uid`（写入 `ChatRequest.uid`）；把 `quota.get_user_plan` 换成真实订阅查询（保持 `uid→'free'/'month'` 接口） |
-| 部署 | Docker 镜像打包（含知识库）+ gunicorn/uvicorn 多 worker + 前置 nginx；新增 `GET /api/quota` 查剩余额度 |
-| 鉴权 | 沿用页内 `API_TOKEN`；多用户建议替换为正式账号体系（当前 `uid` 为前端传入，需服务端校验） |
-
-### 云端部署踩坑（实盘记录 · 2026-09-24 · 腾讯云轻量 Ubuntu 24.04 / 2核2G）
-
-| 现象 | 根因 | 对策（已落到仓库） |
-|------|------|-------------------|
-| 镜像构建卡 10 分钟以上 | `deb.debian.org` / `pypi.org` 在国内被限速甚至超时 | `Dockerfile` 默认走腾讯云镜像，并提供 `--build-arg APT_MIRROR=... / PIP_INDEX=...` 覆盖；换源后 apt + pip **共 41 秒**完成 |
-| nginx 容器无限重启、首页打不开 | `log_format` 被写在 `server {}` 块内，而它**只能定义在 http 上下文** | `deploy/nginx.conf` 已把 `log_format` 移到 server 块**之外**（文件顶部） |
-| 服务器拉大文件（知识库 355MB）极慢 | 服务器直连 GitHub 实测仅 **893 B/s**；cpolar 免费隧道约 130 KB/s 且单连接限流、断线换域名 | 改用 **cloudflared** 临时隧道 + 本机 HTTP 服务，实测 **2.9 MB/s**（快 22 倍）；生产建议走对象存储/CDN |
-| 分段并行下载收益有限 | cpolar 免费版每连接约 10~24MB 后限流 | 换 cloudflared 后可单连接直取；仍慢时用「小块分段 + 多路并行 + 每段重试」 |
-
-> 本机需提供 HTTP 服务时，**不要**用 `python -m http.server`（不支持 Range，无法断点续传/分段并发）；
-> 也慎用 `rangehttpserver` 模块（实测 8 路并发 Range 下会崩）。可用 `调试/` 下自写的 Range 服务实现。
-
-### 传输大文件到服务器（更新知识库时用）
-
-仓库里**不含知识库**（355MB），服务器上的 `知识库/` 是单独传的。改了底层数据后要同步上去：
-
-**为什么不能直接传**：服务器直连 GitHub 仅 ~893 B/s；而服务器 ↔ 国内镜像是 GB/s 级 —— 瓶颈在**本机上行**。
-所以做法是：**本机起 HTTP 服务 + 临时隧道，让服务器主动来拉**。
-
-| 步骤 | 在哪执行 | 命令/说明 |
-|---|---|---|
-| 1 | 本机 | 打包待传文件（tar.gz），并起一个**支持 Range** 的 HTTP 服务：`python deploy/http_range_server.py 8080 <目录>`（端口 8080，目录指向待传文件所在处） |
-| 2 | 本机 | 开临时隧道：`cloudflared tunnel --url http://localhost:8080` → 得到一个 `https://xxx.trycloudflare.com` |
-| 3 | 服务器 | `curl -L -o /tmp/kb.tar.gz "<隧道地址>/kb.tar.gz"` → `tar -xzf /tmp/kb.tar.gz -C /root/akali/` |
-| 4 | 本机 | 传完关掉隧道与本地服务（**一次性**，不做成常驻功能） |
-
-> 实测对比：cpolar 免费版约 **130 KB/s** 且单连接限流、断线换域名；**cloudflared 约 2.9 MB/s（快 22 倍）**，推荐。
-> 传 355MB 知识库：cloudflared ≈ 2 分钟，cpolar ≈ 45 分钟。
+> 📘 **部署到云服务器 / 日常运维 → 见独立文档 [`云端部署运维.md`](云端部署运维.md)**
 >
-> 注意：`python -m http.server` **不支持 Range**（无法断点续传/分段并发），请用 `deploy/http_range_server.py`。
+> 该文档包含：当前部署实况、从零部署步骤（装 Docker → 配 `.env` → 传知识库 → 起服务 → 验证）、
+> **运维命令速查**（服务管理 / 改口令 / 换白名单 / 备份 / 防火墙 / 日志）、多用户配额设计、
+> CDN 去本地化、实盘踩坑记录、大文件传输方法。
+>
+> 需要动手操作服务器时，直接看那份文档；本文档只管项目本身。
 
 ### 客户端形态（三种，可并存）
 
@@ -389,14 +320,15 @@ python 调试\随机测试.py --suite all            # 三类随机测试
 | 入库 | 不入库（见 `.gitignore`） |
 |------|--------------------------|
 | `用户端特用/`、`通用工具/`、`开发者入口/` 源码 | `.env`（LLM Key / 邀请口令等全部密钥） |
-| `Dockerfile` / `docker-compose.yml` / `deploy/nginx.conf` | `知识库/`（约 489MB，部署时单独提供） |
-| `.env.example`（模板，所有值留空） | 各类 `.bak` 备份、`调试/`、运行时 `user_data.json` / `reminder_state.json` |
+| `Dockerfile` / `docker-compose.yml` / `deploy/` | `知识库/`（约 355MB，部署时单独提供，见 `云端部署运维.md`） |
+| `.env.example` / `.env.cloud.example`（模板，密钥值为空） | 各类 `.bak` 备份、`调试/`、运行时 `user_data.json` / `reminder_state.json` |
 
 入库规模约 **190 个文件 / 5.5MB**（对比知识库 489MB）。
 
 **部署时知识库从哪来**（仓库内没有）：① 直接上传 `知识库/` 目录（compose 已挂载 `./知识库:/app/知识库`）；② 对象存储 + 启动同步（`FX_KB_BASE_URL` / `FX_KB_MANIFEST_URL`）。
 
-**所有对外地址都不写死在代码里**，统一由 `.env` 注入 —— 链接类配置集中在 `.env.example` 末尾的「云部署链接汇总」，部署前保持留空。
+**所有对外地址都不写死在代码里**，统一由 `.env` 注入 —— 链接类配置（跨域白名单 / CDN / 对象存储）在
+`.env.cloud.example` 末尾集中列出，默认全部留空即可正常对外服务。
 
 #### 本地更新 → GitHub（git 不会自动同步）
 
