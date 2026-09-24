@@ -1561,12 +1561,86 @@ function reportLocation() {
 }
 inputEl.addEventListener('focus', reportLocation, { once: true });
 
-// ==================== Token 登录遮罩（外部访问时输入 token 解锁） ====================
-// 后端 /api/auth/status 返回 {auth_required, authenticated}：
-// - auth_required=false（未配 token）→ 不显示，正常使用
-// - 外部访问且未认证 → 显示遮罩，输入正确 token 后存 localStorage 并解锁
+// ==================== 自动注册 + 登录遮罩（用户口径 2026-09-25）====================
+// 设计：用户拿到「网址 + 邀请码」后**打开即用**，不需要自己注册、也不需要记住 uid。
+//   ① 老用户/老设备：后端按 IP 认人（或本机已存口令）→ 静默就位，直接进
+//   ② 新用户：带 ?invite=<邀请码> 打开 → 自动注册 → 分配 uid + 生成个人口令 → 直接进
+//   ③ 没带邀请码的新用户 → 弹遮罩，让他输邀请码
+// 未注册成功前 authUnlocked=false，避免其他请求打出去吃 401。
 let authUnlocked = true;
-function buildAuthOverlay() {
+
+// 注册成功后的展示（把 uid 与口令明确给出，提醒保存 —— 换设备时要靠它登录）
+function showRegisterResult(j) {
+  const ov = document.createElement('div');
+  ov.id = 'register-result';
+  ov.style.cssText = 'position:fixed;inset:0;z-index:10000;background:var(--bg,#f4f6f8);display:flex;align-items:center;justify-content:center;';
+  ov.innerHTML = `
+    <div style="background:var(--panel,#fff);border:1px solid var(--line,#e5e8ec);border-radius:12px;padding:28px 32px;max-width:380px;width:90%;box-shadow:0 8px 30px rgba(0,0,0,.08);text-align:center;">
+      <div style="font-size:17px;font-weight:600;margin-bottom:14px;">注册成功</div>
+      <div style="font-size:14px;color:var(--ink-soft,#6b7280);margin-bottom:4px;">你的账号</div>
+      <div style="font-size:22px;font-weight:700;letter-spacing:1px;margin-bottom:12px;">${esc(j.uid || '')}</div>
+      <div style="font-size:14px;color:var(--ink-soft,#6b7280);margin-bottom:4px;">你的口令</div>
+      <div style="font-size:17px;font-weight:600;font-family:ui-monospace,Consolas,monospace;word-break:break-all;background:#f6f4ee;border:1px solid var(--line,#e5e8ec);border-radius:8px;padding:9px 12px;margin-bottom:14px;">${esc(j.token || '')}</div>
+      <div style="font-size:13px;color:#c0392b;line-height:1.6;margin-bottom:16px;">请截图或抄下这两项。<br>本机已自动记住，换手机/换浏览器时需要用它登录。</div>
+      <button id="reg-go" style="width:100%;padding:11px;border:none;border-radius:9px;background:var(--accent,#6b8caa);color:#fff;font-size:15px;cursor:pointer;">开始使用</button>
+    </div>`;
+  document.body.appendChild(ov);
+  const go = () => { location.reload(); };
+  ov.querySelector('#reg-go').addEventListener('click', go);
+  setTimeout(go, 8000);   // 不点也会自动进（避免用户以为卡住）
+}
+
+// 设备标识：浏览器生成一次并持久化，作为"我是谁"的主标识传给服务端。
+// 为什么不用 IP（用户口径 2026-09-25）：IP 会因切网/家宽重播而变（同一人反复注册），
+// 也会因同 WiFi 多人共用而撞车（多人被认成一人）。设备标识稳定、一人一号。
+function deviceId() {
+  const KEY = 'arkly_device_id';
+  let v = '';
+  try { v = localStorage.getItem(KEY) || ''; } catch (e) { v = ''; }
+  if (!v) {
+    try {
+      const a = new Uint8Array(12);
+      (window.crypto || window.msCrypto).getRandomValues(a);
+      v = Array.from(a, b => b.toString(16).padStart(2, '0')).join('');
+    } catch (e) {
+      v = 'd' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+    }
+    try { localStorage.setItem(KEY, v); } catch (e) {}
+  }
+  return v;
+}
+
+// 静默"就位"：能自动注册/认领就返回 true（随后页面重载为已登录状态）
+async function tryAutoRegister(info) {
+  const invite = (new URLSearchParams(location.search).get('invite') || '').trim();
+  const canRegister = !!(info && info.allow_register);
+  // 既没带邀请码、后端也没开放注册 → 不必尝试（直接走遮罩）
+  if (!invite && !canRegister) return false;
+  try {
+    const r = await fetch('/api/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ invite: invite, device_id: deviceId() })
+    });
+    const j = await r.json();
+    if (!j || !j.ok || !j.token) return false;
+    localStorage.setItem('arkly_api_token', j.token);
+    if (j.created) {
+      showRegisterResult(j);                     // 新注册：展示 uid+口令，8 秒后自动进
+    } else {
+      setTimeout(() => location.reload(), 60);   // 老账号回位：立刻重载
+    }
+    return true;
+  } catch (e) { return false; }
+}
+
+function buildAuthOverlay(info) {
+  const canRegister = !!(info && info.allow_register);
+  const needInvite = !(info && info.need_invite === false);
+  const hint = canRegister
+    ? (needInvite ? '输入邀请码开始使用' : '点下方按钮直接开始使用')
+    : '请输入你的口令';
+  const ph = canRegister ? (needInvite ? '输入邀请码' : '（无需填写，直接开始）') : '输入口令';
   const ov = document.createElement('div');
   ov.id = 'auth-overlay';
   ov.style.cssText = 'position:fixed;inset:0;z-index:9999;background:var(--bg,#f4f6f8);display:flex;align-items:center;justify-content:center;';
@@ -1574,8 +1648,8 @@ function buildAuthOverlay() {
     <div style="background:var(--panel,#fff);border:1px solid var(--line,#e5e8ec);border-radius:12px;padding:32px 36px;max-width:360px;width:90%;box-shadow:0 8px 30px rgba(0,0,0,.08);text-align:center;">
       <div style="width:44px;height:44px;border-radius:50%;background:linear-gradient(135deg,#8fa6b8,#5d7a91);color:#fff;display:flex;align-items:center;justify-content:center;font-size:19px;margin:0 auto 14px;">阿</div>
       <div style="font-size:17px;font-weight:600;margin-bottom:6px;">拂晓智能小秘书</div>
-      <div style="font-size:14px;color:var(--ink-soft,#6b7280);margin-bottom:18px;">请输入邀请口令解锁</div>
-      <input id="auth-token-input" type="password" placeholder="输入邀请口令"
+      <div style="font-size:14px;color:var(--ink-soft,#6b7280);margin-bottom:18px;">${hint}</div>
+      <input id="auth-token-input" type="password" placeholder="${ph}"
         style="width:100%;padding:10px 12px;border:1px solid var(--line,#e5e8ec);border-radius:8px;font-size:15px;box-sizing:border-box;outline:none;" />
       <div id="auth-err" style="color:#c0392b;font-size:13px;min-height:16px;margin-top:8px;display:none;">口令错误，请重试</div>
       <button id="auth-submit"
@@ -1585,11 +1659,9 @@ function buildAuthOverlay() {
   const input = ov.querySelector('#auth-token-input');
   const err = ov.querySelector('#auth-err');
   const btn = ov.querySelector('#auth-submit');
-  function submit() {
-    const t = (input.value || '').trim();
-    if (!t) return;
+  // 用已有口令验证（老用户换设备登录 / 管理端口令）
+  function verifyToken(t) {
     localStorage.setItem('arkly_api_token', t);
-    // 用探测接口验证（带刚存的 token），成功才移除遮罩
     fetch('/api/auth/status', { headers: { 'X-API-Token': t } })
       .then(r => r.json())
       .then(d => {
@@ -1597,7 +1669,6 @@ function buildAuthOverlay() {
           err.style.display = 'none';
           document.body.removeChild(ov);
           authUnlocked = true;
-          // 解锁后同步面板存储模式并刷新面板列表
           if (d.panel_store) { ARKLY_PANEL_STORE = d.panel_store; }
           if (typeof upRefresh === 'function') { upRefresh(); }
           // 可能有过期/占位的初始问候（401 时显示 ojbk），解锁后重发一次以刷新
@@ -1609,11 +1680,36 @@ function buildAuthOverlay() {
           inputEl.focus();
         } else {
           localStorage.removeItem('arkly_api_token');
+          err.textContent = (d && d.reason === 'paused') ? '服务暂未对测试用户开放' : '口令错误，请重试';
           err.style.display = 'block';
           input.focus();
         }
       })
-      .catch(() => { err.style.display = 'block'; input.focus(); });
+      .catch(() => { err.textContent = '网络错误，请稍后重试'; err.style.display = 'block'; input.focus(); });
+  }
+  function submit() {
+    const v = (input.value || '').trim();
+    if (!v && !canRegister) return;
+    err.style.display = 'none';
+    // ① 开放注册时：先把输入当**邀请码**试注册（同 IP 老用户也会直接回位）
+    if (canRegister) {
+      fetch('/api/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ invite: v, device_id: deviceId() })
+      }).then(r => r.json()).then(j => {
+        if (j && j.ok && j.token) {
+          localStorage.setItem('arkly_api_token', j.token);
+          if (j.created) { showRegisterResult(j); return; }
+          location.reload();
+          return;
+        }
+        // ② 不是邀请码 → 当**已有口令**验证
+        verifyToken(v);
+      }).catch(() => verifyToken(v));
+      return;
+    }
+    verifyToken(v);
   }
   btn.addEventListener('click', submit);
   input.addEventListener('keydown', (e) => { if (e.key === 'Enter') submit(); });
@@ -1628,8 +1724,12 @@ function buildAuthOverlay() {
     const d = await r.json();
     // 面板存储位置由后端运行模式决定：server=本地(服务器副本) / client=云端(浏览器本地缓存)
     if (d && d.panel_store) { ARKLY_PANEL_STORE = d.panel_store; }
-    if (d && d.auth_required && !d.authenticated) buildAuthOverlay();
-    else if (typeof upRefresh === 'function') { upRefresh(); }
+    if (d && d.auth_required && !d.authenticated) {
+      // 先静默尝试"就位"：老用户按 IP 直接回位、带邀请码的新用户自动注册；
+      // 两者都不成立才弹遮罩（用户口径 2026-09-25：第一次打开尽量无感）
+      const auto = await tryAutoRegister(d);
+      if (!auto) { authUnlocked = false; buildAuthOverlay(d); }
+    } else if (typeof upRefresh === 'function') { upRefresh(); }
   } catch (e) {
     // 探测失败（网络/后端旧版无此接口）→ 不弹遮罩，保持原行为
   }

@@ -31,9 +31,14 @@
 按文件 mtime 做缓存：文件没变就直接用内存里的解析结果（高频鉴权不重复读盘），
 文件一改立即重新加载 —— 这就是"改完生效、无需重启"的实现方式。
 """
+import datetime as _dt
 import hmac
 import json
 import os
+import threading
+
+# 注册要写回 users.json（读-改-写），多请求并发时必须串行化，避免互相覆盖。
+_LOCK = threading.RLock()
 
 OWNER_UID_DEFAULT = '000000'
 UID_WIDTH = 6
@@ -253,6 +258,179 @@ def auth(token) -> dict:
 
     return {'ok': False, 'uid': '', 'user': None,
             'reason': 'bad_token' if provided else 'no_token'}
+
+
+def register_invite() -> str:
+    """**注册邀请码**（入场券，所有人共用），用户口径 2026-09-25。
+
+    AKALI_REGISTER_INVITE 优先；留空则回退 AKALI_INVITE_CODE（兼容既有部署）。
+    留空时 register() 会拒绝新注册（只允许已有账号登录）。
+    """
+    for name in ('AKALI_REGISTER_INVITE', 'AKALI_INVITE_CODE'):
+        v = (os.environ.get(name) or '').strip()
+        if v:
+            return v
+    return ''
+
+
+def allow_register() -> bool:
+    """是否允许自助注册。默认跟随「总开关」：AKALI_ALLOW_OTHER_USERS=true 即允许。
+
+    想单独关掉注册（已注册的人照常用）就设 AKALI_ALLOW_REGISTER=false。
+    """
+    raw = (os.environ.get('AKALI_ALLOW_REGISTER') or '').strip().lower()
+    if raw == '':
+        return allow_other_users()
+    return raw in ('1', 'true', 'on', 'yes', 'y')
+
+
+def invite_ok(provided) -> bool:
+    """校验用户提交的邀请码（恒定时间比较）。"""
+    want = register_invite()
+    if not want:
+        return False
+    try:
+        return hmac.compare_digest(str(provided or ''), want)
+    except Exception:
+        return False
+
+
+def _load_file_raw() -> dict:
+    """读取用户表**文件原文**（不走 mtime 缓存）—— 注册要写回，必须以磁盘为准。"""
+    p = users_file()
+    try:
+        with open(p, encoding='utf-8') as f:
+            d = json.load(f)
+        if not isinstance(d, dict):
+            raise ValueError('bad root')
+    except Exception:
+        d = {'version': 1, 'config': {'allow_other_users': True}, 'users': {}}
+    d.setdefault('config', {}).setdefault('allow_other_users', True)
+    d.setdefault('users', {})
+    if not isinstance(d['users'], dict):     # 数组写法 → 转成对象写法再写回
+        arr = d['users'] if isinstance(d['users'], list) else []
+        conv = {}
+        for it in arr:
+            if isinstance(it, dict) and it.get('uid'):
+                conv[str(it['uid'])] = it
+        d['users'] = conv
+    return d
+
+
+def _write_file(d: dict) -> None:
+    """原子写回用户表，并让只读缓存失效（改完立即生效）。"""
+    p = users_file()
+    os.makedirs(os.path.dirname(p) or '.', exist_ok=True)
+    tmp = p + '.tmp'
+    with open(tmp, 'w', encoding='utf-8') as f:
+        json.dump(d, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, p)
+    try:
+        os.chmod(p, 0o600)          # 含口令
+    except Exception:
+        pass
+    _CACHE.update(mtime=(None, None, None), data=[])
+
+
+def _public(uid, rec) -> dict:
+    return {'uid': str(uid), 'name': str((rec or {}).get('name') or ''),
+            'role': 'user', 'created': str((rec or {}).get('created') or '')}
+
+
+def find_by_device(device_id: str):
+    """按**设备标识**（浏览器 localStorage 里的随机 id）找账号。
+
+    为什么用它而不是 IP 当主标识（用户口径 2026-09-25）：
+      · IP 会变（手机切网、家宽重播）→ 同一人反复注册出新 uid；
+      · 同一 WiFi 下多人共用一个出口 IP → 会被认成同一个人。
+    设备标识由浏览器生成并持久化，稳定且一人一号。
+    """
+    did = str(device_id or '').strip()
+    if not did:
+        return None
+    with _LOCK:
+        d = _load_file_raw()
+        for uid, u in (d.get('users') or {}).items():
+            if isinstance(u, dict) and str(u.get('device_id') or '').strip() == did and u.get('token'):
+                return {'uid': str(uid), 'token': u['token'], 'name': u.get('name') or '',
+                        'created': u.get('created') or '', 'enabled': bool(u.get('enabled', True))}
+    return None
+
+
+def find_by_ip(ip: str):
+    """按注册时记录的 IP 找账号；找不到返回 None（用于"老设备直接放行"）。"""
+    ip = str(ip or '').strip()
+    if not ip:
+        return None
+    with _LOCK:
+        d = _load_file_raw()
+        for uid, u in (d.get('users') or {}).items():
+            if isinstance(u, dict) and str(u.get('ip') or '').strip() == ip and u.get('token'):
+                return {'uid': str(uid), 'token': u['token'], 'name': u.get('name') or '',
+                        'created': u.get('created') or '', 'enabled': bool(u.get('enabled', True))}
+    return None
+
+
+def register(device_id: str = '', ip: str = '', name: str = '') -> dict:
+    """**首次打开自动注册**：按**设备标识**认人（用户口径 2026-09-25）。
+
+    返回 {'ok','created','uid','token','user','reason'}
+      · 该设备已有账号 → created=False，直接返回原账号（老用户无感，不必重注册）
+      · 新设备 → 分配下一个 uid（000001 起）+ 生成口令，写回 users.json
+      · 关闭注册 → ok=False reason='register_off'
+
+    认人顺序：**device_id 优先**（稳定、一人一号），IP 仅作兜底与记录 ——
+    IP 会因切网/家宽重播而变（→ 同人反复注册），也会因同 WiFi 多人共用而撞车
+    （→ 多人被认成一人），故不当主标识。
+    口令现阶段**不需要用户输入**（前端自动保存并随请求带上），将来可升级为用户
+    自设的登录密码，那时换设备也能凭它找回旧号。
+    """
+    did = str(device_id or '').strip()
+    ip = str(ip or '').strip()
+    with _LOCK:
+        d = _load_file_raw()
+        users = d['users']
+        # ① 设备标识命中 → 老用户直接回位
+        if did:
+            for uid, u in users.items():
+                if isinstance(u, dict) and str(u.get('device_id') or '').strip() == did and u.get('token'):
+                    if did and str(u.get('ip') or '') != ip:      # IP 变了就顺手更新，便于排障
+                        u['ip'] = ip
+                        _write_file(d)
+                    return {'ok': True, 'created': False, 'uid': str(uid),
+                            'token': u['token'], 'user': _public(uid, u), 'reason': 'exists'}
+        # ② 没带设备标识时，退回 IP 兜底（老版本前端 / 极简场景）
+        if not did and ip:
+            for uid, u in users.items():
+                if isinstance(u, dict) and str(u.get('ip') or '').strip() == ip and u.get('token'):
+                    return {'ok': True, 'created': False, 'uid': str(uid),
+                            'token': u['token'], 'user': _public(uid, u), 'reason': 'exists'}
+        if not allow_register():
+            return {'ok': False, 'created': False, 'uid': '', 'token': '',
+                    'user': None, 'reason': 'register_off'}
+        # 找下一个空位：直接用刚读到的 users 算，避免为了编号再读一次文件
+        uid = ''
+        for i in range(1, 1000000):
+            k = '%0*d' % (UID_WIDTH, i)
+            if k not in users:
+                uid = k
+                break
+        if not uid:
+            return {'ok': False, 'created': False, 'uid': '', 'token': '',
+                    'user': None, 'reason': 'uid_exhausted'}
+        token = new_token()
+        rec = {
+            'name': (name or '').strip() or ('测试用户 %s' % uid),
+            'token': token,
+            'enabled': True,
+            'device_id': did,
+            'ip': ip,
+            'created': _dt.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+        }
+        users[uid] = rec
+        _write_file(d)
+        return {'ok': True, 'created': True, 'uid': uid, 'token': token,
+                'user': _public(uid, rec), 'reason': 'created'}
 
 
 def new_token() -> str:

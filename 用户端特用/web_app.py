@@ -775,7 +775,8 @@ _API_TOKEN = _users.owner_token()   # 优先级 AKALI_OWNER_TOKEN → AKALI_INVI
 
 # 放行路径：页面 / 静态资源 / 认证状态探测（前端据此决定是否弹 token 输入框）
 _AUTH_PUBLIC_PREFIXES = ("/kb/", "/avatar/", "/icons/")
-_AUTH_PUBLIC_EXACT = ("/", "/admin", "/api/auth/status", "/manifest.webmanifest", "/sw.js")
+_AUTH_PUBLIC_EXACT = ("/", "/admin", "/api/auth/status", "/api/register",
+                      "/manifest.webmanifest", "/sw.js")
 
 # 回环地址：仅在**本地模式**下免口令。云端模式下 Host 为 127.0.0.1 只代表
 # 「容器网络内的调用方」（同网其他容器、SSH 进来的 shell 等），不代表可信用户，
@@ -858,6 +859,10 @@ async def auth_status(request: Request):
             "uid": res['uid'] if res['ok'] else '',
             "role": (res['user'] or {}).get('role', '') if res['ok'] else '',
             "allow_other_users": _users.allow_other_users(),
+            # 前端据此决定遮罩上显示什么：能注册 → 提示"输入邀请码开始使用"；
+            # 关了注册 → 只提示"输入口令"（老用户凭口令进）
+            "allow_register": _users.allow_register(),
+            "need_invite": bool(_users.register_invite()),
             "reason": res['reason']}
 
 
@@ -917,6 +922,46 @@ async def admin_usage(request: Request, day: Optional[str] = None):
     return {'ok': True, 'day': day or _quota._today(), 'dim': runtime.quota_key(),
             'rows': rows, 'total_tok': total, 'total_cost': cost,
             'backend': type(_quota.STORE).__name__}
+
+
+@app.post("/api/register")
+async def register(request: Request):
+    """用户端**首次打开自动注册**（用户口径 2026-09-25）。
+
+    免鉴权：它本来就是用来"换取口令"的入口。流程 ——
+      ① 若该请求 IP 已有账号 → 直接返回原账号（老用户/老设备无感，不必重注册）
+      ② 否则：注册开关须打开，且（配了邀请码时）邀请码须正确
+      ③ 通过后分配下一个 uid（000001 起）+ 生成个人口令，写回 users.json
+    邀请码来源：请求体 {"invite": "..."} 或 URL ?invite=...（便于发带码的链接）。
+    """
+    body = {}
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    invite = str(body.get('invite') or request.query_params.get('invite') or '').strip()
+    name = str(body.get('name') or '').strip()
+    device_id = str(body.get('device_id') or '').strip()
+    from core import quota as _quota
+    ip = _quota._client_ip(request)        # 仅记录/兜底，不用来认人
+
+    # 新设备才需要过闸：老设备（device_id 已登记）直接回位，不看邀请码
+    if not (_users.find_by_device(device_id) or _users.find_by_ip(ip)):
+        if not _users.allow_register():
+            from fastapi.responses import JSONResponse
+            return JSONResponse({'ok': False, 'reason': 'register_off',
+                                 'detail': '暂未开放注册，请联系管理员'}, status_code=403)
+        if _users.register_invite() and not _users.invite_ok(invite):
+            from fastapi.responses import JSONResponse
+            return JSONResponse({'ok': False, 'reason': 'bad_invite',
+                                 'detail': '邀请码无效'}, status_code=403)
+
+    res = _users.register(device_id, ip, name)
+    if not res.get('ok'):
+        from fastapi.responses import JSONResponse
+        return JSONResponse({'ok': False, 'reason': res.get('reason') or 'error',
+                             'detail': '注册失败'}, status_code=403)
+    return res
 
 
 @app.get("/admin")
