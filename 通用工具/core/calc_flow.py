@@ -1682,6 +1682,9 @@ def _verify_guide_answer(client, cfg, question: str, evidence: str, draft: str) 
 
 def _clean_guide_meta(text: str) -> str:
     """清掉模型偶发输出的检索过程话术，保留面向用户的事实结论。"""
+    # 相似度标注只用于检索排障（开发者看接口原始返回 tool_outputs 即可），
+    # 不得出现在用户可见回答里（用户口径 2026-09-24）。
+    text = re.sub(r'[（(]\s*相似度\s*[\d.]+\s*[）)]', '', text or '')
     text = re.sub(r'[（(][^）)\n]*(?:证据|片段|原文|知识库|表格中)[^）)\n]*[）)]', '', text or '')
     text = re.sub(r'(?:证据|片段|原文|知识库)(?:中)?(?:明确)?(?:明写|写明|指出|显示|给出)[：，]?', '', text or '')
     text = re.sub(r'(?:证据|片段|原文|知识库|攻略)(?:中)?仅', '', text)

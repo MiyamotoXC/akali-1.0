@@ -1147,10 +1147,13 @@ function renderSecretaryReply(data, msgEl) {
   // 文档只出现在攻略库滑块弹窗（openGuideLib 用 guide_files 精确渲染）
   // 计算过程折叠块：工具输出的计算明细（伤害计算过程等）默认收起，用户主动点开查看
   if (Array.isArray(data.tool_outputs) && data.tool_outputs.length) {
-    // 只匹配真正的伤害计算结果（含 结果标题/实际伤害/期望伤害 等特征），
-    // 避免攻略目录里的《拂晓伤害计算构成》标题误触发折叠
+    // 只匹配**伤害计算引擎产出的明细**。判定收紧（用户口径 2026-09-24）：此前只要含
+    // 「实际伤害」四个字就折叠展示，而攻略正文里也有这句（如《争锋竞技场简易百科》的
+    // 「实际伤害增幅为1.45/1.2-1=0.2083」），于是整段带相似度的检索原文被当成计算明细
+    // 显示给了用户。检索原文（含「（相似度 0.85）」标注与多个片段）只供开发者排障，
+    // 不得从阿卡莉界面输出；现在要求命中计算引擎的强特征。
     const calcDetails = data.tool_outputs.filter(o => o && (o.indexOf('伤害计算结果') !== -1
-      || o.indexOf('实际伤害') !== -1 || o.indexOf('期望伤害') !== -1 || o.indexOf('点燃实际伤害') !== -1));
+      || /^\s*[=-]{10,}/.test(o) || o.indexOf('点燃实际伤害') !== -1));
     if (calcDetails.length) {
       html += '<details class="calc-details"><summary>查看详细计算过程（点击展开）</summary><pre class="calc-detail-body">'
         + esc(calcDetails.join('\n\n')) + '</pre></details>';
