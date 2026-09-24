@@ -415,11 +415,29 @@ _FLIRT_CONTINUE_RE = re.compile(
     r'再(?:近|靠近|亲|抱|摸|来|继续)|靠近一点|近一点|继续嘛?|别躲|别害羞|就一下|'
     r'还要|不够|可以吗|真的不行吗|那我呢|你也一样|我也是'
 )
+# 划清界限 / 明确拒绝亲密关系（用户口径 2026-09-25）：
+# 实测「你放弃吧，我不可能同时成为你的工作助手、外置大脑、萝莉妈妈和XX伴侣」被判成
+# flirt（含「恋人」类词 + 上文在调情），于是走了「表白末级审查」，被硬塞一句
+# 「你的心意，我收下了。今晚我想坦率一点——我也喜欢你」——答非所问且冒犯。
+# 这类句子是**退出调情**，必须先于分类模型判定为 casual。
+_AFFECTION_BOUNDARY_RE = re.compile(
+    r'不可能|放弃吧|别这样|到此为止|不要这样|不是那种|别想多|别误会|'
+    r'保持距离|拒绝|打住|停止|收敛|正经(?:点)?|'
+    r'别(?:再)?(?:说|这样|闹)|不(?:要|会)(?:再)?(?:这样|继续)|'
+    r'工作助手|外置大脑|保姆|助理|工具人|'
+    r'你只是|我们只是|当成|别把|分清|'
+    r'只是(?:同事|朋友|搭档|上下级)'
+)
 
 
 def _analyze_chat_context(hist: list, current: str, active_flirt: bool = False) -> dict:
     """结合近期双方对话判定本轮是普通闲聊/调情，以及用户意图是否越界。"""
     text = (current or '').strip()
+    # 划清界限优先：这类发言是**结束**调情，直接判 casual，且不送 LLM 分类
+    # （实测分类模型会被上文调情与「伴侣」类词带偏，误判成 flirt，进而触发
+    # 「表白末级审查」硬塞情话 —— 用户口径 2026-09-25）。
+    if _AFFECTION_BOUNDARY_RE.search(text):
+        return {'mode': 'casual', 'overstep': False}
     fallback_flirt = bool(_FLIRT_SIGNAL_RE.search(text))
     if active_flirt and len(text) <= 24 and _FLIRT_CONTINUE_RE.search(text):
         fallback_flirt = True
@@ -587,13 +605,18 @@ _AFFECTION_ACK_RE = re.compile(
 
 
 def _polish_affection_reply(reply: str) -> str:
-    """感情回复末级审查：删除技术/医学/工作转移句，并保证正面回应。"""
+    """感情回复末级审查：删除技术/医学/工作转移句，并保证正面回应。
+
+    注意合并方式（用户口径 2026-09-25「不要莫名换行」）：切分用的是**零宽断言**
+    （(?<=。) 等），标点不会丢，所以必须用 ''.join 原样拼回；此前写成 '\n'.join，
+    等于把每句话都拆成单独一行 —— 于是正常的连贯回复在界面上变得到处都是换行。
+    """
     text = (reply or '').strip()
     if not text:
         text = ''
     units = re.split(r'(?<=。)|(?<=！)|(?<=？)|\n+', text)
     kept = [u.strip() for u in units if u.strip() and not _AFFECTION_DEFLECT_RE.search(u)]
-    text = '\n'.join(kept).strip()
+    text = ''.join(kept).strip()
     if _AFFECTION_ACK_RE.search(text):
         return text
     h = datetime.datetime.now().hour
@@ -605,7 +628,9 @@ def _polish_affection_reply(reply: str) -> str:
         addition = '我很高兴你愿意告诉我。你的心意，我收下了。'
     else:
         addition = '我听见了，指挥官。你的心意，我会认真接住。'
-    return (text + ('\n' if text else '') + addition).strip()
+    # 直接相接，不加换行（用户口径 2026-09-25「不要莫名换行」）：前文本身以标点
+    # 收尾，拼上补句读起来是连贯的一段；此前用 '\n' 拼接，界面上会平白多出一个断行。
+    return (text + addition).strip() if text else addition
 
 
 _ASSISTANT_TEASE_INPUT_RE = re.compile(
@@ -2627,6 +2652,13 @@ def _chat_impl(req: ChatRequest):
         clean_reply = _strip_greeting(clean_reply)
         # 表白/喜欢类回复必须正面接住：模型偶发的心率、咖啡、系统检测或
         # 夜间工作转移句在返回前删除；若仍无积极回应，按当前时段补一句。
+        # 划清界限的双保险（用户口径 2026-09-25）：上下文虽已判 casual，但用户若
+        # 说「我不可能喜欢你」这类**否定式**，仍会被关键词命中成「害羞」而走到这里，
+        # 那就绝不能补「我也喜欢你」—— 这是答非所问且冒犯。
+        if _AFFECTION_BOUNDARY_RE.search(req.message or ''):
+            _is_affection = False
+            sover['flirt_rounds'] = 0      # 同时清掉调情粘滞，下一轮不再继承
+            s['flirt_total'] = 0
         if _is_affection:
             clean_reply = _polish_affection_reply(clean_reply)
         # 点燃/总伤害结果兜底：剥离 LLM 误补的"最高暴击伤害/命中率/暴击率/未提供"等单次字段
