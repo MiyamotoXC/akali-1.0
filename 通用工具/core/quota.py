@@ -212,8 +212,15 @@ def _client_ip(req) -> str:
 def resolve_identity(req) -> str:
     """把一次请求解析成「限额维度键」。
 
-    当前：云端 = 客户端 IP（X-Forwarded-For 优先）；本地 = session_id（仅统计、不闸控）。
-    接入 uid 账号体系时，此处改为返回 uid 即可，其余逻辑自动跟随。"""
+    接入账号体系后（用户口径 2026-09-25）：**优先用鉴权中间件解析出的 uid** —— 这样
+    每个用户各算各的额度，不再按出口 IP 混在一起（同一局域网多人共用一个出口 IP 时，
+    按 IP 计会让彼此互相吃额度）。
+
+    未启用账号（或本地回环调试、未配口令）时回退：云端 = 客户端 IP（XFF 优先）；
+    本地 = session_id（仅统计、不闸控）。行为与接入前一致。"""
+    uid = str(getattr(getattr(req, 'state', None), 'uid', '') or '').strip()
+    if uid:
+        return uid
     if runtime.quota_key() == 'ip':
         return _client_ip(req)
     sid = getattr(req, 'session_id', None)
@@ -231,10 +238,21 @@ def get_user_id(req) -> str:
 
 
 def _lookup_plan_from_db(key: str) -> str:
-    """uid → 套餐 的数据库查询**占位**（当前未接入，返回空串 = 走环境变量白名单）。
+    """uid → 套餐。
 
-    接入内部数据库时在此实现（例：SELECT plan FROM users WHERE uid=?），
-    返回值限制在 ('free', 'month') 内。"""
+    账号体系下（用户口径 2026-09-25）：**开发者本人（AKALI_OWNER_UID）视为 month（不限量）**，
+    测试用户默认 free；其余（IP/session 维度）返回空串，走原环境变量白名单
+    （FX_USER_PLAN_MAP / FX_USER_PLAN），保持向后兼容。
+    """
+    try:
+        from core import users as _users
+        if key and key == _users.owner_uid():
+            return 'month'
+        accts = {u['uid'] for u in _users.parse_users()}
+        if key in accts:
+            return 'free'
+    except Exception:
+        pass
     return ''
 
 

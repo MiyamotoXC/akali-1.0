@@ -767,7 +767,8 @@ app = FastAPI(title="拂晓只能小秘书")
 # 本地模式（AKALI_RUN_MODE=local）下 Host 为回环时自动放行，方便调试；
 # 云端模式一律校验（见下方 _LOOPBACK_HOSTS 说明）。
 # 口令留空（默认）则不鉴权（本地个人使用）。
-_API_TOKEN = runtime.invite_code()
+from core import users as _users   # 账号体系：uid / 口令 / 准入总开关，全部由 .env 控制
+_API_TOKEN = _users.owner_token()   # 优先级 AKALI_OWNER_TOKEN → AKALI_INVITE_CODE → API_TOKEN
 
 # 放行路径：页面 / 静态资源 / 认证状态探测（前端据此决定是否弹 token 输入框）
 _AUTH_PUBLIC_PREFIXES = ("/kb/", "/avatar/", "/icons/")
@@ -800,9 +801,21 @@ async def api_token_auth(request, call_next):
             # header 优先（推荐）；URL 参数用于分享带口令的链接，代价是会进访问日志，
             # 故云端 nginx 不记录 query string（见 deploy/nginx.conf）
             token = request.headers.get('x-api-token') or request.query_params.get('token')
-            if not _token_ok(token):
+            # 账号判定（用户口径 2026-09-25）：口令 → uid，并区分「总开关关闭 / 口令无效」，
+            # 这样"关掉其他所有用户"时对方能看到明确原因，而不是笼统的 401。
+            _res = _users.auth(token)
+            if not _res['ok']:
                 from fastapi.responses import JSONResponse
-                return JSONResponse({"detail": "无效或缺失 API Token"}, status_code=401)
+                _msg = {
+                    'paused': '服务暂未对测试用户开放，请联系管理员',
+                    'disabled': '账号已停用，请联系管理员',
+                    'bad_token': '口令无效，请检查后重试',
+                    'no_token': '需要口令才能使用，请在页面内输入',
+                }.get(_res['reason'], '无效或缺失 API Token')
+                return JSONResponse({"detail": _msg, "reason": _res['reason']}, status_code=401)
+            # 把身份挂到请求上：配额按 uid 统计（core/quota.resolve_identity），管理接口据此鉴权
+            request.state.uid = _res['uid']
+            request.state.user = _res['user'] or {}
     return await call_next(request)
 
 
@@ -823,17 +836,60 @@ if runtime.cors_enabled():
 @app.get("/api/auth/status")
 async def auth_status(request: Request):
     """认证状态探测：前端加载时调用，决定是否显示邀请口令遮罩。
-    返回 {auth_required, authenticated, run_mode, panel_store}；
-    auth_required=False（未配口令）恒放行。"""
+
+    返回 {auth_required, authenticated, run_mode, panel_store, uid, role, reason}；
+    auth_required=False（未配口令）恒放行。uid/role 供前端展示当前身份；
+    reason 说明被拒原因（paused=总开关已关闭等），便于用户自查而非只看到 401。
+    """
     meta = {"run_mode": runtime.run_mode(), "panel_store": runtime.panel_store(),
             "quota_dim": runtime.quota_key()}
     if not _API_TOKEN:
         return {"auth_required": False, "authenticated": True, **meta}
     host = (request.headers.get('host') or '').split(':')[0]
     if host in _LOOPBACK_HOSTS and not runtime.is_cloud():
-        return {"auth_required": True, "authenticated": True, **meta}  # 本机免口令（仅本地模式）
+        return {"auth_required": True, "authenticated": True, "uid": _users.owner_uid(),
+                "role": "owner", "reason": "", **meta}  # 本机免口令（仅本地模式）
     token = request.headers.get('x-api-token') or request.query_params.get('token')
-    return {"auth_required": True, "authenticated": _token_ok(token), **meta}
+    res = _users.auth(token)
+    return {"auth_required": True, "authenticated": res['ok'], **meta,
+            "uid": res['uid'] if res['ok'] else '',
+            "role": (res['user'] or {}).get('role', '') if res['ok'] else '',
+            "allow_other_users": _users.allow_other_users(),
+            "reason": res['reason']}
+
+
+# ==================== 账号管理接口（仅开发者本人可调用）====================
+# 用户口径 2026-09-25：口令 / 准入开关 / API 配置都放 .env，只有我自己能看见。
+# 这里提供一个只读的查看入口 + 一个"当前该往 .env 里填什么"的提示，方便你在服务器上改。
+# 权限：必须是 AKALI_OWNER_UID（默认 000000）——别人的口令调它会 403。
+def _require_owner(request: Request) -> str:
+    uid = str(getattr(request.state, 'uid', '') or '')
+    if uid != _users.owner_uid():
+        raise HTTPException(status_code=403, detail='仅开发者账号可操作')
+    return uid
+
+
+@app.get("/api/admin/accounts")
+async def admin_accounts(request: Request):
+    """查看当前账号与准入配置（含口令）—— 仅开发者本人可调。
+
+    这正是"只有我自己能看见"的实现：口令、开关、可用 uid 列表都在这里回显，
+    而 .env 本身只存在于服务器上。改配置请直接编辑服务器 .env 后重启容器：
+        vim /root/akali/.env    →    cd /root/akali && docker compose up -d
+    """
+    _require_owner(request)
+    return {
+        'ok': True,
+        'allow_other_users': _users.allow_other_users(),
+        'owner_uid': _users.owner_uid(),
+        'owner_token': _users.owner_token(),
+        'users': _users.list_accounts(),
+        'next_uid': _users.next_uid(),
+        'env_keys': ['AKALI_ALLOW_OTHER_USERS', 'AKALI_OWNER_UID',
+                     'AKALI_OWNER_TOKEN', 'AKALI_USERS'],
+        'hint': '以上全部由服务器 .env 控制；改完 .env 后重启容器生效。'
+                'AKALI_USERS 格式：uid:口令[:备注]，多个用英文逗号分隔。',
+    }
 # 注入三无秘书人设
 agent = AgentApp(prompt_template=WEB_PERSONA_PROMPT)
 
