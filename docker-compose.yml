@@ -36,6 +36,14 @@ services:
       #    直接编辑宿主机文件即可增删测试用户，**改完立即生效、无需重启**
       #    （服务端按 mtime 自动重载；总开关与开发者口令仍在 .env）。
       - ./users.json:/app/users.json
+      # ④ 业务代码挂出来（用户口径 2026-09-25：改一点东西就要等好几分钟，太慢）。
+      #    原先代码是 COPY 进镜像的，改一行也得 docker compose build（2~3 分钟）。
+      #    挂出来后：把新文件拷进宿主机对应目录 → docker compose restart akali（约 5 秒）。
+      #    依赖变化（requirements.txt 改动）时才需要重新 build。
+      #    注：这两个目录必须先在宿主机存在（本项目一直保持同步，故安全）。
+      - ./用户端特用:/app/用户端特用
+      - ./通用工具:/app/通用工具
+      - ./浏览器扩展:/app/浏览器扩展
     expose:
       - "8000"
     depends_on:

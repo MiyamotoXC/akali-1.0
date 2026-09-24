@@ -3345,8 +3345,21 @@ if __name__ == "__main__":
     # 云端经 Nginx 反代：信任 X-Forwarded-For / X-Real-IP（按 IP 限额依赖真实 IP）
     if runtime.proxy_headers():
         _uv_kwargs.update(proxy_headers=True, forwarded_allow_ips='*')
+    # 热重载（用户口径 2026-09-25，可选）：设 AKALI_RELOAD=1 时改代码自动重载，
+    # 连 restart 都不用 —— 用于服务器上快速迭代。**稳定运行请勿开启**：
+    # 重载会中断正在处理的请求，且会多起一个监视进程。
+    # 注：uvicorn 的 reload 要求 app 以「导入字符串」传入，不能用 app 对象。
+    _reload = (os.environ.get('AKALI_RELOAD') or '').strip().lower() in ('1', 'true', 'on', 'yes')
     try:
-        uvicorn.run(app, **_uv_kwargs)
+        if _reload:
+            _root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            print("[服务] 热重载已开启（AKALI_RELOAD=1）：改代码即生效，仅建议开发期使用", flush=True)
+            uvicorn.run("web_app:app", reload=True,
+                        reload_dirs=[os.path.dirname(os.path.abspath(__file__)),
+                                     os.path.join(_root, '通用工具')],
+                        **_uv_kwargs)
+        else:
+            uvicorn.run(app, **_uv_kwargs)
     except KeyboardInterrupt:
         print("\n[服务] 已停止")
     finally:
