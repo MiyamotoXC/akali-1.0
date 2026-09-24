@@ -289,8 +289,9 @@ let USER_AVATAR = resolveAsset('/kb/图片素材/指挥官头像/用户.png');
 function addMsg(role, text, avatarUrl) {
   const wrap = document.createElement('div');
   wrap.className = 'msg ' + role;
+  // 自己的头像挂提示：双击（手机长按）可看自己的 uid 与口令（事件见下方委托绑定）
   const ava = role === 'user'
-    ? '<img src="' + esc(USER_AVATAR) + '" alt="指挥官">'
+    ? '<img src="' + esc(USER_AVATAR) + '" alt="指挥官" title="双击（手机长按）查看我的 UID 与口令">'
     : '<img src="' + esc(resolveAsset(avatarUrl || ARKLY_AVATAR)) + '" alt="阿卡莉">';
   wrap.innerHTML = '<div class="ava">' + ava + '</div>'
                  + '<div class="bubble">' + (role === 'user' ? '' : '<div class="role-tag">阿卡莉</div>')
@@ -299,6 +300,90 @@ function addMsg(role, text, avatarUrl) {
   messagesEl.scrollTop = messagesEl.scrollHeight;
   return wrap;
 }
+
+// ===== 我的身份卡片（用户口径 2026-09-25）=====
+// 双击自己的头像（手机端长按）弹出，显示 uid 与口令 —— 换设备 / 清了缓存后，
+// 在主站解锁框里填这个口令即可回到原账号（不填则会自动注册成一个新的 uid）。
+// 口令默认打码，点「显示」才明文，免得旁边的人一眼看到。
+function _maskToken(s) {
+  if (!s) return '（未获取到）';
+  if (s.length <= 6) return '••••••';
+  return s.slice(0, 3) + '••••••' + s.slice(-2);
+}
+
+function showMyIdentity() {
+  let uid = '';
+  const token = localStorage.getItem('arkly_api_token') || '';
+  const ov = document.createElement('div');
+  ov.className = 'me-card-mask';
+  ov.innerHTML =
+      '<div class="me-card">'
+    +   '<h3>我的身份</h3>'
+    +   '<div class="sub">换设备或清了浏览器缓存后，在主站输入下面的口令，就能回到这个账号。建议截图或复制保存。</div>'
+    +   '<div class="me-row"><span class="k">UID</span><span class="v" id="meUid">—</span>'
+    +     '<button type="button" data-copy="">复制</button></div>'
+    +   '<div class="me-row"><span class="k">口令</span><span class="v" id="meTok">' + esc(_maskToken(token)) + '</span>'
+    +     '<button type="button" id="meEye">显示</button>'
+    +     '<button type="button" data-copy="' + esc(token) + '">复制</button></div>'
+    +   '<div class="me-actions"><button type="button" id="meClose">关闭</button></div>'
+    + '</div>';
+  document.body.appendChild(ov);
+
+  let shown = false;
+  ov.querySelector('#meEye').addEventListener('click', function () {
+    shown = !shown;
+    ov.querySelector('#meTok').textContent = shown ? (token || '（未获取到）') : _maskToken(token);
+    this.textContent = shown ? '隐藏' : '显示';
+  });
+  ov.querySelectorAll('[data-copy]').forEach(function (b) {
+    b.addEventListener('click', function () {
+      const v = b.getAttribute('data-copy') || '';
+      if (!v) { b.textContent = '无'; setTimeout(function () { b.textContent = '复制'; }, 1000); return; }
+      const done = function () {
+        b.textContent = '已复制';
+        setTimeout(function () { b.textContent = '复制'; }, 1200);
+      };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(v).then(done).catch(function () {
+          b.textContent = '请手动选';        // 无剪贴板权限（http 非安全上下文等）时提示手抄
+          setTimeout(function () { b.textContent = '复制'; }, 1600);
+        });
+      } else {
+        b.textContent = '请手动选';
+        setTimeout(function () { b.textContent = '复制'; }, 1600);
+      }
+    });
+  });
+  ov.querySelector('#meClose').addEventListener('click', function () { ov.remove(); });
+  ov.addEventListener('click', function (e) { if (e.target === ov) ov.remove(); });
+
+  // uid 到手后回填（口令本地即时可取，uid 需问服务端）
+  fetch('/api/me', { headers: _apiHeaders() })
+    .then(function (r) { return r.ok ? r.json() : null; })
+    .then(function (d) {
+      uid = (d && d.uid) || '';
+      const el = ov.querySelector('#meUid');
+      if (el && uid) el.textContent = uid;
+      const cp = ov.querySelector('[data-copy=""]');
+      if (cp) cp.setAttribute('data-copy', uid);
+    })
+    .catch(function () {});
+}
+
+// 触发方式：PC 双击自己的头像；手机长按（事件委托，动态消息也能命中）
+messagesEl.addEventListener('dblclick', function (e) {
+  if (e.target && e.target.closest && e.target.closest('.msg.user .ava')) showMyIdentity();
+});
+var _identityLp = null;
+messagesEl.addEventListener('touchstart', function (e) {
+  if (!(e.target && e.target.closest && e.target.closest('.msg.user .ava'))) return;
+  _identityLp = setTimeout(function () { _identityLp = null; showMyIdentity(); }, 550);
+}, { passive: true });
+['touchend', 'touchmove', 'touchcancel'].forEach(function (ev) {
+  messagesEl.addEventListener(ev, function () {
+    if (_identityLp) { clearTimeout(_identityLp); _identityLp = null; }
+  }, { passive: true });
+});
 
 // 打开攻略预览弹层（docx→iframe 转HTML；png/jpg→img；xlsx→下载）
 function openGuidePreview(g) {

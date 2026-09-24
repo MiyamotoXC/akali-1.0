@@ -292,6 +292,31 @@
     padding: 12px 16px;
   }
   .input-row { display: flex; gap: 10px; align-items: flex-end; }
+  /* 「我的身份」卡片（用户口径 2026-09-25）：双击自己的头像（手机长按）弹出，
+     显示 uid 与口令 —— 换设备/清缓存后凭口令找回账号。口令默认打码，需自行点显示。 */
+  .me-card-mask {
+    position: fixed; inset: 0; z-index: 9998; background: rgba(20,24,30,.42);
+    display: flex; align-items: center; justify-content: center; padding: 16px;
+  }
+  .me-card {
+    background: var(--panel, #fff); border: 1px solid var(--line, #e5e8ec); border-radius: 12px;
+    padding: 20px 22px; max-width: 340px; width: 100%; box-shadow: 0 12px 40px rgba(0,0,0,.18);
+    font-size: 14px; color: var(--ink, #2b2f36);
+  }
+  .me-card h3 { margin: 0 0 4px; font-size: 16px; }
+  .me-card .sub { font-size: 12px; color: var(--muted, #8a8f98); margin-bottom: 14px; line-height: 1.5; }
+  .me-row { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+  .me-row .k { width: 44px; color: var(--muted, #8a8f98); flex: none; font-size: 12px; }
+  .me-row .v { flex: 1; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 13px;
+    background: #f6f8fa; border: 1px solid var(--line, #e5e8ec); border-radius: 6px;
+    padding: 6px 8px; overflow-wrap: anywhere; }
+  .me-row button { flex: none; font-size: 12px; padding: 6px 10px; border-radius: 6px; cursor: pointer;
+    background: var(--accent-soft, #eef3f7); color: var(--accent, #5d7a91);
+    border: 1px solid var(--line, #e5e8ec); font-family: inherit; }
+  .me-actions { display: flex; gap: 8px; margin-top: 14px; }
+  .me-actions button { flex: 1; padding: 9px 0; border-radius: 8px; font-size: 14px; cursor: pointer;
+    border: 1px solid var(--line, #e5e8ec); background: var(--panel, #fff); font-family: inherit; }
+  .me-actions button.primary { background: var(--accent, #6b8caa); color: #fff; border-color: transparent; }
   /* 算力提醒条（用户口径 2026-09-25）：**不做常驻查看** —— 只在剩余不足 10% 时
      自动出现，提示「今日系统算力不足10%」。正常状态下整条隐藏。
      具体 token/成本用户看不到，明细只在开发者侧 /admin。 */
