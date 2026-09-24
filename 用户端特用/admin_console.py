@@ -114,17 +114,22 @@ ADMIN_HTML = r"""<!DOCTYPE html>
           + '<th class="num">输入</th><th class="num">输出</th><th class="num">合计</th>'
           + '<th>占额度</th><th class="num">参考成本</th></tr>';
     rows.forEach(function (r) {
-      var pct = r.limit ? Math.min(100, r.tok_total / r.limit * 100) : 0;
+      // limit = 0 表示不限量（开发者本人），不画进度条
+      var unlimited = !r.limit;
+      var pct = unlimited ? 0 : Math.min(100, r.tok_total / r.limit * 100);
       h += '<tr>'
         + '<td class="mono">' + r.key + '</td>'
         + '<td>' + (r.name || '') + '</td>'
-        + '<td>' + r.plan + '</td>'
+        + '<td>' + (r.plan === 'unlimited' ? '开发者' : r.plan) + '</td>'
         + '<td class="num">' + r.rounds + '</td>'
         + '<td class="num">' + fmt(r.tok_in) + '</td>'
         + '<td class="num">' + fmt(r.tok_out) + '</td>'
         + '<td class="num"><b>' + fmt(r.tok_total) + '</b></td>'
-        + '<td><div class="bar' + (pct >= 80 ? ' warn' : '') + '"><i style="width:' + pct.toFixed(1) + '%"></i></div>'
-        + '<span class="pill">' + pct.toFixed(1) + '% / ' + fmt(r.limit) + '</span></td>'
+        + '<td>' + (unlimited
+            ? '<span class="pill on">不限量</span>'
+            : '<div class="bar' + (pct >= 80 ? ' warn' : '') + '"><i style="width:' + pct.toFixed(1) + '%"></i></div>'
+              + '<span class="pill">' + pct.toFixed(1) + '% / ' + fmt(r.limit) + '</span>')
+        + '</td>'
         + '<td class="num">￥' + (r.cost || 0).toFixed(4) + '</td>'
         + '</tr>';
     });

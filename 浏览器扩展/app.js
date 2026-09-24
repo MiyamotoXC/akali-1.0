@@ -1249,6 +1249,27 @@ function _apiHeaders() {
   if (t) { localStorage.setItem('arkly_api_token', t); h['X-API-Token'] = t; }
   return h;
 }
+// 今日剩余算力条（用户口径 2026-09-25）：**只显示剩余百分比**。
+// 具体 token / 成本 / 轮次用户看不到 —— 后端 /api/quota 已裁剪成只回 remain_percent，
+// 想要明细走开发者侧 /admin（/api/admin/usage）。不限量或本地模式 → 整条隐藏。
+function refreshQuotaBar() {
+  const bar = document.getElementById('quotaBar');
+  const txt = document.getElementById('quotaText');
+  if (!bar || !txt) return;
+  fetch('/api/quota', { headers: _apiHeaders() })
+    .then(r => (r.ok ? r.json() : null))
+    .then(d => {
+      if (!d || d.unlimited || d.cloud_mode === false) { bar.style.display = 'none'; return; }
+      const p = Number(d.remain_percent);
+      if (isNaN(p)) { bar.style.display = 'none'; return; }
+      txt.textContent = '今日剩余算力 ' + Math.round(p) + '%';
+      bar.classList.toggle('low', p <= 30 && p > 10);
+      bar.classList.toggle('empty', p <= 10);
+      bar.style.display = '';
+    })
+    .catch(() => { bar.style.display = 'none'; });
+}
+document.addEventListener('DOMContentLoaded', refreshQuotaBar);
 // 功能菜单（悬浮球）：默认位于标题栏最右侧，可拖动换位（位置不持久化，页面级）；
 // 短按（未拖动）展开/收起菜单；查角色→直接开角色面板（不发对话），
 // 计算工具→发指令后端在回复中弹子菜单（角色伤害/好感度/索敌计算/经验值计算/模拟PVP），
@@ -1479,6 +1500,7 @@ ${weatherData.location}实时天气：${weatherData.weather}
       if (resp.status === 401) { typing.innerHTML = '<div class="role-tag">阿卡莉</div>服务器ojbk中。<div class="sticker-wrap"><img class="sticker-img" src="' + resolveAsset('/kb/图片素材/表情包/ojbk.png') + '" alt="ojbk"></div>'; sendBtn.disabled = false; return; }
       const data = await resp.json();
       renderSecretaryReply(data, typing);
+      refreshQuotaBar();   // 本轮可能消耗了 LLM 额度 → 刷新"今日剩余算力"百分比
     } catch (e) {
       typing.querySelector('.bubble').innerHTML = '<div class="role-tag">阿卡莉</div>服务器ojbk中。<div class="sticker-wrap"><img class="sticker-img" src="' + resolveAsset('/kb/图片素材/表情包/ojbk.png') + '" alt="ojbk"></div>';
     } finally {

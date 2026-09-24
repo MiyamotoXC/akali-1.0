@@ -196,8 +196,11 @@ def _client_ip(req) -> str:
         if xri and str(xri).strip():
             return str(xri).strip()
 def daily_limit(key: str) -> int:
-    """某维度键的每日 token 上限（按套餐档）。"""
-    return _TOK_LIMIT_MONTH if get_user_plan(key) == 'month' else _TOK_LIMIT_FREE
+    """某维度键的每日 token 上限（按套餐档）；**0 = 不限量**（开发者本人）。"""
+    plan = get_user_plan(key)
+    if plan == 'unlimited':
+        return 0
+    return _TOK_LIMIT_MONTH if plan == 'month' else _TOK_LIMIT_FREE
 
 
 def usage_snapshot(day: Optional[str] = None) -> list:
@@ -236,7 +239,11 @@ def usage_snapshot(day: Optional[str] = None) -> list:
 
 
 def usage_of(key: str, day: Optional[str] = None) -> dict:
-    """单个维度键在某天的用量（供「我的信息」只读接口）。"""
+    """单个维度键在某天的用量（**含绝对数值**）。
+
+    ⚠️ 不要用它直接回给**用户侧**接口（用户口径 2026-09-25：用户只能看到剩余百分比）。
+    用户侧请用 `usage_brief()`；本函数留给开发者侧/排障使用。
+    """
     d = (day or _today()).strip()
     try:
         with STORE._lock:
@@ -320,14 +327,14 @@ def get_user_id(req) -> str:
 def _lookup_plan_from_db(key: str) -> str:
     """uid → 套餐。
 
-    账号体系下（用户口径 2026-09-25）：**开发者本人（AKALI_OWNER_UID）视为 month（不限量）**，
-    测试用户默认 free；其余（IP/session 维度）返回空串，走原环境变量白名单
-    （FX_USER_PLAN_MAP / FX_USER_PLAN），保持向后兼容。
+    账号体系下（用户口径 2026-09-25）：**开发者本人（AKALI_OWNER_UID）为 unlimited
+    （真不限量）**，测试用户默认 free；其余（IP/session 维度）返回空串，走原环境变量
+    白名单（FX_USER_PLAN_MAP / FX_USER_PLAN），保持向后兼容。
     """
     try:
         from core import users as _users
         if key and key == _users.owner_uid():
-            return 'month'
+            return 'unlimited'      # 用户口径 2026-09-25：开发者自己的用量不限制
         accts = {u['uid'] for u in _users.parse_users()}
         if key in accts:
             return 'free'
@@ -337,12 +344,13 @@ def _lookup_plan_from_db(key: str) -> str:
 
 
 def get_user_plan(key: str) -> str:
-    """返回 'free' 或 'month'（额度档）。
+    """返回额度档：'unlimited' / 'free' / 'month'。
 
-    顺序：数据库（占位未接入）→ FX_USER_PLAN_MAP（键为 IP/session）→ FX_USER_PLAN → free。
-    签名（key → 套餐）保持不变，故调用方无需随账号体系升级而改动。"""
+    顺序：数据库（账号体系，含开发者不限量）→ FX_USER_PLAN_MAP（键为 IP/session）
+    → FX_USER_PLAN → free。签名（key → 套餐）保持不变，故调用方无需随升级而改动。
+    """
     plan = _lookup_plan_from_db(key)
-    if plan in ('free', 'month'):
+    if plan in ('unlimited', 'free', 'month'):
         return plan
     if key in _PLAN_MAP:
         return _PLAN_MAP[key]
@@ -350,6 +358,9 @@ def get_user_plan(key: str) -> str:
 
 
 def _tok_limit(plan: str) -> int:
+    """每日 token 上限；**0 表示不限量**（check_llm_quota 里以 limit > 0 判闸）。"""
+    if plan == 'unlimited':
+        return 0
     return _TOK_LIMIT_MONTH if plan == 'month' else _TOK_LIMIT_FREE
 
 
@@ -388,22 +399,57 @@ def record_llm_usage(key: str, plan: str, tok_in: int, tok_out: int):
 
 
 def quota_prompt(key: str, plan: str, info: dict) -> str:
-    """额度用尽时的固定提示文案（不调 LLM）。基础功能仍可正常使用。"""
-    used = info.get('tok', 0) / 1000.0
-    limit = info.get('tok_limit', 0) / 1000.0
-    return ('今日算力已用尽（%.1fk / %.1fk token，同一网络/设备共享）。'
-            '基础功能（查询 / 计算 / 攻略）仍可使用，明日零点自动恢复。' % (used, limit))
+    """额度用尽时的固定提示文案（不调 LLM）。基础功能仍可正常使用。
+
+    只报**百分比**、不报具体 token（用户口径 2026-09-25：用户只能看到剩余百分比，
+    看不到具体用量）。
+    """
+    return ('今日算力已用尽（同一网络/设备共享，剩余 0%）。'
+            '基础功能（查询 / 计算 / 攻略）仍可使用，明日零点自动恢复。')
+
+
+def usage_brief(key: str, day: Optional[str] = None) -> dict:
+    """**用户侧**用量视图：只给剩余百分比，不含任何绝对数值（用户口径 2026-09-25）。
+
+    用户看不到具体消耗的 token / 成本 / 轮次 —— 那些只在开发者侧
+    `/api/admin/usage` 里暴露。这里刻意连 limit、used 都不返回，
+    避免从响应体反推出真实用量。
+    """
+    d = (day or _today()).strip()
+    plan = get_user_plan(key)
+    limit = _tok_limit(plan)
+    if not runtime.quota_enabled() or limit <= 0:
+        # 本地模式，或**不限量档**（开发者本人）：不显示进度条
+        return {'day': d, 'cloud_mode': bool(runtime.quota_enabled()),
+                'unlimited': True, 'plan': plan, 'remain_percent': 100.0}
+    try:
+        with STORE._lock:
+            e = STORE.usage.get('%s|%s' % (d, key)) or {}
+    except Exception:
+        e = {}
+    used = int(e.get('tok_in') or 0) + int(e.get('tok_out') or 0)
+    pct = max(0.0, min(100.0, (limit - used) * 100.0 / limit))
+    return {'day': d, 'cloud_mode': True, 'unlimited': False,
+            'plan': plan, 'remain_percent': round(pct, 1)}
 
 
 def quota_status(key: str, plan: str = None) -> dict:
-    """供前端查询当前剩余额度（GET /api/quota）。"""
+    """供前端查询当前剩余额度（开发者侧/排障用，含绝对数值）。
+
+    注意：**用户侧不要直接用这个**（会暴露具体 token），用户在 /api/me 与
+    /api/quota 拿到的是 usage_brief（只给百分比）。
+    """
     if plan is None:
         plan = get_user_plan(key)
     if not runtime.quota_enabled():
         return {'cloud_mode': False, 'plan': plan, 'unlimited': True}
-    e = _get_entry(key)
     limit = _tok_limit(plan)
+    e = _get_entry(key)
     used = int(e['tok_in']) + int(e['tok_out'])
+    if limit <= 0:      # 不限量档（开发者本人）
+        return {'cloud_mode': True, 'plan': plan, 'unlimited': True,
+                'dim': runtime.quota_key(), 'rounds': e['rounds'], 'tok': used,
+                'tok_limit': 0, 'remain_tok': 0, 'cost': round(e['cost'], 4)}
     return {'cloud_mode': True, 'plan': plan, 'dim': runtime.quota_key(),
             'rounds': e['rounds'], 'tok': used, 'tok_limit': limit,
             'remain_tok': max(0, limit - used),

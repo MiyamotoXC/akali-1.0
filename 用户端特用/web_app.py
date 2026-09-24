@@ -1042,7 +1042,10 @@ async def my_profile(request: Request):
             'role': 'owner' if uid == _users.owner_uid() else 'user',
             'is_admin': _users.is_admin(uid),
             'allow_other_users': _users.allow_other_users(),
-            'usage': _quota.usage_of(uid)}
+            # 用户侧只给**剩余百分比**，不含具体 token/成本/轮次（用户口径 2026-09-25：
+            # 用户只能查看自己每天的剩余用量百分比，看不到具体的。具体量只在开发者侧
+            # /api/admin/usage）。此处用 usage_brief 而非 usage_of。
+            'usage': _quota.usage_brief(uid)}
 
 # 注入三无秘书人设
 agent = AgentApp(prompt_template=WEB_PERSONA_PROMPT)
@@ -3085,14 +3088,18 @@ def get_session(session_id: Optional[str] = None):
 
 @app.get("/api/quota")
 def api_quota(request: Request, session_id: Optional[str] = None):
-    """查询当前额度（云端按客户端 IP，本地按 session_id）。
-    不再信任客户端传 uid —— 云端从请求头/连接取真实 IP。"""
-    from core.quota import get_client_key, get_user_plan, quota_status
+    """查询当前**剩余百分比**（云端按客户端 IP，本地按 session_id）。
+    不再信任客户端传 uid —— 云端从请求头/连接取真实 IP。
+
+    只回百分比、不回具体 token（用户口径 2026-09-25）：与 /api/me 同一口径，
+    避免用户从响应体反推出真实用量。运营侧要看具体量请走 /api/admin/usage。
+    """
+    from core.quota import get_client_key, usage_brief
     if runtime.quota_key() == 'ip':
         _key = get_client_key(request)
     else:
         _key = (session_id or '').strip() or 'local'
-    return quota_status(_key, get_user_plan(_key))
+    return usage_brief(_key)
 
 
 @app.get("/api/runtime")
