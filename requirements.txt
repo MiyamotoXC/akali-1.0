@@ -37,6 +37,8 @@ pandas>=1.5.0
 python-calamine>=0.2.0
 zhconv>=1.4.3
 
-# ===== 可选：云端多实例配额共享（FX_QUOTA_BACKEND=redis）=====
-# 未安装时 quota 自动降级「本地文件 → 内存」后端，不影响单实例运行。
-# redis>=5.0.0
+# ===== 云端多实例配额共享（FX_QUOTA_BACKEND=redis）=====
+# compose 里已内置 redis 服务并把 FX_QUOTA_BACKEND 设为 redis；若这里不装客户端库，
+# quota 会降级为内存后端 —— 后果是**用量与额度重启即清零**（开发者侧的用量视图会看不全），
+# 且多实例不共享。故云端必装（用户口径 2026-09-25）。
+redis>=5.0.0
