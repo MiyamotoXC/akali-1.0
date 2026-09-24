@@ -301,6 +301,16 @@ def route_work_agent(tools, overrides, msg, agent=None, history=None):
     if handled:
         return res
 
+    # 剧情类问法：确定性拦截（用户口径 2026-09-24 —— 问角色给【剧情榜】，主线/活动建议
+    # 指挥官自行体验）。必须早于 LLM 判意图与 RAG 检索，否则会把剧情相关正文搜出来剧透。
+    try:
+        from core.calc_flow import _handle_story
+        _story = _handle_story(msg)
+        if _story is not None:
+            return _story
+    except Exception:
+        pass
+
     # 悬浮球「计算工具」按钮直通（用户口径 2026-09-23）：
     # 前端该按钮发的就是这个固定短语，语义唯一、不需要模型理解。实测路由模型会偶发
     # 把它判成 intent=casual + no_tool（[route] input='计算工具' intent=casual tool=no_tool），

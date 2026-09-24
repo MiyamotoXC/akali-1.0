@@ -1372,6 +1372,48 @@ def _guide_reply_from_text(text: str, keyword: str) -> dict:
             'ok': True}
 
 
+# ======================================================================
+# 剧情类问法（用户口径 2026-09-24）
+# ----------------------------------------------------------------------
+# 涉及剧情一律**不剧透**，按问的对象分两路：
+#   ① 角色 / 好感剧情向（"光辉的剧情怎么样""谁的剧情值得看"）
+#      → 给【剧情榜】（好感剧情质量 T0~T4 排行），并把攻略库里的剧情榜文档一并附上
+#        （guide_lib 聚焦「剧情榜」，前端会自动弹攻略面板）。
+#   ② 主线 / 活动向（"主线剧情讲了什么""活动剧情"）
+#      → 建议指挥官自己体验，不给剧情内容。
+# 必须是确定性拦截：先于 LLM 意图判定与 RAG 检索，避免检索到剧情相关正文造成剧透。
+# ======================================================================
+_STORY_RE = re.compile(r'剧情|剧透|羁绊|好感故事|个人故事|角色故事')
+_STORY_PLOT_RE = re.compile(
+    r'主线|活动|战役|关卡|第[一二三四五六七八九十百零\d]{1,4}[章话节]|'
+    r'世界观|背景设定|讲了(?:什么|啥)|讲的(?:什么|啥)|说了(?:什么|啥)|内容是什么')
+_STORY_DOC_KEY = '剧情榜'
+
+
+def _handle_story(msg: str):
+    """剧情类问法的确定性应答；非剧情问题返回 None。"""
+    if not _STORY_RE.search(msg or ''):
+        return None
+    # ② 主线 / 活动剧情 → 引导自行体验（不给剧情内容）
+    if _STORY_PLOT_RE.search(msg):
+        return {'reply': '主线与活动剧情，建议指挥官亲自走一遍，我就不剧透了。\n'
+                         '如果想挑一位姑娘培养感情，可以问我「剧情榜」——'
+                         '那里按好感剧情质量排了 T0~T4。',
+                'tool_outputs': [], 'suggestions': [], 'fill_form': [], 'encounter_form': [],
+                'guide_files': [], 'guide_lib': '', 'ok': True}
+    # ① 角色 / 好感剧情 → 剧情榜（附攻略库里的剧情榜文档，前端自动聚焦打开）
+    body = ['剧情相关的问题，先看【剧情榜】：按好感剧情质量分级（T0 推荐 ~ T4 修复中）。'
+            '具体情节建议指挥官自己体验，我不剧透。']
+    for d in (_load_guide_kb().get('documents', []) or []):
+        if _STORY_DOC_KEY in (d.get('title') or ''):
+            if d.get('summary_verified') is True and d.get('summary'):
+                body.append('　　%s' % d['summary'].strip())
+            if d.get('file'):
+                body.append('<<GUIDE_FILE>>%s|%s' % (d['file'], d.get('title') or _STORY_DOC_KEY))
+            break
+    return _guide_reply_from_text('\n'.join(body), _STORY_DOC_KEY)
+
+
 # 攻略请求动作词：明确「要攻略/怎么/推荐/查」等请求信号，区别于感叹/陈述闲聊
 #（如「最近舰队油耗很大，经费不足啊」无请求词 → 交回 LLM 闲聊，不触发攻略工具）
 # 注意：主题名词（练级/配装/速查/百科 等）不算动作词，由 _is_guide_ask ③ 短词查询兜底
@@ -4142,6 +4184,12 @@ def route_work(tools, overrides, msg: str, agent=None, allow_intent_llm=True, up
     _scout_r = _handle_scout(msg, agent=agent)
     if _scout_r is not None:
         return _scout_r
+
+    # 0. 剧情类问法（用户口径 2026-09-24）：角色问剧情 → 给【剧情榜】；主线/活动 →
+    # 建议指挥官自行体验。必须早于攻略检索，避免搜到剧情相关正文造成剧透。
+    _story_r = _handle_story(msg)
+    if _story_r is not None:
+        return _story_r
 
     # 0. 经验值计算（用户口径 2026-09-14）：同样含「计算」需早于 calc 门控。
     # 输入当前等级+经验 → 剩余经验；再给出战经验 → 出击场数 / 三倍场次 / ge 晶体数量。
