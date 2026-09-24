@@ -318,13 +318,34 @@ def _load_file_raw() -> dict:
 
 
 def _write_file(d: dict) -> None:
-    """原子写回用户表，并让只读缓存失效（改完立即生效）。"""
+    """写回用户表，并让只读缓存失效（改完立即生效）。
+
+    优先「同目录临时文件 + os.replace」原子替换；但云端 compose 把 users.json 做成了
+    **单文件 bind mount**（- ./users.json:/app/users.json），而**挂载点不能跨设备 rename** ——
+    此时 os.replace 抛 OSError(EXDEV/EBUSY)（实测 Errno 16 Device or resource busy，
+    本地无此问题，只在容器里复现）。故捕获后退回「原地重写」：有 _LOCK 串行化、
+    文件很小（几 KB），风险可控。
+    """
     p = users_file()
     os.makedirs(os.path.dirname(p) or '.', exist_ok=True)
     tmp = p + '.tmp'
-    with open(tmp, 'w', encoding='utf-8') as f:
-        json.dump(d, f, ensure_ascii=False, indent=2)
-    os.replace(tmp, p)
+    try:
+        with open(tmp, 'w', encoding='utf-8') as f:
+            json.dump(d, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, p)
+    except OSError:
+        try:
+            if os.path.exists(tmp):
+                os.remove(tmp)     # 清掉残留，别让它挡住下次
+        except Exception:
+            pass
+        with open(p, 'w', encoding='utf-8') as f:
+            json.dump(d, f, ensure_ascii=False, indent=2)
+            f.flush()
+            try:
+                os.fsync(f.fileno())
+            except Exception:
+                pass
     try:
         os.chmod(p, 0o600)          # 含口令
     except Exception:
