@@ -2006,32 +2006,85 @@ async function sendChat(text) {
   inputEl.value = '';
   inputEl.style.height = 'auto';
   sendBtn.disabled = true;
-  // 遭遇战模拟：计算时间轴/必杀相位对齐约需数秒，预判意图后展示「算力拉满中」占位
-  const _isEncounter = /遭遇战/.test(text) && /(boss|白天|前排)/i.test(text);
-  const _placeholder = _isEncounter
-    ? '阿卡莉算力拉满中…（正在推演时间轴与必杀相位对齐）'
-    : '（面无表情地思考中…）';
-  const typing = addMsg('secretary', _placeholder);
-  if (_isEncounter) typing.classList.add('computing');
-  try {
-    const _payload = { message: text, session_id: _sessionId() };
-    // 云端模式：用户面板存浏览器本地，随请求携带（服务器无状态、不落盘）
-    const _ov = panelOverrides();
-    if (_ov) _payload.panel_overrides = _ov;
-    const resp = await fetch('/api/chat', {
-      method: 'POST',
-      headers: _apiHeaders(),
-      body: JSON.stringify(_payload)
-    });
-    if (resp.status === 401) { typing.innerHTML = '<div class="role-tag">阿卡莉</div>服务器ojbk中。<div class="sticker-wrap"><img class="sticker-img" src="' + resolveAsset('/kb/图片素材/表情包/ojbk.png') + '" alt="ojbk"></div>'; sendBtn.disabled = false; return; }
-    const data = await resp.json();
-    renderSecretaryReply(data, typing);
-  } catch (e) {
-    typing.querySelector('.bubble').innerHTML = '<div class="role-tag">阿卡莉</div>服务器ojbk中。<div class="sticker-wrap"><img class="sticker-img" src="' + resolveAsset('/kb/图片素材/表情包/ojbk.png') + '" alt="ojbk"></div>';
-  } finally {
-    sendBtn.disabled = false;
-    inputEl.focus();
-    messagesEl.scrollTop = messagesEl.scrollHeight;
+  
+  // 检查是否为天气查询
+  const isWeatherQuery = /天气|气温|温度|湿度|风速|预报/.test(text);
+  
+  if (isWeatherQuery) {
+    // 天气查询：调用 queryWeather 函数
+    const typing = addMsg('secretary', '（正在查询天气信息…）');
+    try {
+      const weatherData = await queryWeather(text);
+      
+      // 构建天气回复
+      const weatherReply = `<div class="role-tag">阿卡莉</div>
+${weatherData.location}实时天气：${weatherData.weather}
+温度：${weatherData.temperature}℃
+湿度：${weatherData.humidity}%
+风速：${weatherData.wind_speed} km/h
+（数据源：${weatherData.data_source}）`; 
+      
+      typing.querySelector('.bubble').innerHTML = weatherReply;
+    } catch (error) {
+      // 检查是否是定位提示
+      if (error.message && error.message.includes('请允许浏览器定位权限')) {
+        // 触发浏览器定位
+        if (navigator.geolocation) {
+          navigator.geolocation.getCurrentPosition(
+            (pos) => {
+              // 成功获取位置，重新查询天气
+              queryWeather(text).then(weatherData => {
+                const weatherReply = `<div class="role-tag">阿卡莉</div>
+${weatherData.location}实时天气：${weatherData.weather}
+温度：${weatherData.temperature}℃
+湿度：${weatherData.humidity}%
+风速：${weatherData.wind_speed} km/h
+（数据源：${weatherData.data_source}）`;
+                typing.querySelector('.bubble').innerHTML = weatherReply;
+              }).catch(e => {
+                typing.querySelector('.bubble').innerHTML = '<div class="role-tag">阿卡莉</div>定位成功但天气查询失败，请稍后重试。';
+              });
+            },
+            (err) => {
+              typing.querySelector('.bubble').innerHTML = '<div class="role-tag">阿卡莉</div>定位失败，请检查浏览器设置。';
+            }
+          );
+        } else {
+          typing.querySelector('.bubble').innerHTML = '<div class="role-tag">阿卡莉</div>您的浏览器不支持定位功能。';
+        }
+      } else {
+        typing.querySelector('.bubble').innerHTML = '<div class="role-tag">阿卡莉</div>天气查询失败，请稍后重试。';
+        console.error('天气查询错误:', error);
+      }
+    }
+  } else {
+    // 遭遇战模拟：计算时间轴/必杀相位对齐约需数秒，预判意图后展示「算力拉满中」占位
+    const _isEncounter = /遭遇战/.test(text) && /(boss|白天|前排)/i.test(text);
+    const _placeholder = _isEncounter
+      ? '阿卡莉算力拉满中…（正在推演时间轴与必杀相位对齐）'
+      : '（面无表情地思考中…）';
+    const typing = addMsg('secretary', _placeholder);
+    if (_isEncounter) typing.classList.add('computing');
+    try {
+      const _payload = { message: text, session_id: _sessionId() };
+      // 云端模式：用户面板存浏览器本地，随请求携带（服务器无状态、不落盘）
+      const _ov = panelOverrides();
+      if (_ov) _payload.panel_overrides = _ov;
+      const resp = await fetch('/api/chat', {
+        method: 'POST',
+        headers: _apiHeaders(),
+        body: JSON.stringify(_payload)
+      });
+      if (resp.status === 401) { typing.innerHTML = '<div class="role-tag">阿卡莉</div>服务器ojbk中。<div class="sticker-wrap"><img class="sticker-img" src="' + resolveAsset('/kb/图片素材/表情包/ojbk.png') + '" alt="ojbk"></div>'; sendBtn.disabled = false; return; }
+      const data = await resp.json();
+      renderSecretaryReply(data, typing);
+    } catch (e) {
+      typing.querySelector('.bubble').innerHTML = '<div class="role-tag">阿卡莉</div>服务器ojbk中。<div class="sticker-wrap"><img class="sticker-img" src="' + resolveAsset('/kb/图片素材/表情包/ojbk.png') + '" alt="ojbk"></div>';
+    } finally {
+      sendBtn.disabled = false;
+      inputEl.focus();
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+    }
   }
 }
 
@@ -2469,6 +2522,36 @@ document.addEventListener('touchend', (e) => {
 
 // 初始化反馈按钮
 initFeedbackButtons();
+
+// 天气查询功能
+async function queryWeather(message) {
+  try {
+    const response = await fetch('/api/weather/query', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ..._apiHeaders() },
+      credentials: 'include',
+      body: JSON.stringify({ message: message })
+    });
+    
+    const data = await response.json();
+    
+    if (data.ok) {
+      return {
+        location: data.location,
+        weather: data.weather,
+        temperature: data.temperature,
+        humidity: data.humidity,
+        wind_speed: data.wind_speed,
+        data_source: data.data_source
+      };
+    } else {
+      throw new Error(data.error || '天气查询失败');
+    }
+  } catch (error) {
+    console.error('天气查询错误:', error);
+    throw error;
+  }
+}
 
 // PWA：注册 Service Worker（离线壳 + 可安装到手机桌面）。失败静默，不影响正常使用。
 if ('serviceWorker' in navigator) {

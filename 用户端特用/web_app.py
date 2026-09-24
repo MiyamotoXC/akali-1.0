@@ -2522,9 +2522,36 @@ async def feedback(req: Request):
 async def get_weather(request: Request):
     """实时查询天气数据（使用 open-meteo API）"""
     try:
-        # 获取用户位置（从 agent 或请求参数）
+        # 获取查询参数
+        city = request.query_params.get('city')
         lat = request.query_params.get('lat')
         lon = request.query_params.get('lon')
+        
+        # 尝试从请求上下文中获取用户消息（如果可用）
+        # 注意：在 GET 请求中，req.message 不可用，所以需要在调用时通过参数传递
+        # 这里我们保持参数优先级：URL参数 > 用户消息 > 当前位置 > 默认上海
+        
+        # 如果提供了城市名称，先查询经纬度
+        if city:
+            # 使用 geocoding API 获取经纬度
+            import httpx
+            async with httpx.AsyncClient() as client:
+                geo_url = f"https://geocoding-api.open-meteo.com/v1/search?name={city}&count=1&language=zh&format=json"
+                geo_response = await client.get(geo_url, timeout=10.0)
+                
+                if geo_response.status_code == 200:
+                    geo_data = geo_response.json()
+                    if geo_data.get('results'):
+                        result = geo_data['results'][0]
+                        lat = str(result.get('latitude'))
+                        lon = str(result.get('longitude'))
+                        city_name = result.get('name', city)
+                        country = result.get('country', '')
+                        location_display = f"{city_name}{f'({country})' if country else ''}"
+                    else:
+                        return {"ok": False, "error": "未找到该城市"}
+                else:
+                    return {"ok": False, "error": "地理位置查询失败"}
         
         # 如果没有提供经纬度，尝试从 agent 获取
         if not lat or not lon:
@@ -2536,8 +2563,9 @@ async def get_weather(request: Request):
         if not lat or not lon:
             lat = '31.2304'
             lon = '121.4737'
+            location_display = "上海"
         
-        # 调用 open-meteo API
+        # 调用 open-meteo API 获取天气
         import httpx
         async with httpx.AsyncClient() as client:
             # 当前天气
@@ -2566,7 +2594,7 @@ async def get_weather(request: Request):
             # 构建响应
             result = {
                 "ok": True,
-                "location": "上海",
+                "location": location_display,
                 "weather": weather_desc,
                 "temperature": current.get('temperature_2m', 0),
                 "humidity": current.get('relative_humidity_2m', 0),
@@ -2579,6 +2607,155 @@ async def get_weather(request: Request):
     except Exception as e:
         print(f"[WEATHER ERROR] {str(e)}", flush=True)
         return {"ok": False, "error": "Weather query failed"}
+
+
+@app.post("/api/weather/query")
+async def query_weather_by_message(req: Request):
+    """根据用户消息查询天气（自动提取城市）"""
+    try:
+        data = await req.json()
+        user_message = data.get('message', '')
+        
+        # 从用户消息中提取城市
+        city = extract_city_from_message(user_message)
+        
+        # 如果提取到城市，使用城市查询
+        if city:
+            # 使用 GET 天气 API 的逻辑，但通过参数传递
+            import httpx
+            async with httpx.AsyncClient() as client:
+                geo_url = f"https://geocoding-api.open-meteo.com/v1/search?name={city}&count=1&language=zh&format=json"
+                geo_response = await client.get(geo_url, timeout=10.0)
+                
+                if geo_response.status_code == 200:
+                    geo_data = geo_response.json()
+                    if geo_data.get('results'):
+                        result = geo_data['results'][0]
+                        lat = str(result.get('latitude'))
+                        lon = str(result.get('longitude'))
+                        city_name = result.get('name', city)
+                        country = result.get('country', '')
+                        location_display = f"{city_name}{f'({country})' if country else ''}"
+                        
+                        # 查询天气
+                        current_url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current=temperature_2m,relative_humidity_2m,wind_speed_10m,weather_code&timezone=Asia%2FShanghai&forecast_days=1"
+                        weather_response = await client.get(current_url, timeout=10.0)
+                        
+                        if weather_response.status_code == 200:
+                            weather_data = weather_response.json()
+                            
+                            # 解析天气代码
+                            weather_codes = {
+                                0: "晴天", 1: "晴间多云", 2: "多云", 3: "阴天",
+                                45: "雾", 48: "冻雾", 51: "毛毛雨", 53: "持续毛毛雨", 55: "浓密毛毛雨",
+                                56: "冻毛毛雨", 57: "持续冻毛毛雨", 61: "小雨", 63: "中雨", 65: "大雨",
+                                66: "冻雨", 67: "持续冻雨", 71: "小雪", 73: "中雪", 75: "大雪",
+                                77: "雪粒", 80: "小阵雨", 81: "中阵雨", 82: "大阵雨", 85: "小雪阵", 86: "大雪阵",
+                                95: "雷暴", 96: "雷暴伴小雨", 99: "雷暴伴冰雹"
+                            }
+                            
+                            current = weather_data.get('current', {})
+                            weather_code = current.get('weather_code', 0)
+                            weather_desc = weather_codes.get(weather_code, "未知天气")
+                            
+                            # 构建响应
+                            return {
+                                "ok": True,
+                                "location": location_display,
+                                "weather": weather_desc,
+                                "temperature": current.get('temperature_2m', 0),
+                                "humidity": current.get('relative_humidity_2m', 0),
+                                "wind_speed": current.get('wind_speed_10m', 0),
+                                "data_source": "open-meteo"
+                            }
+                        else:
+                            return {"ok": False, "error": "天气查询失败"}
+                    else:
+                        return {"ok": False, "error": "未找到该城市"}
+                else:
+                    return {"ok": False, "error": "地理位置查询失败"}
+        
+        # 如果没有提取到城市，使用当前位置
+        if hasattr(agent, 'user_location') and agent.user_location:
+            lat = str(agent.user_location.get('lat'))
+            lon = str(agent.user_location.get('lon'))
+            
+            # 查询天气
+            import httpx
+            async with httpx.AsyncClient() as client:
+                current_url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current=temperature_2m,relative_humidity_2m,wind_speed_10m,weather_code&timezone=Asia%2FShanghai&forecast_days=1"
+                weather_response = await client.get(current_url, timeout=10.0)
+                
+                if weather_response.status_code == 200:
+                    weather_data = weather_response.json()
+                    
+                    # 解析天气代码
+                    weather_codes = {
+                        0: "晴天", 1: "晴间多云", 2: "多云", 3: "阴天",
+                        45: "雾", 48: "冻雾", 51: "毛毛雨", 53: "持续毛毛雨", 55: "浓密毛毛雨",
+                        56: "冻毛毛雨", 57: "持续冻毛毛雨", 61: "小雨", 63: "中雨", 65: "大雨",
+                        66: "冻雨", 67: "持续冻雨", 71: "小雪", 73: "中雪", 75: "大雪",
+                        77: "雪粒", 80: "小阵雨", 81: "中阵雨", 82: "大阵雨", 85: "小雪阵", 86: "大雪阵",
+                        95: "雷暴", 96: "雷暴伴小雨", 99: "雷暴伴冰雹"
+                    }
+                    
+                    current = weather_data.get('current', {})
+                    weather_code = current.get('weather_code', 0)
+                    weather_desc = weather_codes.get(weather_code, "未知天气")
+                    
+                    # 构建响应
+                    return {
+                        "ok": True,
+                        "location": "当前位置",
+                        "weather": weather_desc,
+                        "temperature": current.get('temperature_2m', 0),
+                        "humidity": current.get('relative_humidity_2m', 0),
+                        "wind_speed": current.get('wind_speed_10m', 0),
+                        "data_source": "open-meteo"
+                    }
+        
+        # 尝试获取当前位置（即使 agent.user_location 为空，也尝试浏览器定位）
+        # 这里我们返回一个提示，让前端处理定位请求
+        return {
+            "ok": False,
+            "error": "请允许浏览器定位权限以获取当前位置天气。"
+        }
+        
+    except Exception as e:
+        print(f"[WEATHER QUERY ERROR] {str(e)}", flush=True)
+        return {"ok": False, "error": "Weather query failed"}
+
+
+# 辅助函数：从用户消息中提取城市名称
+def extract_city_from_message(message: str) -> str:
+    """从用户消息中提取城市名称"""
+    if not message:
+        return ""
+    
+    # 常见天气查询关键词
+    weather_keywords = ['天气', '气温', '温度', '湿度', '风速', '预报', '明天', '后天', '今天']
+    
+    # 简单的城市匹配（中文城市名）
+    # 这里使用一个简化的匹配逻辑，实际项目中可以使用更复杂的NLP
+    cities = [
+        '北京', '上海', '广州', '深圳', '杭州', '南京', '武汉', '成都', '重庆', '西安',
+        '天津', '苏州', '宁波', '青岛', '厦门', '大连', '沈阳', '长春', '哈尔滨',
+        '济南', '郑州', '长沙', '合肥', '南昌', '昆明', '贵阳', '南宁', '海口', '兰州',
+        '西宁', '银川', '乌鲁木齐', '拉萨', '台北', '香港', '澳门'
+    ]
+    
+    # 检查消息中是否包含城市名
+    for city in cities:
+        if city in message:
+            return city
+    
+    # 检查是否有城市相关的关键词
+    for keyword in weather_keywords:
+        if keyword in message:
+            # 如果有天气关键词但没有城市，返回空
+            pass
+    
+    return ""
 
 
 # API 配额/网络/token 等一切服务异常的友好提示（统一文案，不抛原始英文）

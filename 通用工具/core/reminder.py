@@ -3,8 +3,8 @@
 礼包与活动截止提醒（web 会话层使用，用户口径 2026-09-03 修订）
 
 触发规则（全部不去重：每次调用 collect_reminders 都返回当日应提醒内容）：
-- 每周四：微信公众号领取礼包
-- 每周一、周日：每周礼包
+- 每周四：微信公众号领取礼包（提示带周期周数）
+- 每周一、周日：每周礼包（提示带周期周数）
 - 每月 1 号与最后一天：月度资源兑换
 - 活动日历（游戏内活动）＝表格 知识库/活动/活动日历.xlsx，实时读取：
   · 活动截止（end）与兑换截止（ex_end）各自在截止前 2 天 / 1 天 / 当天持续提醒；
@@ -50,6 +50,18 @@ def _load_events(path=None):
 def _deadline_when(days_left):
     """截止日相对今天的口语说法。"""
     return {0: '今日', 1: '明天', 2: '后天'}.get(days_left, '')
+
+
+# 每周礼包周期周数锚点（用户口径 2026-09-24）：
+# 周期每 7 天更新，更新时刻在周四之后（周五 0 点起进入新一期）。
+# 锚定 2026-09-25（周五）= 第 185 期，等价于 2026-09-24（周四）仍属第 184 期。
+_WEEK_CYCLE_ANCHOR = datetime.date(2026, 9, 25)
+_WEEK_CYCLE_ANCHOR_NO = 185
+
+
+def _week_cycle_no(today):
+    """今天所属的每周礼包周期周数（周五 0 点起 +1）。"""
+    return _WEEK_CYCLE_ANCHOR_NO + (today - _WEEK_CYCLE_ANCHOR).days // 7
 
 
 def _deadline_line(name, deadline, today, now, tail_prefix, label=''):
@@ -119,14 +131,14 @@ def collect_reminders(calendar_path=None, today=None, now=None):
     today = now.date()
     items = []
 
-    # 每周礼包：周一 / 周日（weekday：周一=0 … 周日=6）
+    # 每周礼包：周一 / 周日（weekday：周一=0 … 周日=6），带当前周期周数
     if today.weekday() in (0, 6):
         day_name = '一' if today.weekday() == 0 else '日'
-        items.append(f'今天是周{day_name}，记得领取每周礼包。')
+        items.append(f'今天是周{day_name}，记得领取每周礼包（第 {_week_cycle_no(today)} 周）。')
 
-    # 微信公众号礼包：每周四
+    # 微信公众号礼包：每周四，带当前周期周数
     if today.weekday() == 3:
-        items.append('今天是周四，记得去微信公众号领取礼包。')
+        items.append(f'今天是周四，记得去微信公众号领取礼包（第 {_week_cycle_no(today)} 周）。')
 
     # 月度资源兑换：1 号与最后一天
     last_day = _calmod.monthrange(today.year, today.month)[1]

@@ -2009,11 +2009,16 @@ def _route_guide(tools, msg: str) -> dict:
         if re.search(r'刚玩|刚下|刚入坑|刚接触|刚开始玩|新手|萌新|新人|小白|啥都不懂|什么都不懂|啥都不会|求带'
                      r'|这游戏怎么玩|这个游戏怎么玩|游戏怎么玩|拂晓怎么玩|该怎么玩|如何玩|怎么入门|如何入门|怎么开始玩|前期怎么', msg) \
                 and not re.search(r'练|推荐|配|阵容|装备|竞技|遭遇|推图|伤害|好感|改造|技能|天赋|保底|排行|角色|舰灵|培养|强度', msg):
-            return _handle_theme_intro(tools, msg, '萌新')
+            r = _handle_theme_intro(tools, msg, '萌新')
+            if r is not None:
+                return r
         _identity = '普通'
     else:
         if intent['kind'] == 'newbie':
-            return _handle_theme_intro(tools, msg, '萌新')
+            # 点名了具体舰灵的新手问句（守卫拦下泛介绍）→ 继续走下方向量检索答具体问题
+            r = _handle_theme_intro(tools, msg, '萌新')
+            if r is not None:
+                return r
         if intent['kind'] == 'docs':
             return {'reply': '攻略合集已展开，按分类查看即可。',
                     'tool_outputs': [], 'suggestions': [], 'fill_form': [],
@@ -2259,6 +2264,22 @@ def _handle_theme_intro(tools, msg, _bare) -> dict:
                 break
     if key is None:
         key = '拂晓'
+    # 泛新手词（萌新/新人）被子串命中，但整句其实点名了某个真实舰灵 →
+    # 这是具体角色咨询（如「前卫厉害吗？新人自选88元选谁好」），不是泛泛入坑介绍。
+    # 交回调用方回落角色/攻略链路，避免"新人"二字把具体问题截胡成萌新入门。
+    if key in ('萌新', '新人'):
+        _app = _get_app(tools)
+        if _app is not None:
+            _norm = None
+            try:
+                from .name_service import _normalize as _norm
+            except Exception:
+                _norm = None
+            _scan = _norm(msg) if _norm else msg
+            for _cand in sorted(getattr(_app, 'storage', {}) or {}, key=len, reverse=True):
+                _nc = _norm(_cand) if _norm else _cand
+                if _nc and len(_nc) >= 2 and _nc in _scan:
+                    return None
     query, ask = _THEME_INTRO[key]
     topic = topic_map.get(key, '')
     info = ''

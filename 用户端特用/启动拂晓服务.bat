@@ -1,5 +1,6 @@
 @echo off
-rem UTF-8 编码脚本：先切换代码页为 65001，再输出中文（兼容 GBK/UTF-8 两种系统设置）
+rem 本文件以 UTF-8 保存：启动时把代码页切到 65001，才能正确显示下面的中文
+rem （若哪天改用 ANSI/GBK 保存，这里的 chcp 需相应改为 936）
 chcp 65001 >nul
 title 拂晓用户端启动器
 cd /d "%~dp0"
@@ -12,9 +13,9 @@ rem 默认使用大模型 function-calling 路由；需要排障时可在启动�
 if not defined AKALI_ROUTE_MODE set "AKALI_ROUTE_MODE=agent"
 
 rem 检查 8000 端口占用（服务已启动则不重复拉起）
-set SKIP=0
+set "SKIP=0"
 netstat -ano | findstr /r /c:":8000 .*LISTENING" >nul 2>&1
-if "%errorlevel%"=="0" set SKIP=1
+if "%errorlevel%"=="0" set "SKIP=1"
 
 if "%SKIP%"=="1" (
     echo [提示] 8000 端口已有服务在运行，不重复启动服务窗口。
@@ -24,13 +25,24 @@ if "%SKIP%"=="0" (
     rem 清除项目内旧字节码，避免源码已更新但服务仍加载同秒生成的陈旧 pyc。
     for /d /r "%~dp0.." %%D in (__pycache__) do @if exist "%%D" rd /s /q "%%D"
     echo [启动] 正在启动用户端服务 web_app.py（127.0.0.1:8000）...
-    start "拂晓服务" cmd /c "chcp 65001 >nul && ""%PY%"" -B -X utf8 web_app.py"
+    rem 注：%PY% 此处未加引号（本机路径无空格）；若项目路径含空格，需改成 ""%PY%"" 的双引号转义写法
+    start "拂晓服务" cmd /k "chcp 65001 >nul && %PY% -B -X utf8 web_app.py"
     timeout /t 6 /nobreak >nul
 )
 
 rem cpolar 隧道（免费版随机分配地址，每次启动可能变化，以窗口输出为准）
-echo [启动] cpolar 隧道窗口已另开，请在该窗口查看公网访问地址...
-start "cpolar隧道" /D "D:\cpolar" cmd /c "chcp 65001 >nul && cpolar.exe http 8000 -log=stdout"
+rem 自动探测：先用 PATH 里的 cpolar，其次找 D:\cpolar\cpolar.exe；都没有则提示下载
+set "CPOLAR_DIR="
+where cpolar >nul 2>&1
+if "%errorlevel%"=="0" set "CPOLAR_DIR=."
+if not defined CPOLAR_DIR if exist "D:\cpolar\cpolar.exe" set "CPOLAR_DIR=D:\cpolar"
+
+if defined CPOLAR_DIR (
+    echo [隧道] cpolar 已启动，公网地址请在该窗口内查看（免费版每次启动都会变化）...
+    start "cpolar隧道" /D "%CPOLAR_DIR%" cmd /k "chcp 65001 >nul && cpolar.exe http 8000 -log=stdout"
+) else (
+    echo [隧道] 未找到 cpolar，请到 https://www.cpolar.com/ 下载安装
+)
 
 echo.
 echo ============================================
