@@ -3056,7 +3056,8 @@ def _today_holiday() -> dict:
             return None
         name = h.get('name') or ''
         g = holiday_greeting(name)
-        return {'name': name, 'greeting': g['greeting'], 'summary': g['summary']}
+        return {'name': name, 'greeting': g['greeting'], 'summary': g['summary'],
+                'opening': g.get('opening') or ''}
     except Exception:
         return None
 

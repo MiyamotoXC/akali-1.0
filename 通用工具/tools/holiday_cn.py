@@ -120,12 +120,19 @@ def statutory_holiday(dt=None):
 
 
 def holiday_greeting(name, default=None):
-    """按节假日名从真实日历（知识库/活动/节假日.json）匹配阿卡莉口吻祝福（greeting/summary）。
+    """按节假日名从真实日历（知识库/活动/节假日.json）匹配阿卡莉口吻祝福。
+
     先做精确名匹配，未命中再做子串模糊匹配（兼容在线名与知识库名细微差异，
     如 '中秋' vs '中秋节'）。在线名称未收录时退回通用祝福。
-    返回 {'greeting':str,'summary':str}。"""
+    返回 {'greeting':str,'summary':str,'opening':str}。
+
+    opening（用户口径 2026-09-25）：**融合开场句** —— 把祝福与放假安排合成一句
+    顺口说出来的话，随初始问候自然带出；不再用「节日名｜祝福」的通知式前缀。
+    未配置 opening 的节日回退用 greeting，消费方无需特判。
+    """
     greeting = ""
     summary = ""
+    opening = ""
     try:
         from tools.knowledge import load_holiday_events
         nm = (name or "").strip()
@@ -146,8 +153,9 @@ def holiday_greeting(name, default=None):
         if hit is not None:
             greeting = str(hit.get("greeting") or "").strip()
             summary = str(hit.get("summary") or "").strip()
+            opening = str(hit.get("opening") or "").strip()
     except Exception:
         pass
     if not greeting:
         greeting = default or "节日快乐，指挥官。今天也好好休息。"
-    return {"greeting": greeting, "summary": summary}
+    return {"greeting": greeting, "summary": summary, "opening": opening}

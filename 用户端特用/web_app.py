@@ -913,20 +913,28 @@ async def index():
     cap_line = greet_lines[1] if len(greet_lines) > 1 else ""
     greet = greeting_line + (("\n" + cap_line) if cap_line else "")
 
-    # 法定节假日提醒与祝福：随「会话打开时的初始问候气泡」出现（与每日事务顶部区分，用户口径 2026-09-14 续）。
-    # 仅当今天落在法定节假日区间内才追加；普通日子初始问候不变。
+    # 法定节假日祝福：**融入**开场问候（用户口径 2026-09-14 起随问候气泡出现；
+    # 2026-09-25 改为融合 —— 直接用配置里的 opening 把「祝福 + 放假安排」说成一句话，
+    # 不再拼「🎉 节日名｜祝福」这种通知式前缀，也不再把放假安排单独列成一行）。
+    # 仅当今天落在法定节假日区间内才追加；普通日子初始问候完全不变。
     def _esc_hol(s: str) -> str:
         return s.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
     try:
         from core.calc_flow import _today_holiday
         _hol = _today_holiday()
-        if _hol and _hol.get('greeting'):
-            _hname = str(_hol.get('name') or '').strip()
-            _hline = ("🎉 %s｜%s" % (_hname, _hol['greeting'])) if _hname else _hol['greeting']
-            _hsum = str(_hol.get('summary') or '').strip()
-            if _hsum:
-                _hline += "\n" + _hsum
-            greet = greet + "\n" + _esc_hol(_hline)
+        if _hol:
+            # opening 已含放假安排；未配置该字段的节日退回 greeting（必要时补 summary），
+            # 保证旧数据也能用、不用特判。
+            _hline = str(_hol.get('opening') or '').strip()
+            if not _hline:
+                _hline = str(_hol.get('greeting') or '').strip()
+                _hsum = str(_hol.get('summary') or '').strip()
+                if _hline and _hsum:
+                    _hline = _hline.rstrip('。') + "。" + _hsum
+            if _hline:
+                if not _hline.endswith(('。', '！', '？', '~', '～')):
+                    _hline += "。"
+                greet = greet.rstrip() + "\n" + _esc_hol(_hline)
     except Exception:
         pass
 

@@ -611,6 +611,9 @@ def _norm_event(ev):
         'summary': str(_first_val(ev, ('summary', '简介', '说明', '一句话简介')) or '').strip(),
         'notes': str(_first_val(ev, ('notes', '注意事项', '备注', '提示')) or '').strip(),
         'greeting': str(_first_val(ev, ('greeting', '祝福', '祝福语')) or '').strip(),
+        # opening：融合开场句（把祝福与放假安排说成一句话，随初始问候自然带出；
+        # 用户口径 2026-09-25。旧的 greeting/summary 字段保留，未配置 opening 的节日自动回退。）
+        'opening': str(_first_val(ev, ('opening', '融合开场', '开场')) or '').strip(),
         'guide': str(_first_val(ev, ('guide', '攻略', '攻略参考', '攻略关键词')) or '').strip(),
         'raw': ev,
     }
