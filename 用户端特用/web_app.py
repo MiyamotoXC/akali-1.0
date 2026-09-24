@@ -770,7 +770,7 @@ app = FastAPI(title="拂晓只能小秘书")
 _API_TOKEN = runtime.invite_code()
 
 # 放行路径：页面 / 静态资源 / 认证状态探测（前端据此决定是否弹 token 输入框）
-_AUTH_PUBLIC_PREFIXES = ("/kb/", "/avatar/")
+_AUTH_PUBLIC_PREFIXES = ("/kb/", "/avatar/", "/icons/")
 _AUTH_PUBLIC_EXACT = ("/", "/api/auth/status", "/manifest.webmanifest", "/sw.js")
 
 # 回环地址：仅在**本地模式**下免口令。云端模式下 Host 为 127.0.0.1 只代表
@@ -877,6 +877,18 @@ def pwa_service_worker():
     resp = FileResponse(os.path.join(WEB_DIR, "sw.js"), media_type="application/javascript")
     resp.headers["Service-Worker-Allowed"] = "/"
     return resp
+
+
+@app.get("/icons/{name}")
+def pwa_icon(name: str):
+    """PWA / favicon 图标（web/icons/*.png）：
+    供「安装到桌面（PC 独立窗口 / 手机主屏）」与浏览器标签页使用。
+    只放行 icons 目录内的 .png，basename 处理避免路径穿越。"""
+    safe = os.path.basename(name)
+    target = os.path.join(WEB_DIR, "icons", safe)
+    if not safe.lower().endswith(".png") or not os.path.isfile(target):
+        raise HTTPException(status_code=404, detail="图标不存在")
+    return FileResponse(target, media_type="image/png")
 
 
 @app.get("/")

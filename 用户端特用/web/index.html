@@ -4,6 +4,9 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32.png">
+<link rel="icon" type="image/png" sizes="16x16" href="/icons/favicon-16.png">
+<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
 <meta name="theme-color" content="#6b8caa">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -94,28 +97,38 @@
      时段口径（用户 2026-09-13）：清晨 05:30–07:30 / 白天 07:30–17:00 /
      黄昏 17:00–19:00 / 夜间 19:00–05:30。无 class = 白天（基准规则）。
      （2026-09-20 误将其停用，已还原——用户「背景用白色」指的是头像圈底色，非聊天背景） */
+  /* 背景图统一走 CSS 变量：同源时用变量默认值（= 原来的相对路径，行为完全不变）；
+     扩展插件等跨域场景由 bridge 注入脚本把 --img-* 覆盖为服务器绝对地址
+     （用户口径 2026-09-24：用户端要能作为浏览器插件运行）。 */
+  :root {
+    --img-bg-day: url('/kb/图片素材/背景/白天.png');
+    --img-bg-dawn: url('/kb/图片素材/背景/清晨.png');
+    --img-bg-evening: url('/kb/图片素材/背景/黄昏.png');
+    --img-bg-night: url('/kb/图片素材/背景/夜晚.png');
+    --img-akali: url('/kb/图片素材/阿卡莉.png');
+  }
   main::before {
     content: ''; position: fixed; inset: 0; z-index: 0; pointer-events: none;
-    background: url('/kb/图片素材/背景/白天.png') center/cover no-repeat fixed,
-                url('/kb/图片素材/阿卡莉.png') center/cover no-repeat fixed;
+    background: var(--img-bg-day) center/cover no-repeat fixed,
+                var(--img-akali) center/cover no-repeat fixed;
     /* 白天档 70%：此前 .45 太透、白天气泡对比生硬；用户口径 2026-09-09 拉到 70% */
     opacity: .75;
   }
   body.bg-dawn main::before {
     /* 清晨 05:30–07:30 */
-    background: url('/kb/图片素材/背景/清晨.png') center/cover no-repeat fixed,
-                url('/kb/图片素材/阿卡莉.png') center/cover no-repeat fixed;
+    background: var(--img-bg-dawn) center/cover no-repeat fixed,
+                var(--img-akali) center/cover no-repeat fixed;
   }
   body.bg-evening main::before {
     /* 黄昏 17:00–19:00 */
-    background: url('/kb/图片素材/背景/黄昏.png') center/cover no-repeat fixed,
-                url('/kb/图片素材/阿卡莉.png') center/cover no-repeat fixed;
+    background: var(--img-bg-evening) center/cover no-repeat fixed,
+                var(--img-akali) center/cover no-repeat fixed;
   }
   body.bg-night main::before {
     /* 夜间档背景不透明度提到 90% */
     opacity: .90;
-    background: url('/kb/图片素材/背景/夜晚.png') center/cover no-repeat fixed,
-                url('/kb/图片素材/阿卡莉.png') center/cover no-repeat fixed;
+    background: var(--img-bg-night) center/cover no-repeat fixed,
+                var(--img-akali) center/cover no-repeat fixed;
   }
   main > * { position: relative; z-index: 1; }
   /* align-items 收顶对齐：气泡高度贴合内容，不被 70px 头像拉伸出底部空白 */
@@ -888,6 +901,34 @@ function resolveAsset(p) {
   return p;
 }
 
+// 嵌入/跨域（浏览器插件）场景：把 HTML 里写死的 /kb/ /avatar/ 绝对路径改写到 ASSET_BASE，
+// 同时把背景图 CSS 变量覆盖为服务器绝对地址 —— 否则扩展页会把这些路径解析到
+// chrome-extension:// 域下导致图裂。同源（ASSET_BASE 为空）时本函数直接返回，行为不变。
+(function fixStaticAssets() {
+  const base = window.ASSET_BASE || '';
+  if (!base) return;
+  const map = (v) => {
+    if (!v || v.charAt(0) !== '/') return v;
+    if (v.startsWith('/kb/')) return base + v.slice(4);
+    if (v.startsWith('/avatar/')) return base + '/图片素材' + v.slice(8);
+    return v;
+  };
+  document.querySelectorAll('img[src^="/"], iframe[src^="/"], link[href^="/"]').forEach((el) => {
+    ['src', 'href'].forEach((attr) => {
+      const v = el.getAttribute(attr);
+      if (v) el.setAttribute(attr, map(v));
+    });
+  });
+  // CSS 变量（background 用）：与变量默认值同名覆盖即可
+  const kbRoot = base.endsWith('/kb') ? base : base + '/kb';
+  const css = document.documentElement.style;
+  css.setProperty('--img-bg-day', "url('" + kbRoot + '/图片素材/背景/白天.png' + "')");
+  css.setProperty('--img-bg-dawn', "url('" + kbRoot + '/图片素材/背景/清晨.png' + "')");
+  css.setProperty('--img-bg-evening', "url('" + kbRoot + '/图片素材/背景/黄昏.png' + "')");
+  css.setProperty('--img-bg-night', "url('" + kbRoot + '/图片素材/背景/夜晚.png' + "')");
+  css.setProperty('--img-akali', "url('" + kbRoot + '/图片素材/阿卡莉.png' + "')");
+})();
+
 // 阿卡莉头像：表情差分（启动时 /api/ui_assets 提供默认头像=「常态」差分；差分为空回退底层立绘）
 const ARKLY_FALLBACK_AVATAR = resolveAsset('/kb/图片素材/阿卡莉.png');
 let ARKLY_AVATAR = ARKLY_FALLBACK_AVATAR;
@@ -922,7 +963,9 @@ function openGuidePreview(g) {
   if (ext === 'png' || ext === 'jpg' || ext === 'jpeg') {
     body = '<img src="' + url + '" alt="' + esc(g.title) + '">';
   } else if (ext === 'docx' || ext === 'doc') {
-    body = '<iframe src="/kb_html/' + encodeURI(g.path) + q + '"></iframe>';
+    // 预览路由 /kb_html/ 不在 ASSET_BASE 的 /kb/ 映射内：跨域/扩展场景需显式拼 API 基址
+    const _htmlBase = String(window.ARKLY_API_BASE || '').replace(/\/$/, '');
+    body = '<iframe src="' + _htmlBase + '/kb_html/' + encodeURI(g.path) + q + '"></iframe>';
   } else {
     body = '<div class="dl-tip">该文件为数据表，请下载查看。<br><br><a class="guide-link" href="' + url + '" target="_blank">下载 ' + esc(g.title) + '</a></div>';
   }
@@ -2274,7 +2317,8 @@ function bgPeriod() {
 (function initTopBg() {
   const header = document.querySelector('header');
   if (!header) return;
-  const BASE = '/kb/图片素材/背景/';
+  // 顶端图目录：跨域/扩展场景走 ASSET_BASE（'http://主机/kb'）；同源时等价于原来的 '/kb'
+  const BASE = (window.ASSET_BASE || '/kb') + '/图片素材/背景/';
   const SUFFIX = { dawn: '_清晨', evening: '_黄昏', night: '_夜晚', day: '' };
   const okCache = {};   // url → 是否存在（避免重复网络探测）
   function probe(url) {
@@ -2346,7 +2390,9 @@ function bgPeriod() {
       // 记录服务当前启动标识（同源共享，供其他标签页通过 storage 事件感知）
       try { localStorage.setItem(BOOT_KEY, data.boot || ''); } catch (e) {}
       // 启动标识不符：本页是上一次运行遗留的旧页面，自动失效关闭
-      if (data.boot && data.boot !== String(window.AKALI_BOOT_ID)) {
+      // 嵌入场景（浏览器插件，window.AKALI_NO_SELFDESTRUCT）不做自毁：插件窗口是用户
+      // 主动打开的应用窗口，服务端重启/换页不应把它自动关掉（用户口径 2026-09-24）。
+      if (data.boot && data.boot !== String(window.AKALI_BOOT_ID) && !window.AKALI_NO_SELFDESTRUCT) {
         selfDestruct();
       }
     } catch (e) {
@@ -2379,7 +2425,8 @@ function bgPeriod() {
   // 本地存储广播：同一浏览器内，新页面加载写入 boot 后，
   // 所有持有旧标识的标签页经 storage 事件立即失效（无需等下一轮心跳）
   window.addEventListener('storage', function(ev) {
-    if (ev.key === BOOT_KEY && ev.newValue && ev.newValue !== String(window.AKALI_BOOT_ID)) {
+    if (ev.key === BOOT_KEY && ev.newValue && ev.newValue !== String(window.AKALI_BOOT_ID)
+        && !window.AKALI_NO_SELFDESTRUCT) {
       selfDestruct();
     }
   });
@@ -2559,6 +2606,28 @@ if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('/sw.js').catch(function () {});
   });
 }
+
+// URL 参数 ?q=<内容>：打开页面后自动发一条消息，用于「快捷方式直达」场景
+// （PWA 快捷方式 / 浏览器书签 / 浏览器扩展划词查询，见 接口契约.md）。
+// 云端需口令时先等解锁（authUnlocked=false 期间不发，避免 401），最多等 60 秒。
+(function initAutoQuery() {
+  const q = (new URLSearchParams(location.search).get('q') || '').trim();
+  if (!q) return;
+  let waited = 0;
+  const timer = setInterval(function () {
+    waited += 400;
+    let unlocked = true;
+    try {   // authUnlocked 由认证逻辑维护；探不到（旧版/未声明）就不等待
+      unlocked = (typeof authUnlocked === 'undefined') ? true : authUnlocked;
+    } catch (e) { unlocked = true; }
+    if (unlocked === false && waited < 60000) return;
+    clearInterval(timer);
+    // 稍等首屏问候渲染完成，再发用户消息，避免气泡顺序颠倒
+    setTimeout(function () {
+      if (typeof sendChat === 'function') sendChat(q);
+    }, 600);
+  }, 400);
+})();
 </script>
 </body>
 </html>

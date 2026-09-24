@@ -1,0 +1,34 @@
+{
+  "manifest_version": 3,
+  "name": "拂晓小秘书 · 阿卡莉",
+  "version": "1.0.0",
+  "description": "阿卡莉用户端本体：攻略查询 / 伤害计算 / 遭遇战模拟。点图标即开，可填自己的服务器地址。",
+  "action": {
+    "default_title": "打开阿卡莉（Alt+Shift+A）",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "options_page": "launcher.html",
+  "permissions": ["storage", "contextMenus"],
+  "host_permissions": ["http://*/*", "https://*/*"],
+  "commands": {
+    "open-akali": {
+      "suggested_key": {
+        "default": "Alt+Shift+A",
+        "mac": "Alt+Shift+A"
+      },
+      "description": "打开阿卡莉"
+    }
+  }
+}

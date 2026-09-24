@@ -1,32 +1,59 @@
 {
+  "id": "/",
   "name": "阿卡莉 拂晓智能小秘书",
   "short_name": "阿卡莉",
   "description": "拂晓胜利之刻 智能小秘书：攻略查询 / 伤害计算 / 遭遇战模拟",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
-  "orientation": "portrait",
+  "display_override": ["window-controls-overlay", "standalone", "minimal-ui"],
+  "orientation": "any",
   "background_color": "#f4f6f8",
   "theme_color": "#6b8caa",
   "lang": "zh-CN",
+  "dir": "ltr",
+  "categories": ["utilities", "entertainment"],
   "icons": [
     {
-      "src": "/kb/图片素材/表情差分/常态.jpg",
+      "src": "/icons/icon-192.png",
       "sizes": "192x192",
-      "type": "image/jpeg",
+      "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/kb/图片素材/表情差分/常态.jpg",
+      "src": "/icons/icon-512.png",
       "sizes": "512x512",
-      "type": "image/jpeg",
+      "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/kb/图片素材/表情差分/常态.jpg",
+      "src": "/icons/icon-maskable-512.png",
       "sizes": "512x512",
-      "type": "image/jpeg",
+      "type": "image/png",
       "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "查攻略",
+      "short_name": "查攻略",
+      "description": "打开攻略知识库",
+      "url": "/?q=查攻略",
+      "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png" }]
+    },
+    {
+      "name": "计算工具",
+      "short_name": "算伤害",
+      "description": "进入伤害计算 / 遭遇战等计算工具",
+      "url": "/?q=计算工具",
+      "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png" }]
+    },
+    {
+      "name": "今日礼包",
+      "short_name": "礼包",
+      "description": "查询今日礼包与活动",
+      "url": "/?q=今天有什么礼包",
+      "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png" }]
     }
   ]
 }

@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>阿卡莉 · 连接设置</title>
+<style>
+  :root { --brand:#6b8caa; --line:#e3e8ee; --text:#2b3542; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 26px 26px 22px; background: #fbfcfe; color: var(--text);
+    font: 14px/1.6 "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+  }
+  h1 { display: flex; align-items: center; gap: 10px; margin: 0 0 6px; font-size: 19px; }
+  h1 img { width: 34px; height: 34px; border-radius: 8px; }
+  .sub { color: #8b95a3; font-size: 12.5px; margin-bottom: 20px; }
+  label { display: block; font-size: 13px; color: #6b7684; margin: 16px 0 6px; }
+  input {
+    width: 100%; padding: 10px 12px; border: 1px solid var(--line); border-radius: 9px;
+    font: 13px/1.4 Consolas, Menlo, monospace; background: #fff; color: var(--text);
+  }
+  input:focus { outline: none; border-color: var(--brand); }
+  .row { display: flex; gap: 10px; margin-top: 22px; }
+  button {
+    flex: 1; padding: 11px 14px; border: 0; border-radius: 9px; cursor: pointer;
+    font-size: 14px; font-family: inherit; background: #eef2f7; color: var(--text);
+  }
+  button:hover { filter: brightness(0.97); }
+  button.primary { background: var(--brand); color: #fff; font-weight: 600; }
+  .status { margin-top: 12px; font-size: 12.5px; min-height: 18px; color: #8b95a3; }
+  .status.ok { color: #43b581; }
+  .status.err { color: #e06c75; }
+  .tip {
+    margin-top: 20px; padding: 13px 15px; border-radius: 10px; background: #f4f7fb;
+    font-size: 12.5px; color: #6b7684; line-height: 1.75;
+  }
+  .tip b { color: var(--text); }
+  code { background: #e9eef5; padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+</style>
+</head>
+<body>
+  <h1><img src="icons/icon128.png" alt="">阿卡莉 · 连接设置</h1>
+  <div class="sub">填一次即可。之后点扩展图标（或按 Alt+Shift+A）就能直接打开阿卡莉。</div>
+
+  <label for="base">服务器地址</label>
+  <input id="base" placeholder="http://1.2.3.4  或  https://你的域名">
+
+  <label for="token">邀请口令（可选）</label>
+  <input id="token" type="password" placeholder="云端部署时填，本地自用可留空">
+
+  <div class="row">
+    <button class="primary" id="save">保存并打开阿卡莉</button>
+    <button id="test" style="flex:0 0 110px">测试连接</button>
+  </div>
+  <div class="status" id="status"></div>
+
+  <div class="tip">
+    <b>没有服务器？</b>先在装了阿卡莉的电脑上本地用：填 <code>http://127.0.0.1:8000</code>（需先启动 <code>启动拂晓服务.bat</code>）。<br>
+    <b>云端服务器？</b>填买好的公网 IP（如 <code>http://1.2.3.4</code>），口令填 <code>.env</code> 里的 <code>AKALI_INVITE_CODE</code>。<br>
+    <b>不用域名也行：</b>用 IP 直接访问不需要备案。
+  </div>
+
+  <script src="launcher.js"></script>
+</body>
+</html>
