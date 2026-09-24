@@ -64,6 +64,9 @@ try:
 except Exception as _e:
     print('[kb_sync] 跳过（%s）' % _mask(_e), flush=True)
 
+from typing import Optional   # 必须放在最前：函数签名的默认值（如 day: Optional[str] = None）
+                              # 是**定义时求值**的，放在文件后部会导致 NameError（曾因此在
+                              # 生产崩过一次：admin_usage 定义在 import 之前 → 服务起不来）。
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, FileResponse
 from pydantic import BaseModel
@@ -947,8 +950,6 @@ async def my_profile(request: Request):
 # 注入三无秘书人设
 agent = AgentApp(prompt_template=WEB_PERSONA_PROMPT)
 
-
-from typing import Optional
 
 class ChatRequest(BaseModel):
     message: str
