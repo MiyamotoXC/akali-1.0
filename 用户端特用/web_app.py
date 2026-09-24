@@ -950,8 +950,11 @@ async def register(request: Request):
     from core import quota as _quota
     ip = _quota._client_ip(request)        # 仅记录/兜底，不用来认人
 
-    # 新设备才需要过闸：老设备（device_id 已登记）直接回位，不看邀请码
-    if not (_users.find_by_device(device_id) or _users.find_by_ip(ip)):
+    # 新设备才需要过闸：老设备（device_id 已登记）直接回位，不看邀请码。
+    # 注意这里**只认 device_id，不认 IP**（用户口径 2026-09-25 公网实测发现）：
+    # 若做 IP 兜底，同一出口 IP（同 WiFi/同运营商 NAT）下第二台设备会被当成
+    # "老设备"而跳过邀请码 → 入场券形同虚设。IP 仅用于记录与排障。
+    if not _users.find_by_device(device_id):
         if not _users.allow_register():
             from fastapi.responses import JSONResponse
             return JSONResponse({'ok': False, 'reason': 'register_off',

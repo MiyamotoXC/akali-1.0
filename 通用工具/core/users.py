@@ -434,12 +434,10 @@ def register(device_id: str = '', ip: str = '', name: str = '') -> dict:
                         _write_file(d)
                     return {'ok': True, 'created': False, 'uid': str(uid),
                             'token': u['token'], 'user': _public(uid, u), 'reason': 'exists'}
-        # ② 没带设备标识时，退回 IP 兜底（老版本前端 / 极简场景）
-        if not did and ip:
-            for uid, u in users.items():
-                if isinstance(u, dict) and str(u.get('ip') or '').strip() == ip and u.get('token'):
-                    return {'ok': True, 'created': False, 'uid': str(uid),
-                            'token': u['token'], 'user': _public(uid, u), 'reason': 'exists'}
+        # ② 不带设备标识时**不再按 IP 认人**（用户口径 2026-09-25，公网实测）：
+        #    同一 NAT 出口下（同 WiFi / 同运营商）多台设备 IP 相同，按 IP 认人会把
+        #    后来者当成老用户 → 绕过邀请码校验（实测：换新 device_id 但同 IP 时，
+        #    带错误邀请码也能注册成功）。缺少 device_id 就当作新设备走正常注册。
         if not allow_register():
             return {'ok': False, 'created': False, 'uid': '', 'token': '',
                     'user': None, 'reason': 'register_off'}
