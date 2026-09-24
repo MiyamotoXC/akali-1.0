@@ -42,13 +42,27 @@ sys.path.insert(0, _LIB_DIR)
 from dotenv import load_dotenv
 load_dotenv(os.path.join(_PROJECT_ROOT, '.env'), override=False)
 
+
+def _mask(text, *secrets) -> str:
+    """日志脱敏：密钥形态串（sk-xxxx…）与给定口令只保留前几位，其余打码。
+    用于所有 print 到控制台 / docker logs 的异常与排障信息（用户口径 2026-09-24：
+    不得泄露 API 等敏感信息）。放在文件靠前处，启动期日志也能用。"""
+    s = str(text)
+    s = re.sub(r'\b(sk-[A-Za-z0-9_\-]{4})[A-Za-z0-9_\-]{6,}', lambda m: m.group(1) + '***', s)
+    for sec in secrets:
+        sec = str(sec or '')
+        if len(sec) >= 6:
+            s = s.replace(sec, sec[:3] + '***')
+    return s
+
+
 # 云端模式：先把知识库从对象存储同步到本地缓存，再加载数据（业务代码仍读本地磁盘）。
 # 本地模式 / 未配置对象存储 → 直接跳过，行为与改造前一致；失败不阻断启动。
 try:
     from core.kb_sync import sync_kb as _sync_kb
     _sync_kb()
 except Exception as _e:
-    print('[kb_sync] 跳过（%s）' % _e, flush=True)
+    print('[kb_sync] 跳过（%s）' % _mask(_e), flush=True)
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, FileResponse
@@ -746,30 +760,47 @@ app = FastAPI(title="拂晓只能小秘书")
 
 
 # ==================== 可选 API Token 鉴权（部署对外时启用） ====================
-# 在 .env 配置 API_TOKEN=xxxx 后：外部访问（Host 非 127.0.0.1/localhost）的 API 请求
+# 在 .env 配置 AKALI_INVITE_CODE（或旧名 API_TOKEN）后：外部访问的 API 请求
 # 须带请求头 X-API-Token: xxxx（或 ?token=xxxx），否则 401。
 # 页面本体与静态资源（/、/kb/、/avatar/）放行——让用户能直接打开隧道 URL 看到登录界面，
-# 在页面内输入 token 后（前端存 localStorage、后续请求带 header）解锁。本机（127.0.0.1）
-# 访问自动放行，方便调试。API_TOKEN 留空（默认）则不鉴权。
+# 在页面内输入 token 后（前端存 localStorage、后续请求带 header）解锁。
+# 本地模式（AKALI_RUN_MODE=local）下 Host 为回环时自动放行，方便调试；
+# 云端模式一律校验（见下方 _LOOPBACK_HOSTS 说明）。
+# 口令留空（默认）则不鉴权（本地个人使用）。
 _API_TOKEN = runtime.invite_code()
 
 # 放行路径：页面 / 静态资源 / 认证状态探测（前端据此决定是否弹 token 输入框）
 _AUTH_PUBLIC_PREFIXES = ("/kb/", "/avatar/")
 _AUTH_PUBLIC_EXACT = ("/", "/api/auth/status", "/manifest.webmanifest", "/sw.js")
 
+# 回环地址：仅在**本地模式**下免口令。云端模式下 Host 为 127.0.0.1 只代表
+# 「容器网络内的调用方」（同网其他容器、SSH 进来的 shell 等），不代表可信用户，
+# 因此云端必须一律校验口令（用户口径 2026-09-24：部署对外时不留免鉴权后门）。
+_LOOPBACK_HOSTS = ('127.0.0.1', 'localhost', '::1', '[::1]')
+
+
+def _token_ok(provided) -> bool:
+    """恒定时间比较，避免逐字符比较带来的时序侧信道。"""
+    import hmac
+    try:
+        return hmac.compare_digest(str(provided or ''), str(_API_TOKEN or ''))
+    except Exception:
+        return False
+
 
 @app.middleware("http")
 async def api_token_auth(request, call_next):
     if _API_TOKEN:
-        # 本机回环（直接开 127.0.0.1:8000 / localhost）免 token；
-        # 经隧道/公网访问时 Host 是 cpolar 域名等，必须带 token
+        # 本机回环免 token：仅本地模式；云端模式一律校验
         host = (request.headers.get('host') or '').split(':')[0]
-        is_local = host in ('127.0.0.1', 'localhost', '::1', '[::1]')
+        is_local = host in _LOOPBACK_HOSTS and not runtime.is_cloud()
         path = request.url.path
         public = path in _AUTH_PUBLIC_EXACT or any(path.startswith(p) for p in _AUTH_PUBLIC_PREFIXES)
         if not is_local and not public:
+            # header 优先（推荐）；URL 参数用于分享带口令的链接，代价是会进访问日志，
+            # 故云端 nginx 不记录 query string（见 deploy/nginx.conf）
             token = request.headers.get('x-api-token') or request.query_params.get('token')
-            if token != _API_TOKEN:
+            if not _token_ok(token):
                 from fastapi.responses import JSONResponse
                 return JSONResponse({"detail": "无效或缺失 API Token"}, status_code=401)
     return await call_next(request)
@@ -799,10 +830,10 @@ async def auth_status(request: Request):
     if not _API_TOKEN:
         return {"auth_required": False, "authenticated": True, **meta}
     host = (request.headers.get('host') or '').split(':')[0]
-    if host in ('127.0.0.1', 'localhost', '::1', '[::1]'):
-        return {"auth_required": True, "authenticated": True, **meta}  # 本机免口令
+    if host in _LOOPBACK_HOSTS and not runtime.is_cloud():
+        return {"auth_required": True, "authenticated": True, **meta}  # 本机免口令（仅本地模式）
     token = request.headers.get('x-api-token') or request.query_params.get('token')
-    return {"auth_required": True, "authenticated": bool(token) and token == _API_TOKEN, **meta}
+    return {"auth_required": True, "authenticated": _token_ok(token), **meta}
 # 注入三无秘书人设
 agent = AgentApp(prompt_template=WEB_PERSONA_PROMPT)
 
@@ -2468,7 +2499,7 @@ def _chat_impl(req: ChatRequest):
                     "sticker": None}
         # 其他异常：记录日志并返回友好提示
         import traceback
-        print(f"[错误] 类型={type(e).__name__} 消息={str(e)}", flush=True)
+        print(f"[错误] 类型={type(e).__name__} 消息={_mask(e, _API_TOKEN)}", flush=True)
         traceback.print_exc()
         reply = _friendly_error_reply(e)
         _error_detail = ''
@@ -2514,7 +2545,7 @@ async def feedback(req: Request):
         print(f"[FEEDBACK] {data['session_id']} -> {data['feedback_type']}", flush=True)
         return {"ok": True}
     except Exception as e:
-        print(f"[FEEDBACK ERROR] {str(e)}", flush=True)
+        print(f"[FEEDBACK ERROR] {_mask(e, _API_TOKEN)}", flush=True)
         return {"ok": False, "error": "Internal server error"}
 
 
@@ -2605,7 +2636,7 @@ async def get_weather(request: Request):
             return result
             
     except Exception as e:
-        print(f"[WEATHER ERROR] {str(e)}", flush=True)
+        print(f"[WEATHER ERROR] {_mask(e, _API_TOKEN)}", flush=True)
         return {"ok": False, "error": "Weather query failed"}
 
 
@@ -2722,7 +2753,7 @@ async def query_weather_by_message(req: Request):
         }
         
     except Exception as e:
-        print(f"[WEATHER QUERY ERROR] {str(e)}", flush=True)
+        print(f"[WEATHER QUERY ERROR] {_mask(e, _API_TOKEN)}", flush=True)
         return {"ok": False, "error": "Weather query failed"}
 
 
@@ -2822,7 +2853,10 @@ def api_admin_kb_sync(force: bool = True):
     try:
         return {'ok': True, 'result': sync_kb(force=force)}
     except Exception as e:
-        return {'ok': False, 'error': str(e)}
+        # 异常细节只进服务端日志（已脱敏）；对外不回显 —— 云端尤其不能回显（用户口径 2026-09-24）
+        print('[admin] 知识库同步失败：%s' % _mask(e, _API_TOKEN), flush=True)
+        _d = '' if runtime.is_cloud() else '%s: %s' % (type(e).__name__, _mask(e, _API_TOKEN))
+        return {'ok': False, 'error': '知识库同步失败', 'detail': _d}
 
 
 @app.get("/api/ui_assets")
@@ -2847,7 +2881,9 @@ def reload_prompt():
         reload_system_prompt()
         return {"ok": True, "msg": "人设已重载"}
     except Exception as e:
-        return {"ok": False, "msg": str(e)}
+        print('[admin] 人设重载失败：%s' % _mask(e, _API_TOKEN), flush=True)
+        _d = '' if runtime.is_cloud() else '%s: %s' % (type(e).__name__, _mask(e, _API_TOKEN))
+        return {"ok": False, "msg": "人设重载失败", "detail": _d}
 
 
 # ==================== 用户本地副本（装备面板）管理 ====================

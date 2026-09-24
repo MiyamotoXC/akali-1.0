@@ -200,22 +200,52 @@ def _client_ip(req) -> str:
     return str(host).strip() if host else 'unknown'
 
 
-def get_client_key(req) -> str:
-    """从请求取限额维度键：云端=客户端 IP；本地=session_id（仅统计，不闸控）。"""
+# ============================================================================
+# 身份解析 —— 限额维度的唯一入口（后续接 uid 账号体系的扩展点）
+# ----------------------------------------------------------------------------
+# 现状：云端按客户端 IP、本地按 session_id（维度由 runtime.quota_key() 决定）。
+# 将来改「uid 注册 + 内部数据库」时，**只需改本文件两个函数**：
+#   ① resolve_identity(req)：改为从凭证解析 uid（查库校验）
+#   ② get_user_plan(key)：改为按 uid 查库取套餐（在 _lookup_plan_from_db 里实现）
+# 其余（check_llm_quota / record_llm_usage / 存储后端 / 各调用方）都无需改动。
+# ============================================================================
+def resolve_identity(req) -> str:
+    """把一次请求解析成「限额维度键」。
+
+    当前：云端 = 客户端 IP（X-Forwarded-For 优先）；本地 = session_id（仅统计、不闸控）。
+    接入 uid 账号体系时，此处改为返回 uid 即可，其余逻辑自动跟随。"""
     if runtime.quota_key() == 'ip':
         return _client_ip(req)
     sid = getattr(req, 'session_id', None)
     return str(sid).strip() if sid and str(sid).strip() else 'local'
 
 
+def get_client_key(req) -> str:
+    """兼容旧调用：等同 resolve_identity(req)。"""
+    return resolve_identity(req)
+
+
 # 兼容旧调用名（老代码 import get_user_id；注意语义已改为 IP/会话，不再读 uid）
 def get_user_id(req) -> str:
-    return get_client_key(req)
+    return resolve_identity(req)
+
+
+def _lookup_plan_from_db(key: str) -> str:
+    """uid → 套餐 的数据库查询**占位**（当前未接入，返回空串 = 走环境变量白名单）。
+
+    接入内部数据库时在此实现（例：SELECT plan FROM users WHERE uid=?），
+    返回值限制在 ('free', 'month') 内。"""
+    return ''
 
 
 def get_user_plan(key: str) -> str:
     """返回 'free' 或 'month'（额度档）。
-    白名单：先查 FX_USER_PLAN_MAP（键为 IP/session），再查 FX_USER_PLAN，默认 free。"""
+
+    顺序：数据库（占位未接入）→ FX_USER_PLAN_MAP（键为 IP/session）→ FX_USER_PLAN → free。
+    签名（key → 套餐）保持不变，故调用方无需随账号体系升级而改动。"""
+    plan = _lookup_plan_from_db(key)
+    if plan in ('free', 'month'):
+        return plan
     if key in _PLAN_MAP:
         return _PLAN_MAP[key]
     return _DEFAULT_PLAN if _DEFAULT_PLAN in ('free', 'month') else 'free'
