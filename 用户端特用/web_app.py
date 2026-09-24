@@ -604,6 +604,25 @@ _AFFECTION_ACK_RE = re.compile(
 )
 
 
+_HARD_BREAK_RE = re.compile(r'[ \t]+\n(?![ \t]*\n)')   # 行尾空白 + 单个换行 → 两句接上
+_TAIL_WS_RE = re.compile(r'[ \t]+(?=\n)')              # 段落分隔前的行尾空白 → 去掉
+
+
+def _tidy_hard_breaks(text: str) -> str:
+    """收敛 Markdown 硬换行（用户口径 2026-09-25「不要莫名换行」）。
+
+    模型习惯在句末打两个空格再换行（Markdown 的强制换行语法），在聊天界面里就表现
+    成"平白断了一行" —— 实测连普通闲聊回复都带（如 '……心跳声都听得见呢。  \\n我陪着你'）。
+
+    为什么要区分对待：
+      · **有行尾空白**的单换行 = 硬换行 → 接成同一段；
+      · **无空白**的纯 \\n 一律保留 —— 技能原文、结果列表、表格全靠它排版；
+      · \\n\\n 及以上的段落分隔保留，只把其前多余的行尾空白清掉。
+    """
+    text = _HARD_BREAK_RE.sub('', text or '')
+    return _TAIL_WS_RE.sub('', text)
+
+
 def _polish_affection_reply(reply: str) -> str:
     """感情回复末级审查：删除技术/医学/工作转移句，并保证正面回应。
 
@@ -2650,6 +2669,9 @@ def _chat_impl(req: ChatRequest):
         # 问候统一剥离：页面加载已有静态欢迎语（"噢，指挥官，随时待命…"），
         # 任何轮次都不再问候（LLM 可能习惯性问候，后端兜底去掉，避免"发两次晚上好"）
         clean_reply = _strip_greeting(clean_reply)
+        # 收敛模型自带的 Markdown 硬换行（行尾两个空格 + 换行 → 界面上的"莫名换行"）。
+        # 放在置标（<<AVATAR>>/<<GUIDE_FILE>> 等）插入之前，避免误伤标记行。
+        clean_reply = _tidy_hard_breaks(clean_reply)
         # 表白/喜欢类回复必须正面接住：模型偶发的心率、咖啡、系统检测或
         # 夜间工作转移句在返回前删除；若仍无积极回应，按当前时段补一句。
         # 划清界限的双保险（用户口径 2026-09-25）：上下文虽已判 casual，但用户若
