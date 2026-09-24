@@ -17,6 +17,10 @@
 !.env.example
 !.env.cloud.example
 
+# ---- 内部测试用户表（含每人口令，绝不入库）----
+# 外层 users.json 由部署环境提供（云端 compose 挂载到宿主机，改完立即生效）
+users.json
+
 # ---- Python ----
 __pycache__/
 *.py[cod]
