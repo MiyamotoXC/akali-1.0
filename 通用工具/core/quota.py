@@ -195,6 +195,82 @@ def _client_ip(req) -> str:
             xri = None
         if xri and str(xri).strip():
             return str(xri).strip()
+def daily_limit(key: str) -> int:
+    """某维度键的每日 token 上限（按套餐档）。"""
+    return _TOK_LIMIT_MONTH if get_user_plan(key) == 'month' else _TOK_LIMIT_FREE
+
+
+def usage_snapshot(day: Optional[str] = None) -> list:
+    """导出某天（默认今天）各维度键的用量 —— 供**开发者侧**查看谁在用（用户口径 2026-09-25）。
+
+    量级说明：配额存储本身就是「全量 JSON」（Redis 后端也只是整串 set/get），
+    所以这里直接读内存快照即可，不产生额外查询。返回按 token 总量倒序的列表。
+    """
+    d = (day or _today()).strip()
+    try:
+        with STORE._lock:
+            items = list(STORE.usage.items())
+    except Exception:
+        items = []
+    rows = []
+    for key, e in items:
+        if not isinstance(key, str) or '|' not in key:
+            continue
+        kday, dim = key.split('|', 1)
+        if kday != d:
+            continue
+        tin = int(e.get('tok_in') or 0)
+        tout = int(e.get('tok_out') or 0)
+        rows.append({
+            'key': dim,
+            'rounds': int(e.get('rounds') or 0),
+            'tok_in': tin,
+            'tok_out': tout,
+            'tok_total': tin + tout,
+            'cost': round(float(e.get('cost') or 0), 4),
+            'plan': get_user_plan(dim),
+            'limit': daily_limit(dim),
+        })
+    rows.sort(key=lambda x: -x['tok_total'])
+    return rows
+
+
+def usage_of(key: str, day: Optional[str] = None) -> dict:
+    """单个维度键在某天的用量（供「我的信息」只读接口）。"""
+    d = (day or _today()).strip()
+    try:
+        with STORE._lock:
+            e = STORE.usage.get('%s|%s' % (d, key)) or {}
+    except Exception:
+        e = {}
+    tin = int(e.get('tok_in') or 0)
+    tout = int(e.get('tok_out') or 0)
+    return {'day': d, 'rounds': int(e.get('rounds') or 0), 'tok_in': tin, 'tok_out': tout,
+            'tok_total': tin + tout, 'cost': round(float(e.get('cost') or 0), 4),
+            'plan': get_user_plan(key), 'limit': daily_limit(key)}
+
+
+# ===== 客户端标识 =====
+def _client_ip(req) -> str:
+    """取真实客户端 IP：反代头优先（X-Forwarded-For 首段 → X-Real-IP），
+    再退 request.client.host。反代须透传 X-Forwarded-For（见 deploy/nginx.conf）。"""
+    headers = getattr(req, 'headers', None)
+    if headers is not None:
+        fwd = None
+        try:
+            fwd = headers.get('x-forwarded-for')
+        except Exception:
+            fwd = None
+        if fwd:
+            ip = str(fwd).split(',')[0].strip()
+            if ip:
+                return ip
+        try:
+            xri = headers.get('x-real-ip')
+        except Exception:
+            xri = None
+        if xri and str(xri).strip():
+            return str(xri).strip()
     client = getattr(req, 'client', None)
     host = getattr(client, 'host', None) if client is not None else None
     return str(host).strip() if host else 'unknown'
@@ -219,6 +295,10 @@ def resolve_identity(req) -> str:
     未启用账号（或本地回环调试、未配口令）时回退：云端 = 客户端 IP（XFF 优先）；
     本地 = session_id（仅统计、不闸控）。行为与接入前一致。"""
     uid = str(getattr(getattr(req, 'state', None), 'uid', '') or '').strip()
+    if not uid:
+        # ChatRequest 是 Pydantic 模型、没有 .state；/api/chat 路由会把中间件解析出的
+        # uid 透传到它的 uid 字段上（见 web_app.chat）。
+        uid = str(getattr(req, 'uid', None) or '').strip()
     if uid:
         return uid
     if runtime.quota_key() == 'ip':

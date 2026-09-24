@@ -772,7 +772,7 @@ _API_TOKEN = _users.owner_token()   # 优先级 AKALI_OWNER_TOKEN → AKALI_INVI
 
 # 放行路径：页面 / 静态资源 / 认证状态探测（前端据此决定是否弹 token 输入框）
 _AUTH_PUBLIC_PREFIXES = ("/kb/", "/avatar/", "/icons/")
-_AUTH_PUBLIC_EXACT = ("/", "/api/auth/status", "/manifest.webmanifest", "/sw.js")
+_AUTH_PUBLIC_EXACT = ("/", "/admin", "/api/auth/status", "/manifest.webmanifest", "/sw.js")
 
 # 回环地址：仅在**本地模式**下免口令。云端模式下 Host 为 127.0.0.1 只代表
 # 「容器网络内的调用方」（同网其他容器、SSH 进来的 shell 等），不代表可信用户，
@@ -858,26 +858,28 @@ async def auth_status(request: Request):
             "reason": res['reason']}
 
 
-# ==================== 账号管理接口（仅开发者本人可调用）====================
-# 用户口径 2026-09-25：口令 / 准入开关 / API 配置都放 .env，只有我自己能看见。
-# 这里提供一个只读的查看入口 + 一个"当前该往 .env 里填什么"的提示，方便你在服务器上改。
-# 权限：必须是 AKALI_OWNER_UID（默认 000000）——别人的口令调它会 403。
-def _require_owner(request: Request) -> str:
+# ==================== 开发者侧（运营/管理）接口 ====================
+# 用户口径 2026-09-25：
+#   · 运营类内容（用量视图、账号列表…）**集中在开发者侧**，权限由白名单 AKALI_ADMIN_UIDS
+#     控制（默认只含开发者本人 000000）；不在白名单里的 uid 一律 403。
+#   · **用户相关内容只可读** —— 普通用户只能访问 /api/me（自己的信息），
+#     任何编辑类接口都只对开发者侧开放。
+def _require_admin(request: Request) -> str:
+    """开发者/运营侧闸：uid 必须在 AKALI_ADMIN_UIDS 白名单内。"""
     uid = str(getattr(request.state, 'uid', '') or '')
-    if uid != _users.owner_uid():
-        raise HTTPException(status_code=403, detail='仅开发者账号可操作')
+    if not _users.is_admin(uid):
+        raise HTTPException(status_code=403, detail='仅开发者侧账号可操作（需在 AKALI_ADMIN_UIDS 白名单内）')
     return uid
 
 
 @app.get("/api/admin/accounts")
 async def admin_accounts(request: Request):
-    """查看当前账号与准入配置（含口令）—— 仅开发者本人可调。
+    """账号与准入配置（含口令）—— 仅开发者侧白名单可调。
 
     这正是"只有我自己能看见"的实现：口令、开关、可用 uid 列表都在这里回显，
-    而 .env 本身只存在于服务器上。改配置请直接编辑服务器 .env 后重启容器：
-        vim /root/akali/.env    →    cd /root/akali && docker compose up -d
+    而 .env 与 users.json 本身只存在于服务器上。
     """
-    _require_owner(request)
+    _require_admin(request)
     return {
         'ok': True,
         'allow_other_users': _users.allow_other_users(),
@@ -885,11 +887,63 @@ async def admin_accounts(request: Request):
         'owner_token': _users.owner_token(),
         'users': _users.list_accounts(),
         'next_uid': _users.next_uid(),
+        'admin_uids': sorted(_users.admin_uids()),
         'env_keys': ['AKALI_ALLOW_OTHER_USERS', 'AKALI_OWNER_UID',
-                     'AKALI_OWNER_TOKEN', 'AKALI_USERS'],
-        'hint': '以上全部由服务器 .env 控制；改完 .env 后重启容器生效。'
-                'AKALI_USERS 格式：uid:口令[:备注]，多个用英文逗号分隔。',
+                     'AKALI_OWNER_TOKEN', 'AKALI_ADMIN_UIDS', 'AKALI_USERS'],
+        'hint': '开关与开发者口令在服务器 .env；测试用户表在 项目根 users.json'
+                '（改完即时生效，无需重启）。',
     }
+
+
+@app.get("/api/admin/usage")
+async def admin_usage(request: Request, day: Optional[str] = None):
+    """**用量视图**：某天（默认今天）每个维度键消耗的 token / 轮次 / 参考成本。
+
+    仅开发者侧白名单可调（用户口径 2026-09-25：运营方面的集中放在开发者侧）。
+    维度键在接入账号体系后就是 **uid**（老部署是 IP/session，也能正常显示）。
+    """
+    _require_admin(request)
+    from core import quota as _quota
+    rows = _quota.usage_snapshot(day)
+    # 把 uid 对应的人名补上，便于一眼看出是谁在用
+    name_of = {u['uid']: u.get('name') or '' for u in _users.list_accounts()}
+    for r in rows:
+        r['name'] = name_of.get(r['key'], '')
+    total = sum(r['tok_total'] for r in rows)
+    cost = round(sum(r['cost'] for r in rows), 4)
+    return {'ok': True, 'day': day or _quota._today(), 'dim': runtime.quota_key(),
+            'rows': rows, 'total_tok': total, 'total_cost': cost,
+            'backend': type(_quota.STORE).__name__}
+
+
+@app.get("/admin")
+async def admin_console_page():
+    """开发者控制台（运营侧集中入口，用户口径 2026-09-25）。
+
+    页面本身不含数据，故加入免鉴权名单也无害（放在 _AUTH_PUBLIC_EXACT）；
+    真正的数据都由 /api/admin/* 提供，那些接口只认 AKALI_ADMIN_UIDS 白名单。
+    """
+    from admin_console import admin_page
+    return admin_page()
+
+
+@app.get("/api/me")
+async def my_profile(request: Request):
+    """**只读的"我的信息"**（用户口径 2026-09-25：用户相关的内容只可读）。
+
+    返回当前身份 + 自己今天的用量。普通用户可用；不存在任何编辑类动作。
+    """
+    uid = str(getattr(request.state, 'uid', '') or '')
+    if not uid:
+        raise HTTPException(status_code=401, detail='需要口令才能使用')
+    from core import quota as _quota
+    return {'ok': True, 'readonly': True, 'uid': uid,
+            'name': (_users.get_account(uid) or {}).get('note') or '',
+            'role': 'owner' if uid == _users.owner_uid() else 'user',
+            'is_admin': _users.is_admin(uid),
+            'allow_other_users': _users.allow_other_users(),
+            'usage': _quota.usage_of(uid)}
+
 # 注入三无秘书人设
 agent = AgentApp(prompt_template=WEB_PERSONA_PROMPT)
 
@@ -899,7 +953,7 @@ from typing import Optional
 class ChatRequest(BaseModel):
     message: str
     session_id: Optional[str] = None  # 会话标识（多人接口调用时隔离对话状态）；缺省用 "default"
-    uid: Optional[str] = None  # 已废弃：云端改为按 IP 识别，保留字段仅为兼容旧前端
+    uid: Optional[str] = None  # 由 /api/chat 路由注入（鉴权中间件解析出的 uid），配额按它统计
     # 云端模式（AKALI_RUN_MODE=cloud）用户面板随请求携带（服务器无用户文件、无状态）：
     # {角色名: {"attack_panel": {...}, "defense_panel": {...}}}，绝对赋值（同 user_data.apply_panel_to 语义）
     panel_overrides: Optional[dict] = None
@@ -2151,11 +2205,16 @@ _HOLIDAY_ASK_RE = re.compile(
 
 
 @app.post("/api/chat")
-def chat(req: ChatRequest):
-    """对话接口外层：直接调用 _chat_impl 处理会话。
-    礼包/活动截止提醒已在页面打开时由 GET / 路由织入顶部「事务提醒横幅」（轮播，当天每次都弹），
-    不再织入初始问候气泡；法定节假日的祝福由 _today_holiday 另追加进初始问候气泡。
-    聊天过程中均不再追加提醒——活动相关问答由 LLM 意图识别走 QueryActivity 工具处理。"""
+def chat(req: ChatRequest, request: Request):
+    """对话接口外层：把鉴权结果交给业务层，再调用 _chat_impl。
+
+    为什么要多收一个 Starlette Request（用户口径 2026-09-25）：鉴权中间件把 uid 挂在
+    `request.state.uid` 上，但 _chat_impl 收的是 **ChatRequest（Pydantic 模型，没有 .state）**，
+    于是配额那边拿不到 uid、只能退化成按 IP 甚至 "unknown" 统计。这里把 uid 透传过去，
+    用量就真正按 uid 分别记录了。
+    """
+    if not getattr(req, 'uid', None):
+        req.uid = getattr(request.state, 'uid', None) or None
     return _chat_impl(req)
 
 

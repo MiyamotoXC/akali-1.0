@@ -64,6 +64,31 @@ def allow_other_users() -> bool:
     return raw in ('1', 'true', 'on', 'yes', 'y')
 
 
+def admin_uids() -> set:
+    """**运营/管理侧**的访问白名单（用户口径 2026-09-25）。
+
+    能看/能改运营类内容（用量视图、账号列表、反馈等）的 uid 集合。
+    默认只含开发者本人（AKALI_OWNER_UID）；想授权给别人时在 .env 里加：
+
+        AKALI_ADMIN_UIDS=000000,000003
+
+    注意：普通用户**不在**此表里 —— 他们只能访问只读的「我的信息」接口，
+    任何编辑类操作都会被 403 拒绝（"用户相关的内容只可读"）。
+    """
+    raw = (os.environ.get('AKALI_ADMIN_UIDS') or '').strip()
+    out = {owner_uid()}
+    for u in raw.replace('，', ',').replace(';', ',').split(','):
+        u = u.strip()
+        if u:
+            out.add(u)
+    return out
+
+
+def is_admin(uid: str) -> bool:
+    """该 uid 是否有运营/管理侧权限。"""
+    return str(uid or '').strip() in admin_uids()
+
+
 def users_file() -> str:
     """用户表 JSON 路径：AKALI_USERS_FILE 优先；否则 项目根/users.json（外层文件）。"""
     p = (os.environ.get('AKALI_USERS_FILE') or '').strip()
