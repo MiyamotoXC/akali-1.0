@@ -1891,23 +1891,33 @@ function initFeedbackButtons() {
   // 在 renderSecretaryReply 函数中注入反馈按钮
   const originalRenderSecretaryReply = window.renderSecretaryReply;
   
-  window.renderSecretaryReply = function(data, is_first_reply = false) {
+  window.renderSecretaryReply = function(data, msgEl) {
     // 调用原始函数
     const result = originalRenderSecretaryReply.apply(this, arguments);
-    
-    // 为当前消息气泡添加唯一ID并注入反馈按钮
+
+    // 反馈按钮挂在**刚渲染的那条**消息上：优先用调用方传入的 msgEl（比"取最后一条"
+    // 可靠 —— 用户消息与秘书消息并发渲染时不会挂错）；未传时退回最后一条秘书消息。
     const messagesEl = document.getElementById('messages');
-    const msgEl = messagesEl.lastElementChild;
-    if (msgEl && msgEl.classList.contains('msg') && msgEl.classList.contains('secretary')) {
+    let target = (msgEl && msgEl.classList && msgEl.classList.contains('secretary')) ? msgEl : null;
+    if (!target) {
+      const last = messagesEl ? messagesEl.lastElementChild : null;
+      target = (last && last.classList && last.classList.contains('secretary')) ? last : null;
+    }
+    // 防重复注入：同一条消息只挂一个按钮（重渲染不会堆叠）
+    if (target && !target.querySelector('.feedback-btn')) {
+      const msgEl2 = target;
       const msgId = 'msg-' + Date.now() + '-' + Math.random().toString(36).substr(2, 6);
-      msgEl.setAttribute('data-msg-id', msgId);
-      const bubble = msgEl.querySelector('.bubble');
+      msgEl2.setAttribute('data-msg-id', msgId);
+      const bubble = msgEl2.querySelector('.bubble');
       if (bubble) {
         const btn = document.createElement('button');
         btn.className = 'feedback-btn';
+        btn.type = 'button';
         btn.innerHTML = '💡';
-        btn.title = '反馈此答复';
+        btn.title = '这条回答不满意？点这里反馈给开发者';
+        btn.setAttribute('aria-label', '反馈此答复');
         btn.addEventListener('click', function() {
+          if (btn.classList.contains('done')) return;   // 已提交过，避免重复上报
           const userMsg = messagesEl.querySelector('.msg.user:last-of-type');
           const userText = userMsg ? userMsg.querySelector('.bubble').textContent.trim() : '';
           const replyText = data.reply || '';
@@ -1919,19 +1929,26 @@ function initFeedbackButtons() {
             timestamp: new Date().toISOString(),
             feedback_type: 'unsatisfied'
           };
+          // 提交后把按钮改成绿勾（不再弹 alert 打断对话；失败则还原并提示一次）
           fetch('/api/feedback', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', ..._apiHeaders() },
             credentials: 'include',
             body: JSON.stringify(payload)
           }).then(r => r.json()).then(d => {
-            if (d.ok) {
-              alert('感谢反馈！阿卡莉会努力改进。');
+            if (d && d.ok) {
+              btn.classList.add('done');
+              btn.innerHTML = '✓';
+              btn.title = '已反馈，谢谢指挥官';
             } else {
-              alert('反馈提交失败，请稍后重试。');
+              btn.innerHTML = '！';
+              btn.title = d && d.error ? ('提交失败：' + d.error) : '提交失败，请稍后重试';
+              setTimeout(() => { btn.innerHTML = '💡'; btn.title = '这条回答不满意？点这里反馈给开发者'; }, 2000);
             }
-          }).catch(e => {
-            alert('网络错误，请检查连接后重试。');
+          }).catch(() => {
+            btn.innerHTML = '！';
+            btn.title = '网络错误，请稍后重试';
+            setTimeout(() => { btn.innerHTML = '💡'; btn.title = '这条回答不满意？点这里反馈给开发者'; }, 2000);
           });
         });
         bubble.appendChild(btn);

@@ -595,26 +595,42 @@
     .up-head, .up-actions { flex-wrap: wrap; }
   }
 
-  /* 反馈按钮样式 */
+  /* 反馈按钮：常显在阿卡莉气泡**外侧右下角**（用户口径 2026-09-25）。
+     此前是 opacity:0，只在 PC 悬停气泡 / 移动端长按 2 秒才出现 —— 用户实际反馈
+     「按钮好像没了」。现改为常显，并加大尺寸、实心主题色 + 白描边 + 投影，
+     保证压在背景立绘上也足够醒目。 */
   .feedback-btn {
-    position: absolute; right: -24px; bottom: 0;
-    width: 42px; height: 42px; border-radius: 50%;
-    background: rgba(107, 140, 170, 0.15); color: #6b8caa;
-    border: none; font-size: 16px; cursor: pointer;
-    opacity: 0; transition: opacity 0.2s, background 0.2s;
+    position: absolute; right: -30px; bottom: -8px;
+    width: 56px; height: 56px; border-radius: 50%;
+    background: linear-gradient(135deg, #7fa4c4, #4a7297);
+    color: #fff; border: 2px solid rgba(255, 255, 255, .92);
+    font-size: 24px; line-height: 1; cursor: pointer; padding: 0;
     display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 4px 14px rgba(31, 58, 84, .42), 0 0 0 3px rgba(255, 255, 255, .32);
+    transition: transform .15s, box-shadow .15s, filter .15s, background .2s;
+    z-index: 6;
+  }
+  .feedback-btn:hover {
+    transform: scale(1.08); filter: brightness(1.06);
+    box-shadow: 0 6px 18px rgba(31, 58, 84, .5), 0 0 0 4px rgba(255, 255, 255, .5);
+  }
+  .feedback-btn:active { transform: scale(.96); }
+  /* 提交成功后的短暂反馈态（不再弹 alert 打断对话） */
+  .feedback-btn.done {
+    background: linear-gradient(135deg, #7fc48f, #4a9761); cursor: default;
   }
   /* 气泡定位修复 */
   .bubble {
     position: relative;
   }
-  /* PC端悬停激活 */
-  .msg.secretary:hover .feedback-btn {
-    opacity: 1;
+  /* 移动端：气泡外侧留白有限，按钮贴回气泡右下角内缩一点，避免超出屏幕 */
+  @media (max-width: 640px) {
+    .feedback-btn { right: -4px; bottom: -10px; width: 48px; height: 48px; font-size: 21px; }
   }
-  /* 移动端长按激活 */
-  .msg.secretary.longpress .feedback-btn {
-    opacity: 1; background: rgba(107, 140, 170, 0.3);
+  /* 节庆主题下换成金环配色，与中秋皮肤呼应 */
+  body.festival-midautumn .feedback-btn {
+    background: linear-gradient(135deg, #f3cf75, #d69e2e);
+    border-color: rgba(255, 248, 230, .95);
   }
 </style>
 </head>
