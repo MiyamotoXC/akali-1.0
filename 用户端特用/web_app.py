@@ -785,10 +785,15 @@ _LOOPBACK_HOSTS = ('127.0.0.1', 'localhost', '::1', '[::1]')
 
 
 def _token_ok(provided) -> bool:
-    """恒定时间比较，避免逐字符比较带来的时序侧信道。"""
-    import hmac
+    """恒定时间比较，避免逐字符比较带来的时序侧信道。
+
+    走 users.safe_eq 而非直接 hmac.compare_digest（用户口径 2026-09-25）：
+    后者只接受**纯 ASCII** str，口令含中文（如 AKALI_INVITE_CODE=我是小猪）时会抛
+    TypeError，被 except 静默吞成「口令错误」—— 表现为中文口令永远登不进去。
+    """
     try:
-        return hmac.compare_digest(str(provided or ''), str(_API_TOKEN or ''))
+        from core import users as _u
+        return _u.safe_eq(provided, _API_TOKEN)
     except Exception:
         return False
 

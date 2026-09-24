@@ -231,7 +231,7 @@ def auth(token) -> dict:
 
     if provided and ot:
         try:
-            if hmac.compare_digest(provided, ot):
+            if safe_eq(provided, ot):      # 不能用 hmac.compare_digest 直接比 str：中文会抛 TypeError
                 return {'ok': True, 'uid': ouid,
                         'user': {'uid': ouid, 'name': '开发者（本人）', 'role': 'owner'},
                         'reason': ''}
@@ -243,7 +243,7 @@ def auth(token) -> dict:
 
     for u in parse_users():
         try:
-            if hmac.compare_digest(provided, u['token']):
+            if safe_eq(provided, u['token']):
                 if not u.get('enabled', True):
                     return {'ok': False, 'uid': u['uid'], 'user': u, 'reason': 'disabled'}
                 if not allow_other_users():
@@ -284,13 +284,27 @@ def allow_register() -> bool:
     return raw in ('1', 'true', 'on', 'yes', 'y')
 
 
+def safe_eq(provided, expected) -> bool:
+    """恒定时间比较**任意字符串**（含中文）。
+
+    为什么要单独包一层（用户口径 2026-09-25）：`hmac.compare_digest` 只接受
+    **纯 ASCII** 的 str，传入中文会抛 `TypeError: comparing strings with non-ASCII
+    characters is not supported`；而调用处普遍写成 `except: return False`，
+    于是**中文口令/邀请码一律被静默判为"无效"**（现场实测：AKALI_INVITE_CODE=我是小猪
+    时 invite_ok('我是小猪') 返回 False，逐字符 codepoint 却完全一致）。
+    统一 encode 成 bytes 再比较即可 —— 比较语义不变，仍防时序侧信道。
+    """
+    return hmac.compare_digest(str(provided or '').encode('utf-8'),
+                               str(expected or '').encode('utf-8'))
+
+
 def invite_ok(provided) -> bool:
-    """校验用户提交的邀请码（恒定时间比较）。"""
+    """校验用户提交的邀请码（恒定时间比较，支持中文）。"""
     want = register_invite()
     if not want:
         return False
     try:
-        return hmac.compare_digest(str(provided or ''), want)
+        return safe_eq(provided, want)
     except Exception:
         return False
 
