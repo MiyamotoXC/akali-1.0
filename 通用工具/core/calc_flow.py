@@ -426,10 +426,6 @@ def _query_text(tools, name, kwargs):
     return text if text.strip() else '我暂时没查到相关的信息，指挥官。'
 
 
-def _suggest_mark() -> str:
-    return '<<SUGGEST_CALC>>' + '|'.join(k for _, k in DAMAGE_BUTTONS)
-
-
 def _suggest_buttons():
     """构造建议按钮列表（与 web_app._extract_suggestions 同格式，避免循环导入）。"""
     return [{'tool': k, 'label': v} for v, k in DAMAGE_BUTTONS]
@@ -1383,7 +1379,12 @@ def _guide_reply_from_text(text: str, keyword: str) -> dict:
 #      → 建议指挥官自己体验，不给剧情内容。
 # 必须是确定性拦截：先于 LLM 意图判定与 RAG 检索，避免检索到剧情相关正文造成剧透。
 # ======================================================================
-_STORY_RE = re.compile(r'剧情|剧透|羁绊|好感故事|个人故事|角色故事')
+# 收紧（2026-09-24 复盘）：不能只凭一个词就接管整条对话 ——
+#   · 去掉「羁绊」：它与「羁绊系统怎么玩」这类**玩法**问题冲突，不是剧情问法；
+#   · 日程类问法（"活动剧情什么时候结束"）问的是时间，交回正常路由（见 _STORY_SCHEDULE_RE）。
+_STORY_RE = re.compile(r'剧情|剧透|好感故事|个人故事|角色故事')
+_STORY_SCHEDULE_RE = re.compile(
+    r'什么时候(?:结束|开始|开)|几号|几时|截止|结束时间|开启时间|持续到|还有多久')
 _STORY_PLOT_RE = re.compile(
     r'主线|活动|战役|关卡|第[一二三四五六七八九十百零\d]{1,4}[章话节]|'
     r'世界观|背景设定|讲了(?:什么|啥)|讲的(?:什么|啥)|说了(?:什么|啥)|内容是什么')
@@ -1393,6 +1394,9 @@ _STORY_DOC_KEY = '剧情榜'
 def _handle_story(msg: str):
     """剧情类问法的确定性应答；非剧情问题返回 None。"""
     if not _STORY_RE.search(msg or ''):
+        return None
+    # 问的是日程（"活动剧情什么时候结束"）→ 不是剧情内容诉求，交回正常路由
+    if _STORY_SCHEDULE_RE.search(msg):
         return None
     # ② 主线 / 活动剧情 → 引导自行体验（不给剧情内容）
     if _STORY_PLOT_RE.search(msg):
@@ -2554,12 +2558,6 @@ _CAPABILITY_REPLY = (
     '7. 杂项：天气、时间、活动日历、礼包提醒\n'
     '闲聊也可以，但工作优先。要做什么直接说。'
 )
-
-
-def _is_capability_query(msg: str) -> bool:
-    """（已废弃）正则版能力询问判定——2026-09-09 起改为 LLM 意图分类（capability 类）驱动，
-    此函数保留占位不再被调用（正则堆词漏判口语变体，如「我能输入啥」）。"""
-    return False
 
 
 # ---- 角色分类筛选（用户口径 2026-09-09：舰种/阵营/稀有度/天赋能力 反查角色名单。
@@ -4350,10 +4348,13 @@ def route_work(tools, overrides, msg: str, agent=None, allow_intent_llm=True, up
     # 「高爆战列对重甲燃烧概率」会被误解析成 弹种/舰种 筛角色；
     # 「哪些船能点燃」类无概率词且无目标甲，不受影响。工具三要素不全时回落攻略问答。
     _prob_q = re.search(r'概率|几率|概率是|几率是|点燃率', msg)
-    _mech_q = re.search(r'点燃|燃烧|击穿|过穿|穿甲|高爆|通常弹|弹种|轻甲|中甲|重甲|护甲', msg)
+    # 变量名注意：这里是「弹种/护甲机制词」（本段专用），与下方伤害类型判定处的 _mech_q
+    # （`什么甲|什么弹|克制|甲弹|弹种|打什么`）**语义不同**。此前两处同名复用、后者覆盖
+    # 前者，读代码极易误判为同一含义，故此处改名为 _mech_word_early。
+    _mech_word_early = re.search(r'点燃|燃烧|击穿|过穿|穿甲|高爆|通常弹|弹种|轻甲|中甲|重甲|护甲', msg)
     _armor_q = re.search(r'会不会|能不能|是否会|会点燃|能点燃|点燃吗|点燃几率', msg) \
         and re.search(r'轻甲|中甲|重甲|护甲|什么甲', msg)
-    if (_prob_q and _mech_q) or _armor_q:
+    if (_prob_q and _mech_word_early) or _armor_q:
         _atool = _tool(tools, 'ammo_mech_qa')
         if _atool:
             try:
@@ -4794,9 +4795,16 @@ def route_work(tools, overrides, msg: str, agent=None, allow_intent_llm=True, up
     # 不让「伤害」二字把用户拖进计算流程 —— 这正是「减伤25% 与 加伤害25% 哪个收益高」
     # 被误判为算伤害、之后每句反驳又被重新拉进表单的根因（用户口径 2026-09-24）。
     _agent_intent = (overrides or {}).pop('_agent_intent', None)   # 消费后清除，不影响后续轮次
-    # 否决计算流程：① agent 明确判为「闲聊」；② 理论/比较/抱怨语境 ——
+    # 评估/咨询问法（"时雨伤害高吗""她的输出怎么样"）问的是**结论**，不是要算数值 ——
+    # 与 _calc_theory 同类，只要不是计算专属句式就交给检索/问答（用户口径 2026-09-24：
+    # 此前这类问法不含"哪些/谁/什么"、也不含理论词，会被单字「伤害」拉进表单并锁死）。
+    _calc_eval = re.search(
+        r'怎么样|好不好|行不行|强不强|高不高|值不值|厉不厉害|'
+        r'(?:伤害|输出|dps|强度)(?:高|低|强|弱|好)?(?:吗|嘛)', msg, re.I)
+    # 否决计算流程：① agent 明确判为「闲聊」；② 理论/比较/抱怨语境；③ 评估咨询问法 ——
     # 但**计算专属句式优先**（_calc_hard，见函数前部），避免拦掉正常计算请求。
-    _agent_says_not_calc = (_agent_intent == 'casual' or bool(_calc_theory)) and not _calc_hard
+    _agent_says_not_calc = (_agent_intent == 'casual' or bool(_calc_theory)
+                            or bool(_calc_eval)) and not _calc_hard
     is_calc_ask = ((not _explain_q) and (not _mech_q) and not _agent_says_not_calc
                    and ((_li is not None and _li.get('intent') == 'calc')
                         or (_li is None and (not _calc_rq)
@@ -4808,8 +4816,11 @@ def route_work(tools, overrides, msg: str, agent=None, allow_intent_llm=True, up
                and not overrides.get('calc_state', {}).get('attacker'))
     # ---- 争锋竞技场 / 模拟PVP 伤害意图 → 直接弹模拟PVP表单（避免回落 LLM「系统处理。」）----
     # 关键词驱动（不依赖 LLM 意图分类），兜住 LLM 把「争锋竞技场伤害」判成 calc 的情况
+    # 排除词补充（2026-09-24）："争锋竞技场的伤害怎么算 / 排行在哪看 / 收益如何"是**咨询**，
+    # 不该弹模拟表单；只有真正要发起模拟时才进（残留的同类误伤）。
     if re.search(r'pvp|争锋|竞技场', msg, re.I) and re.search(r'伤害|计算|输出|打|dps|DPS|测算|多少', msg) \
-            and not re.search(r'推荐|练谁|用谁|阵容|加点|攻略|怎么玩|怎么打|信物|天赋', msg):
+            and not re.search(r'推荐|练谁|用谁|阵容|加点|攻略|怎么玩|怎么打|信物|天赋|'
+                              r'怎么算|如何算|排行|榜单|在哪|哪里|收益|理论|比较|哪个|为什么', msg):
         return _pvp_form_reply()
 
     if (overrides.get('calc_state') or is_calc_ask) and not is_team:

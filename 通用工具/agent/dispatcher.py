@@ -35,19 +35,9 @@ from .tool_registry import is_retrieval, select_tools
 
 _NOT_FOUND_PREFIX = '未找到角色'
 
-# 属性筛选确定性前置闸：命中则强制走 ship_filter（跳过 LLM 选工具），
-# 避免 LLM 误选 query_ships_by_skill（该工具无 refit/完整性维度）导致改造舰/缺信息舰泄漏。
-# 用户 2026-09-15 收口：「明确工具调用不能被误选拦截」。
-_ATTR_FILTER_RE = re.compile(
-    r'没\s*改造|未\s*改造|无\s*改造|非\s*改造|不\s*改造|没有\s*改造|仅\s*改造|改造\s*舰?|'
-    r'稀有度|[彩金紫蓝绿白]色?(?:角色|舰灵|船)|'
-    r'(?:小|中|大)(?:船|型)|'
-    r'(?:舰种|阵营|国籍)筛选|筛选(?:舰种|阵营|国籍|稀有度)|'
-    r'(?:驱逐|轻巡|重巡|战巡|战列|航母|轻母|装母|潜艇|水母|补给|雷巡)'
-)
-_SKILL_EFFECT_RE = re.compile(
-    r'护盾|回血|吸血|炮击|雷击|航空|命中|装填|暴击|减伤|增伤|回避|攻速|移速|点燃|控制|自奶|奶|增益'
-)
+# 说明（2026-09-24 清理）：此处原有的属性筛选确定性前置闸 _ATTR_FILTER_RE /
+# _SKILL_EFFECT_RE 与下方 _is_attribute_filter 早已无任何调用点（属性筛选现由
+# agent 选工具 + core/intents.py 的 evaluate 守卫负责），已删除，避免误读为在用逻辑。
 
 # 对阿卡莉本人的轻度吐槽/逗弄属于关系互动，不是知识问题。只在明确指向助手、
 # 且没有工作诉求时生效，避免把“哪个舰灵笨/呆”之类角色问题误判成闲聊。
@@ -73,36 +63,11 @@ def _is_assistant_tease(msg):
     return bool(m and len(m) <= 40 and _ASSISTANT_TEASE_RE.search(m)
                 and not _TEASE_WORK_RE.search(m))
 
-# 「培养/改造优先级」问句不是属性筛选（用户口径 2026-09-17）：
-# 「哪些舰灵值得优先改造」要的是**优先级结论**（知识库《舰灵改造优先级》按有据内容作答），
-# 不是按「改造」维度列出的名单——否则 `_ATTR_FILTER_RE` 的 `改造` 会把它强制送进 ship_filter。
-# 豁免条件收紧：含优先级词 + 含列举问法 + **不含**舰种/尺寸/阵营/稀有度维度
-#（"哪些值得改造的航母"仍走筛选名单，与 core/intents.py 的 evaluate 处理器 `_DIM_KW_RE` 守卫同口径）。
-_PRIORITY_Q_RE = re.compile(r'值得|优先|优先级|先练|先养|推荐|培养优先')
-_FILTER_ASK_RE = re.compile(r'哪些|哪艘|哪个|哪条|什么|谁|有没有|列举')
-
-
-def _is_priority_question(msg):
-    m = msg or ''
-    if not _PRIORITY_Q_RE.search(m) or _DIM_KW_RE.search(m):
-        return False
-    # “改造优先级”“培养优先推荐”这类名词式短问同样是在索要结论，
-    # 不要求必须带“哪些/哪个”等疑问词，否则会被“改造”误送到属性名单。
-    return bool(_FILTER_ASK_RE.search(m)
-                or re.search(r'优先级|值得|先练|先养|培养优先', m)
-                or (re.search(r'推荐', m) and re.search(r'改造|培养|练|养', m)))
-
-
-def _is_attribute_filter(msg):
-    """属性筛选判定：含筛选维度信号且无技能效果词 → 强制 ship_filter（确定性，不经 LLM）。"""
-    m = msg or ''
-    if not m or len(m) > 80:
-        return False
-    if _SKILL_EFFECT_RE.search(m):
-        return False
-    if _is_priority_question(m):
-        return False
-    return bool(_ATTR_FILTER_RE.search(m))
+# 说明（2026-09-24 清理）：原有 _PRIORITY_Q_RE / _FILTER_ASK_RE / _is_priority_question /
+# _is_attribute_filter 属同一死链（仅彼此引用、无外部调用点），已删除。
+# 其承载的口径仍然成立、只是已由别处接管：「哪些舰灵值得优先改造」属**优先级结论**，
+# 走知识库《舰灵改造优先级》；"哪些值得改造的航母"属**筛选名单**，由 agent 选工具 +
+# core/intents.py 的 evaluate 守卫（`_DIM_KW_RE`，该符号仍在用）区分，二者不冲突。
 
 
 def _work_dict(reply, tool_outputs=None, **extra):
