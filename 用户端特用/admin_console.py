@@ -90,11 +90,17 @@ ADMIN_HTML = r"""<!DOCTYPE html>
   var KEY = 'akali_admin_token';
   var $ = function (id) { return document.getElementById(id); };
 
-  // 口令来源：URL ?token= 优先（便于分享），否则读本机 localStorage
+  // 口令来源，按优先级：
+  //   ① URL ?token=（便于收藏一个免输入的直达链接）
+  //   ② 本页自己的 localStorage（点过「保存并加载」）
+  //   ③ **主站共用的 arkly_api_token** —— 用户口径 2026-09-25：此前只读 ① ②，
+  //      而主站存的是另一个 key，于是在主站登录过、到控制台仍要手动粘口令。
   var qs = new URLSearchParams(location.search).get('token');
-  if (qs) { try { localStorage.setItem(KEY, qs); } catch (e) {} }
   var token = qs || '';
-  try { token = token || localStorage.getItem(KEY) || ''; } catch (e) {}
+  try {
+    token = token || localStorage.getItem(KEY) || localStorage.getItem('arkly_api_token') || '';
+  } catch (e) {}
+  if (token) { try { localStorage.setItem(KEY, token); } catch (e) {} }
   $('tok').value = token;
 
   function fmt(n) { return (n || 0).toLocaleString('en-US'); }
@@ -160,7 +166,7 @@ ADMIN_HTML = r"""<!DOCTYPE html>
 
   function load() {
     $('err').textContent = '';
-    if (!token) { $('err').textContent = '请先填写口令。'; return; }
+    if (!token) { $('err').textContent = '请先填写口令，或用 /admin?token=<开发者口令> 打开（可存为书签，免每次输入）。'; return; }
     req('/api/admin/usage').then(function (r) {
       if (r.s === 403) { $('err').textContent = '该口令不在管理白名单内（AKALI_ADMIN_UIDS）。'; return; }
       if (r.s === 401) { $('err').textContent = '口令无效或已失效。'; return; }

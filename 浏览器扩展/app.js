@@ -1249,27 +1249,34 @@ function _apiHeaders() {
   if (t) { localStorage.setItem('arkly_api_token', t); h['X-API-Token'] = t; }
   return h;
 }
-// 今日剩余算力条（用户口径 2026-09-25）：**只显示剩余百分比**。
-// 具体 token / 成本 / 轮次用户看不到 —— 后端 /api/quota 已裁剪成只回 remain_percent，
-// 想要明细走开发者侧 /admin（/api/admin/usage）。不限量或本地模式 → 整条隐藏。
-function refreshQuotaBar() {
+// 算力提醒（用户口径 2026-09-25）：用户**不需要常驻查看**用量 ——
+// 只在剩余不足 10% 时自动提醒：「今日系统算力不足10%」。
+//   · 底部出现一条警示横条（阈值以上整条隐藏）；
+//   · 同时在对话里让阿卡莉主动说一句（每会话仅一次，避免每轮刷屏）。
+// 具体 token / 成本用户看不到 —— /api/quota 只回 remain_percent，明细走 /admin。
+var QUOTA_ALERT_PCT = 10;
+function checkQuotaAlert() {
   const bar = document.getElementById('quotaBar');
   const txt = document.getElementById('quotaText');
-  if (!bar || !txt) return;
   fetch('/api/quota', { headers: _apiHeaders() })
     .then(r => (r.ok ? r.json() : null))
     .then(d => {
-      if (!d || d.unlimited || d.cloud_mode === false) { bar.style.display = 'none'; return; }
-      const p = Number(d.remain_percent);
-      if (isNaN(p)) { bar.style.display = 'none'; return; }
-      txt.textContent = '今日剩余算力 ' + Math.round(p) + '%';
-      bar.classList.toggle('low', p <= 30 && p > 10);
-      bar.classList.toggle('empty', p <= 10);
-      bar.style.display = '';
+      const p = (d && !d.unlimited && d.cloud_mode !== false) ? Number(d.remain_percent) : NaN;
+      if (isNaN(p) || p > QUOTA_ALERT_PCT) { if (bar) bar.style.display = 'none'; return; }
+      const msg = '今日系统算力不足' + QUOTA_ALERT_PCT + '%';
+      if (bar && txt) { txt.textContent = msg + '（基础功能不受影响，明日零点自动恢复）'; bar.style.display = ''; }
+      let told = '';
+      try { told = sessionStorage.getItem('arkly_quota_alert') || ''; } catch (e) {}
+      if (told) return;
+      try { sessionStorage.setItem('arkly_quota_alert', '1'); } catch (e) {}
+      // 让阿卡莉主动提醒一次（addMsg 定义在其后，运行时已就绪）
+      if (typeof addMsg === 'function') {
+        addMsg('secretary', msg + '。基础功能（查询 / 计算 / 攻略）仍可正常使用，明日零点自动恢复。');
+      }
     })
-    .catch(() => { bar.style.display = 'none'; });
+    .catch(() => { if (bar) bar.style.display = 'none'; });
 }
-document.addEventListener('DOMContentLoaded', refreshQuotaBar);
+document.addEventListener('DOMContentLoaded', checkQuotaAlert);
 // 功能菜单（悬浮球）：默认位于标题栏最右侧，可拖动换位（位置不持久化，页面级）；
 // 短按（未拖动）展开/收起菜单；查角色→直接开角色面板（不发对话），
 // 计算工具→发指令后端在回复中弹子菜单（角色伤害/好感度/索敌计算/经验值计算/模拟PVP），
@@ -1500,7 +1507,7 @@ ${weatherData.location}实时天气：${weatherData.weather}
       if (resp.status === 401) { typing.innerHTML = '<div class="role-tag">阿卡莉</div>服务器ojbk中。<div class="sticker-wrap"><img class="sticker-img" src="' + resolveAsset('/kb/图片素材/表情包/ojbk.png') + '" alt="ojbk"></div>'; sendBtn.disabled = false; return; }
       const data = await resp.json();
       renderSecretaryReply(data, typing);
-      refreshQuotaBar();   // 本轮可能消耗了 LLM 额度 → 刷新"今日剩余算力"百分比
+      checkQuotaAlert();   // 本轮消耗了 LLM 额度 → 若已跌破 10% 则自动提醒
     } catch (e) {
       typing.querySelector('.bubble').innerHTML = '<div class="role-tag">阿卡莉</div>服务器ojbk中。<div class="sticker-wrap"><img class="sticker-img" src="' + resolveAsset('/kb/图片素材/表情包/ojbk.png') + '" alt="ojbk"></div>';
     } finally {
