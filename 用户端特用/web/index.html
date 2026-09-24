@@ -161,6 +161,41 @@
   .msg.secretary .bubble { background: #f8f1de; }   /* 阿卡莉气泡米黄（用户口径 2026-09-09） */
   .msg.user .bubble { background: var(--user); border-color: #2b2f36; }   /* 黑描边（--ink 同款黑） */
   .bubble .role-tag { font-size: 12px; color: var(--ink-soft); margin-bottom: 4px; }
+  /* ===== 节庆主题：中秋（用户口径 2026-09-25）=====
+     由 /api/ui_assets 下发 holiday.theme=midautumn 后，JS 给 body 挂 .festival-midautumn：
+     ① 头像（页头 + 消息）套月桂金环；② 阿卡莉气泡换米金云纹皮肤；
+     ③ 夜空落月 / 桂花 / 玉兔（纯 CSS 动画，pointer-events:none 不挡任何操作）。
+     非节庆日 body 上没有这个 class，以下规则全不生效，界面与平时完全一致。 */
+  body.festival-midautumn .avatar,
+  body.festival-midautumn .msg .ava {
+    border-radius: 50%;
+    box-shadow: 0 0 0 2px rgba(245,196,81,.95), 0 0 14px rgba(245,196,81,.5);
+  }
+  body.festival-midautumn .msg.secretary .bubble {
+    background-color: #fff9eb;
+    background-image: url('/icons/festival/midautumn-bubble.png');
+    background-size: 100% 100%; background-repeat: no-repeat;
+    border-color: rgba(214,158,46,.55);
+    box-shadow: 0 2px 10px rgba(214,158,46,.18);
+  }
+  body.festival-midautumn .msg.user .bubble { border-color: rgba(214,158,46,.7); }
+  /* 落物层：固定覆盖视口，仅节庆时由 JS 创建 */
+  .festival-fall { position: fixed; inset: 0; pointer-events: none; z-index: 5; overflow: hidden; }
+  .festival-fall i {
+    position: absolute; top: -60px; display: block;
+    background-repeat: no-repeat; background-size: contain;
+    animation-name: festFall; animation-timing-function: linear; animation-iteration-count: infinite;
+  }
+  @keyframes festFall {
+    0%   { transform: translateY(-70px) rotate(0deg); opacity: 0; }
+    12%  { opacity: .95; }
+    88%  { opacity: .85; }
+    100% { transform: translateY(105vh) rotate(220deg); opacity: 0; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    /* 系统开启「减少动态效果」时不落物，只保留金环与气泡皮肤 */
+    .festival-fall { display: none; }
+  }
   /* 温馨提示：黑底胶囊悬挂在页面最上方中心（样式见 .warm-tip） */
   .warm-tip {
     position: fixed; z-index: 50; /* 悬挂在页面最上方中心（标题栏内），不随滚动移动 */
@@ -2367,6 +2402,37 @@ function bgPeriod() {
   setInterval(apply, 60 * 1000);
 })();
 
+// 节庆主题：给 body 挂 festival-<theme> 并按主题铺一层落物（用户口径 2026-09-25）。
+// 主题键由后端 /api/ui_assets 的 holiday.theme 下发（目前只有 midautumn）；
+// 非节庆日不会调用本函数，界面保持原样。落物是纯装饰层，pointer-events:none 不挡操作。
+function applyFestivalTheme(hol) {
+  const theme = (hol && hol.theme) || '';
+  if (!theme) return;
+  document.body.classList.add('festival-' + theme);
+  // 各主题的落物素材（放在 web/icons/festival/，由 /icons/ 免鉴权 serve）
+  const FALL = {
+    midautumn: ['midautumn-moon.png', 'midautumn-osmanthus.png', 'midautumn-rabbit.png']
+  };
+  const files = FALL[theme];
+  if (!files || !files.length) return;
+  const layer = document.createElement('div');
+  layer.className = 'festival-fall';
+  layer.setAttribute('aria-hidden', 'true');
+  for (let i = 0; i < 14; i++) {                     // 数量：够热闹又不干扰阅读
+    const el = document.createElement('i');
+    const size = 12 + Math.random() * 16;            // 12~28px
+    el.style.backgroundImage = 'url("/icons/festival/' + files[i % files.length] + '")';
+    el.style.left = (Math.random() * 100).toFixed(2) + 'vw';
+    el.style.width = size.toFixed(0) + 'px';
+    el.style.height = size.toFixed(0) + 'px';
+    el.style.animationDuration = (9 + Math.random() * 8).toFixed(1) + 's';  // 9~17s 落到底
+    el.style.animationDelay = (-Math.random() * 12).toFixed(1) + 's';       // 负延迟：一进页面就有
+    el.style.opacity = (0.55 + Math.random() * 0.4).toFixed(2);
+    layer.appendChild(el);
+  }
+  document.body.appendChild(layer);
+}
+
 // 界面素材初始化：拉取默认头像（表情差分「常态」），替换欢迎消息与全局默认头像
 (async function initUiAssets() {
   try {
@@ -2383,6 +2449,8 @@ function bgPeriod() {
       // 应用到已渲染的指挥官头像（初始通常无用户消息，这里仅作兜底）
       document.querySelectorAll('.msg.user .ava img').forEach(img => { if (img) img.src = USER_AVATAR; });
     }
+    // 节庆主题（今天在法定节假日区间内才有）：换头像边框 / 气泡皮肤 / 落节庆装饰
+    if (data.holiday) applyFestivalTheme(data.holiday);
   } catch (e) { /* 素材拉取失败沿用回退头像，不打断对话 */ }
 })();
 

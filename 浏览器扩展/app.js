@@ -1710,6 +1710,37 @@ function bgPeriod() {
   setInterval(apply, 60 * 1000);
 })();
 
+// 节庆主题：给 body 挂 festival-<theme> 并按主题铺一层落物（用户口径 2026-09-25）。
+// 主题键由后端 /api/ui_assets 的 holiday.theme 下发（目前只有 midautumn）；
+// 非节庆日不会调用本函数，界面保持原样。落物是纯装饰层，pointer-events:none 不挡操作。
+function applyFestivalTheme(hol) {
+  const theme = (hol && hol.theme) || '';
+  if (!theme) return;
+  document.body.classList.add('festival-' + theme);
+  // 各主题的落物素材（放在 web/icons/festival/，由 /icons/ 免鉴权 serve）
+  const FALL = {
+    midautumn: ['midautumn-moon.png', 'midautumn-osmanthus.png', 'midautumn-rabbit.png']
+  };
+  const files = FALL[theme];
+  if (!files || !files.length) return;
+  const layer = document.createElement('div');
+  layer.className = 'festival-fall';
+  layer.setAttribute('aria-hidden', 'true');
+  for (let i = 0; i < 14; i++) {                     // 数量：够热闹又不干扰阅读
+    const el = document.createElement('i');
+    const size = 12 + Math.random() * 16;            // 12~28px
+    el.style.backgroundImage = 'url("/icons/festival/' + files[i % files.length] + '")';
+    el.style.left = (Math.random() * 100).toFixed(2) + 'vw';
+    el.style.width = size.toFixed(0) + 'px';
+    el.style.height = size.toFixed(0) + 'px';
+    el.style.animationDuration = (9 + Math.random() * 8).toFixed(1) + 's';  // 9~17s 落到底
+    el.style.animationDelay = (-Math.random() * 12).toFixed(1) + 's';       // 负延迟：一进页面就有
+    el.style.opacity = (0.55 + Math.random() * 0.4).toFixed(2);
+    layer.appendChild(el);
+  }
+  document.body.appendChild(layer);
+}
+
 // 界面素材初始化：拉取默认头像（表情差分「常态」），替换欢迎消息与全局默认头像
 (async function initUiAssets() {
   try {
@@ -1726,6 +1757,8 @@ function bgPeriod() {
       // 应用到已渲染的指挥官头像（初始通常无用户消息，这里仅作兜底）
       document.querySelectorAll('.msg.user .ava img').forEach(img => { if (img) img.src = USER_AVATAR; });
     }
+    // 节庆主题（今天在法定节假日区间内才有）：换头像边框 / 气泡皮肤 / 落节庆装饰
+    if (data.holiday) applyFestivalTheme(data.holiday);
   } catch (e) { /* 素材拉取失败沿用回退头像，不打断对话 */ }
 })();
 

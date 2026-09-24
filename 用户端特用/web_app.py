@@ -879,16 +879,24 @@ def pwa_service_worker():
     return resp
 
 
-@app.get("/icons/{name}")
+@app.get("/icons/{name:path}")
 def pwa_icon(name: str):
-    """PWA / favicon 图标（web/icons/*.png）：
-    供「安装到桌面（PC 独立窗口 / 手机主屏）」与浏览器标签页使用。
-    只放行 icons 目录内的 .png，basename 处理避免路径穿越。"""
-    safe = os.path.basename(name)
-    target = os.path.join(WEB_DIR, "icons", safe)
-    if not safe.lower().endswith(".png") or not os.path.isfile(target):
+    """PWA / favicon / 节庆图标（web/icons/**）：
+
+    供「安装到桌面（PC 独立窗口 / 手机主屏）」、浏览器标签页，以及节庆皮肤
+    （如 festival/midautumn-ring.png）使用。支持子目录；用规范化路径 + 前缀校验
+    挡掉路径穿越，并只放行常见图片扩展名。"""
+    root = os.path.normpath(os.path.join(WEB_DIR, "icons"))
+    rel = (name or '').replace('\\', '/').lstrip('/')
+    target = os.path.normpath(os.path.join(root, rel))
+    if not target.startswith(root + os.sep) or not os.path.isfile(target):
         raise HTTPException(status_code=404, detail="图标不存在")
-    return FileResponse(target, media_type="image/png")
+    _media = {'.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+              '.webp': 'image/webp', '.svg': 'image/svg+xml',
+              '.ico': 'image/x-icon'}.get(os.path.splitext(target)[1].lower())
+    if not _media:
+        raise HTTPException(status_code=404, detail="图标不存在")
+    return FileResponse(target, media_type=_media)
 
 
 @app.get("/")
@@ -2871,11 +2879,42 @@ def api_admin_kb_sync(force: bool = True):
         return {'ok': False, 'error': '知识库同步失败', 'detail': _d}
 
 
+# 节庆主题映射（用户口径 2026-09-25）：节日名 → 前端主题键。以后加节日在此登记即可，
+# 素材放 用户端特用/web/icons/festival/（该目录由 /icons/ 路由免鉴权 serve）。
+_FESTIVAL_THEMES = (
+    ('中秋', 'midautumn'),
+)
+
+
+def _festival_of_today():
+    """今天若在法定节假日区间内，返回 {'name','greeting','summary','theme'}；否则 None。
+
+    theme 为空表示该节日暂无前端特效（祝福照常下发，只是不换皮肤）。
+    节假日判定与祝福文案统一走 core.calc_flow._today_holiday（联网日历 + 知识库兜底）。
+    """
+    try:
+        from core.calc_flow import _today_holiday
+        h = _today_holiday() or {}
+        name = str(h.get('name') or '').strip()
+        if not name:
+            return None
+        theme = next((k for w, k in _FESTIVAL_THEMES if w in name), '')
+        return {'name': name, 'greeting': str(h.get('greeting') or ''),
+                'summary': str(h.get('summary') or ''), 'theme': theme}
+    except Exception:
+        return None
+
+
 @app.get("/api/ui_assets")
 def get_ui_assets():
-    """前端界面素材：表情差分默认头像 + 神态词列表（图片名即神态分类名）。"""
+    """前端界面素材：表情差分默认头像 + 神态词列表（图片名即神态分类名）+ 今日节庆主题。
+
+    节庆主题（用户口径 2026-09-25）：今天落在法定节假日区间内时下发 holiday，
+    前端据此给头像套边框、气泡换皮肤、落节庆装饰；非节庆日 holiday=None，界面完全不变。
+    """
     stems = [os.path.splitext(f)[0] for f in _list_expression_files()]
-    return {"default_avatar": _default_expression_url(), "expressions": stems}
+    return {"default_avatar": _default_expression_url(), "expressions": stems,
+            "holiday": _festival_of_today()}
 
 
 @app.post("/api/clear")
