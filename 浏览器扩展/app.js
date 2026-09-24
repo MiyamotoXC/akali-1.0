@@ -724,7 +724,8 @@ function renderSecretaryReply(data, msgEl) {
       }
       html += '</div>';
     });
-    if (!hasEnv) html += '<button class="fill-submit">填好了，继续</button></div>';
+    if (!hasEnv) html += '<button class="fill-submit">填好了，继续</button>'
+                       + '<button class="fill-cancel">结束本轮</button></div>';
     msgEl.querySelector('.bubble').innerHTML = html;
     // 阵型/航向/制空 面板：默认按钮 / 选项单选 / 确认发送
     const envPanel = msgEl.querySelector('.env-panel');
@@ -791,6 +792,12 @@ function renderSecretaryReply(data, msgEl) {
           sendChat(nonEmptyParts.length ? nonEmptyParts.join(' ') : '继续');
         }
       });
+      // 表单内「结束本轮」：与页脚「中断」同路径（发「结束本轮」→ 后端清 calc_state）。
+      // 用户口径 2026-09-24：此前填表时只能去页脚找中断，且打字反驳会被当成角色名。
+      const _cancelBtn = msgEl.querySelector('.fill-cancel');
+      if (_cancelBtn) {
+        _cancelBtn.addEventListener('click', () => sendChat('结束本轮'));
+      }
     }
     // 填空输入按回车 = 点击确认按钮（普通表单）
     msgEl.querySelectorAll('.fill-input').forEach(inp => {

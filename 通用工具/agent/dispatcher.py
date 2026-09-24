@@ -356,6 +356,11 @@ def route_work_agent(tools, overrides, msg, agent=None, history=None):
 
     name = decision.get('name') or 'no_tool'
     intent = decision.get('intent') or ''
+    # 把 LLM 的意图结论留给 legacy 兼容层：回落时 allow_intent_llm=False 会让 _li=None、
+    # 所有正则分支同时放行，于是「含『伤害』二字」就能把用户拉进伤害计算流程。
+    # 记录在此，供 calc_flow 否决这类误判（用户口径 2026-09-24；那边消费后即清除）。
+    if overrides is not None:
+        overrides['_agent_intent'] = intent
     print('[route] input=%r intent=%s tool=%s args=%s'
           % (context_msg[:160], intent, name,
              json.dumps(decision.get('args') or {}, ensure_ascii=False)), flush=True)

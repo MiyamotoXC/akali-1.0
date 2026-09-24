@@ -4093,6 +4093,18 @@ def route_work(tools, overrides, msg: str, agent=None, allow_intent_llm=True, up
     # ④**明确的其他工具指令**（经验值/索敌/好感度/计算工具菜单）——否则「算经验值」会被
     #    吞进伤害计算、把工具词当攻击方舰名解析 → 「攻击方「经验值」无法识别」（用户口径 2026-09-14）。
     _tool_switch = _is_tool_switch(msg)
+    # 中止词：计算流程（含填表等待期）里用户明确想退出时，**不依赖按钮**也能退出
+    # （用户口径 2026-09-24：说「我没让你算伤害啊」被当成攻击方角色名，且退不出来）。
+    # 收窄两处：① 仅在 calc_state 激活时判定（不影响正常对话）；
+    #            ② 不含单独的「结束」二字（避免「活动什么时候结束」被误伤）。
+    if overrides.get('calc_state') and re.search(
+            r'取消|算了|不填了|不做了|不玩了|不算了|不计算了|退出计算|结束计算|结束本轮|'
+            r'换个话题|换个问题|我没让你算|没让你算|别算了|谁让你算', msg):
+        _reset_calc(overrides)
+        overrides.pop('favor_pending', None)
+        return {'reply': '好，已结束本轮计算。', 'tool_outputs': [], 'suggestions': [],
+                'fill_form': [], 'encounter_form': [], 'guide_files': [], 'guide_lib': '',
+                'ok': True}
     if overrides.get('calc_state') and '组队' not in msg and '结束本轮' not in msg \
             and not _is_ship_list_cmd(msg) and not _tool_switch:
         try:
@@ -4161,11 +4173,28 @@ def route_work(tools, overrides, msg: str, agent=None, allow_intent_llm=True, up
 
     # 唯一的自然语言意图分发点：模型成功时完全采用模型结论；只有模型失败时，
     # compare/evaluate 才使用共享词表作降级判断。规则不再与模型结果竞价。
+    # ============ 计算意图的前置识别（必须早于意图分发/检索）============
+    # 用户口径 2026-09-24：问「减伤25%和加伤害25%哪个收益高」被误判成算伤害且退不出来。
+    # 实测还有反向问题：「光辉打胜利」被 LLM 判成 data_lookup、「算一下A和B哪个伤害高」
+    # 判成 knowledge_qa，于是进了检索分支回「没能从攻略库找到内容」—— 所以计算专属句式
+    # 必须在这里拦下，不能等下面的 calc 判定（那时已被分发走了）。
+    #   ① _calc_theory：理论/比较/抱怨语境 → 其中的「伤害」二字不算计算请求；
+    #   ② _calc_hard  ：计算专属句式（X打Y / dps / 算…伤害）→ 即使 LLM 判闲聊也照进计算。
+    _calc_theory = re.search(
+        r'收益|理论|性价比|等效|相比|比较|对比|差距|'
+        r'没让你|别算|不要算|凭什么|为什么|怎么会|谁让你', msg)
+    _calc_hard = (not _calc_theory) and bool(
+        re.search(r'[\u4e00-\u9fa5A-Za-z0-9·]{1,12}(?:打|攻击)[\u4e00-\u9fa5A-Za-z0-9·]{1,12}', msg)
+        or re.search(r'(?:^|[\s，,])打[\u4e00-\u9fa5A-Za-z0-9·]{1,8}$', msg)
+        or 'dps' in msg.lower()
+        or re.search(r'算[一二]?[下算]?[^，。！？]{0,8}(?:伤害|输出|数值)', msg))
+
     _decision = _li
     if _decision is None:
         _fallback_intent = intents.classify_by_rules(msg)
         _decision = {'intent': _fallback_intent} if _fallback_intent else None
-    _intent_result = _dispatch_intent(tools, overrides, msg, agent, _decision)
+    # 计算专属句式：跳过意图分发，直接交给下方计算判定
+    _intent_result = None if _calc_hard else _dispatch_intent(tools, overrides, msg, agent, _decision)
     if _intent_result is not None:
         return _intent_result
 
@@ -4693,10 +4722,12 @@ def route_work(tools, overrides, msg: str, agent=None, allow_intent_llm=True, up
     # 机制问句（克制/甲弹/弹种）不触发伤害计算："高爆打什么甲" 等应走攻略/问答
     _mech_q = re.search(r'什么甲|什么弹|克制|甲弹|弹种|打什么', msg)
     # 强信号：明确指向计算（含"伤害/计算"上下文、"X打Y"句式）→ 直接进计算流程；
-    # "算算dps"等 dps 问法同属伤害计算意图，无需 LLM 二次确认
-    _calc_strong = ('伤害' in msg or '计算' in msg or 'dps' in msg.lower()
-                    or bool(re.search(r'[\u4e00-\u9fa5A-Za-z0-9·]{1,12}(?:打|攻击)[\u4e00-\u9fa5A-Za-z0-9·]{1,12}', msg)
-                            or re.search(r'(?:^|[\s，,])打[\u4e00-\u9fa5A-Za-z0-9·]{1,8}$', msg)))
+    # "算算dps"等 dps 问法同属伤害计算意图，无需 LLM 二次确认。
+    # 强计算信号（_calc_theory / _calc_hard 见函数前部；带理论/抱怨语境的已不算强信号）
+    _calc_strong = (('伤害' in msg or '计算' in msg or 'dps' in msg.lower()
+                     or bool(re.search(r'[\u4e00-\u9fa5A-Za-z0-9·]{1,12}(?:打|攻击)[\u4e00-\u9fa5A-Za-z0-9·]{1,12}', msg)
+                             or re.search(r'(?:^|[\s，,])打[\u4e00-\u9fa5A-Za-z0-9·]{1,8}$', msg)))
+                    and not _calc_theory)
     # 弱信号：只有孤立的"算"字（如"算了我信你吧"）→ 不再硬性触发，
     # 交 LLM 二次确认是否真的在要求计算（关键字 + LLM 共同识别）
     _calc_weak = '算' in msg and not _calc_strong
@@ -4708,7 +4739,14 @@ def route_work(tools, overrides, msg: str, agent=None, allow_intent_llm=True, up
         and not re.search(r'算一算|帮我算|发起计算|计算(?:伤害|一下)|期望伤害|总伤害|DPS|一击|一发', msg, re.I)
     # LLM 分类成功 → 意图直接决定（intent=calc 无需字面"算/伤害"信号）；
     # 分类失败 → 正则信号 + 弱信号 LLM 二次确认兜底
-    is_calc_ask = ((not _explain_q) and (not _mech_q)
+    # agent 层已用 LLM 判定过意图、且**明确不是计算类**（闲聊/知识问答/数据查询）时，
+    # 不让「伤害」二字把用户拖进计算流程 —— 这正是「减伤25% 与 加伤害25% 哪个收益高」
+    # 被误判为算伤害、之后每句反驳又被重新拉进表单的根因（用户口径 2026-09-24）。
+    _agent_intent = (overrides or {}).pop('_agent_intent', None)   # 消费后清除，不影响后续轮次
+    # 否决计算流程：① agent 明确判为「闲聊」；② 理论/比较/抱怨语境 ——
+    # 但**计算专属句式优先**（_calc_hard，见函数前部），避免拦掉正常计算请求。
+    _agent_says_not_calc = (_agent_intent == 'casual' or bool(_calc_theory)) and not _calc_hard
+    is_calc_ask = ((not _explain_q) and (not _mech_q) and not _agent_says_not_calc
                    and ((_li is not None and _li.get('intent') == 'calc')
                         or (_li is None and (not _calc_rq)
                             and (_calc_strong or (_calc_weak and _llm_is_calc_request(msg))))))
