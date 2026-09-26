@@ -31,7 +31,7 @@ from .config import get_chat_model
 from .guard import guard, guarded_backend_reason
 from .prompts import ROUTER_SYSTEM
 from .tool_adapter import invoke_tool, tool_map
-from .tool_registry import is_retrieval, select_tools
+from .tool_registry import is_retrieval, select_tools, DATA_TOOLS, LOOPABLE_DATA_TOOLS
 
 _NOT_FOUND_PREFIX = '未找到角色'
 
@@ -120,6 +120,17 @@ def _select_route(msg, sel_tools, history=None):
                         'type': 'object',
                         'description': '所选工具的参数对象；no_tool 时为空对象。',
                     },
+                    'second_tool_name': {
+                        'type': 'string',
+                        'enum': list(LOOPABLE_DATA_TOOLS) + ['none'],
+                        'description': '仅当"数据→数据"强依赖（如先查某舰再查其天赋/同技能舰）时，'
+                                       '可附第二个**数据类**工具；其余情况填 none。'
+                                       '禁止填 guide_rag / query_guide / 闲聊；max_iter=2 封顶。',
+                    },
+                    'second_arguments': {
+                        'type': 'object',
+                        'description': '第二个工具的参数对象；none 时为空对象。',
+                    },
                 },
                 'required': ['intent', 'tool_name', 'arguments'],
             },
@@ -204,7 +215,19 @@ def _select_route(msg, sel_tools, history=None):
             if field in (msg or ''):
                 args['field'] = field
                 break
-    return {'name': name, 'args': args, 'intent': intent}
+    second = None
+    sn = str(meta_args.get('second_tool_name') or 'none')
+    if sn not in ('none', ''):
+        sa = meta_args.get('second_arguments') or {}
+        # 协议层约束：首工具与二工具都必须是数据类、二工具在白名单、且与首工具不同，
+        # 禁止把检索/闲聊塞进循环（保持"原文直出"、不引入幻觉）。
+        if (name in DATA_TOOLS and sn in LOOPABLE_DATA_TOOLS
+                and sn != name and isinstance(sa, dict)):
+            second = {'name': sn, 'args': sa}
+    decision = {'name': name, 'args': args, 'intent': intent}
+    if second:
+        decision['second'] = second
+    return decision
 
 
 def _select_tool_calls(msg, sel_tools, history=None):
@@ -301,6 +324,20 @@ def route_work_agent(tools, overrides, msg, agent=None, history=None):
     # 真正回指词，不继承上一轮路由，因而新话题仍会逐轮重新判定。
     context_msg = _resolve_pronoun(msg, overrides)
 
+    # 索敌计算确定性前置闸（用户口径 2026-09-26）：悬浮球「计算工具 → 索敌计算」发的命令就是
+    # 「索敌线」；此外「索敌 <数值>」「索敌队伍/最高索敌 <6舰>」等明确索敌计算，都必须早于下方
+    # LLM 元路由——否则会被判成 data_lookup → query_scout_sum（只加面板原始索敌值、缺 98×2），
+    # 或被 calc 门控当攻击方舰名。直接复用 calc_flow 的固定工具 `_handle_scout`：
+    # Mode1 数值索敌线 / Mode2 队伍最高索敌（含 98×2）/ 纯索敌词弹交互表单，与 legacy 路由一致。
+    # 「XX和YY的索敌之和」不含队伍/数值/菜单词，_handle_scout 返回 None，仍走 query_scout_sum。
+    try:
+        from core.calc_flow import _handle_scout
+        _scout_r = _handle_scout(context_msg, agent=agent)
+        if _scout_r is not None:
+            return _scout_r
+    except Exception:
+        pass
+
     sel = select_tools(tools)
     if not sel:
         return _legacy_route_work(tools, overrides, context_msg, agent=agent, allow_intent_llm=False,
@@ -340,6 +377,13 @@ def route_work_agent(tools, overrides, msg, agent=None, history=None):
           % (context_msg[:160], intent, name,
              json.dumps(decision.get('args') or {}, ensure_ascii=False)), flush=True)
     calls = [] if name == 'no_tool' else [decision]
+    # 增强②：有界工具循环（max_iter=2）——仅当首、次工具均为数据类（数据→数据）时，
+    # 串行执行两工具并原文并列直出；检索/闲聊不得进入循环（否则丢弃 second，单工具执行）。
+    second = decision.get('second') if isinstance(decision, dict) else None
+    if (second and not is_retrieval(name) and name in DATA_TOOLS
+            and second.get('name') in LOOPABLE_DATA_TOOLS):
+        calls = [decision, second]
+        print('[route] tool_loop data->data: %s -> %s' % (name, second.get('name')), flush=True)
     if calls:
         # ②检索分支：向量检索 → LLM 依据片段简答（约束式生成）；无命中则回落
         if is_retrieval(name):
