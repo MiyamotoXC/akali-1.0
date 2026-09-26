@@ -1827,7 +1827,7 @@ function renderSecretaryReply(data, msgEl) {
   if (data.scout_form) {
     html += '<div class="fill-hint">';
     html += '<div class="hint-title">索敌计算：选模式，填参数。</div>';
-    html += '<div class="hint-group">① <b>数值索敌线</b>：填敌方索敌数值，算 T优 / 不T劣 线 + 各航向区间 buff。</div>';
+    html += '<div class="hint-group">① <b>数值索敌线</b>：填我方索敌值，分别算「我方进攻/敌方防守」「敌方进攻/我方防守」的 T优 / T劣 线（不列具体 buff）。</div>';
     html += '<div class="hint-group">② <b>队伍最高索敌</b>：<b>必须填满 6 名角色</b>；每角色 = 基础索敌×(1+各组索敌天赋%之和) + 98×2 + 额外索敌，再 ×乘算系数，求和下取整。1/2/3/4 每组各可选 1 个索敌天赋。</div>';
     html += '<div class="hint-group">例：<code>胡德·改 14*3+10 1.1</code> </div>';
     html += '</div>';

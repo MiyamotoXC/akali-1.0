@@ -3236,33 +3236,25 @@ def _scout_char_breakdown(name, arith_str, mult, agent):
 
 
 def _handle_scout_mode1(v: float) -> dict:
-    """Mode1：输入敌方基准索敌 V，分别输出四种航向的索敌区间与 Buff。"""
+    """Mode1：输入我方索敌基准值 V（始终视为我方，用户口径 2026-09-27），给出两类 T 优/T 劣 线
+    （不列具体航向 buff）。
+    ① 我方进攻/敌方防守：算敌方索敌阈值（我方 T优⟺敌方<我方÷1.25，我方 T劣⟺敌方>我方÷0.75）。
+    ② 敌方进攻/我方防守：同一比较从敌方视角表述（敌方 T优⟺敌方>我方÷0.75，敌方 T劣⟺敌方<我方÷1.25）。"""
     v = max(0.0, min(20000.0, float(v)))   # 用户输入钳制：不得为负、≤20000（用户口径 2026-09-17）
-    t_you = v * 1.25          # T优：我方需 > V×1.25
-    t_li = v * 0.75           # T劣：我方 ≤ V×0.75
+    t_you_e = v / 1.25         # 我方 T优（敌方 T劣）：敌方索敌需 < 此值
+    t_li_e = v / 0.75          # 我方 T劣（敌方 T优）：敌方索敌需 > 此值
     lines = []
     lines.append('《索敌线计算》')
-    lines.append('基准索敌（敌方）：%s' % _fmt_num(v))
+    lines.append('基准索敌（我方）：%s' % _fmt_num(v))
     lines.append('')
-    lines.append('· T优')
-    lines.append('  索敌区间：我方索敌 > %s（敌方×1.25）' % _fmt_num(t_you))
-    lines.append('  Buff：我方雷击/炮击伤害+15%、命中值+20%；'
-                 '敌方雷击/炮击伤害-15%、命中值-10%')
+    lines.append('· 我方进攻 / 敌方防守')
+    lines.append('  T优（我方）：敌方索敌 < %s（即 我方 > 敌方×1.25）' % _fmt_num(t_you_e))
+    lines.append('  T劣（我方）：敌方索敌 > %s（即 我方 < 敌方×0.75）' % _fmt_num(t_li_e))
     lines.append('')
-    lines.append('· T劣')
-    lines.append('  索敌区间：我方索敌 ≤ %s（敌方×0.75）' % _fmt_num(t_li))
-    lines.append('  Buff：我方雷击/炮击伤害-15%、命中值-10%；'
-                 '敌方雷击/炮击伤害+15%、命中值+20%')
-    lines.append('')
-    lines.append('· 同航')
-    lines.append('  索敌区间：%s < 我方索敌 ≤ %s' % (_fmt_num(v), _fmt_num(t_you)))
-    lines.append('  Buff：索敌成功，我方命中率+10%、敌方命中率-10%；'
-                 '双方炮击/雷击伤害+8%、命中值+10%')
-    lines.append('')
-    lines.append('· 反航')
-    lines.append('  索敌区间：%s < 我方索敌 ≤ %s' % (_fmt_num(t_li), _fmt_num(v)))
-    lines.append('  Buff：无索敌成功；双方炮击/雷击伤害-8%、命中值-10%')
-    return {'reply': '\n'.join(lines), 'tool_outputs': [], 'suggestions': [], 'fill_form': [],
+    lines.append('· 敌方进攻 / 我方防守')
+    lines.append('  T优（敌方）：敌方索敌 > %s（即 我方 < 敌方×0.75）' % _fmt_num(t_li_e))
+    lines.append('  T劣（敌方）：敌方索敌 < %s（即 我方 > 敌方×1.25）' % _fmt_num(t_you_e))
+    return {'reply': chr(10).join(lines), 'tool_outputs': [], 'suggestions': [], 'fill_form': [],
             'encounter_form': [], 'guide_files': [], 'guide_lib': '', 'ok': True}
 
 
