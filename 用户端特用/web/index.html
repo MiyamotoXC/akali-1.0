@@ -631,14 +631,14 @@
 
   /* 反馈按钮：常显在阿卡莉气泡**外侧右下角**（用户口径 2026-09-25）。
      此前是 opacity:0，只在 PC 悬停气泡 / 移动端长按 2 秒才出现 —— 用户实际反馈
-     「按钮好像没了」。现改为常显，并加大尺寸、实心主题色 + 白描边 + 投影，
+     「按钮好像没了」。现改为常显，并加大尺寸、白底 + 主题色描边 + 投影，
      保证压在背景立绘上也足够醒目。 */
   .feedback-btn {
     position: absolute; right: -30px; bottom: -8px;
-    width: 56px; height: 56px; border-radius: 50%;
-    background: linear-gradient(135deg, #7fa4c4, #4a7297);
-    color: #fff; border: 2px solid rgba(255, 255, 255, .92);
-    font-size: 24px; line-height: 1; cursor: pointer; padding: 0;
+    width: 44px; height: 44px; border-radius: 50%;
+    background: #fff;
+    color: #4a7297; border: 2px solid rgba(74, 114, 151, .45);
+    font-size: 30px; line-height: 1; cursor: pointer; padding: 0;
     display: flex; align-items: center; justify-content: center;
     box-shadow: 0 4px 14px rgba(31, 58, 84, .42), 0 0 0 3px rgba(255, 255, 255, .32);
     transition: transform .15s, box-shadow .15s, filter .15s, background .2s;
@@ -651,7 +651,7 @@
   .feedback-btn:active { transform: scale(.96); }
   /* 提交成功后的短暂反馈态（不再弹 alert 打断对话） */
   .feedback-btn.done {
-    background: linear-gradient(135deg, #7fc48f, #4a9761); cursor: default;
+    background: #fff; color: #3f7a4f; border-color: rgba(63, 122, 79, .5); cursor: default;
   }
   /* 气泡定位修复 */
   .bubble {
@@ -659,12 +659,11 @@
   }
   /* 移动端：气泡外侧留白有限，按钮贴回气泡右下角内缩一点，避免超出屏幕 */
   @media (max-width: 640px) {
-    .feedback-btn { right: -4px; bottom: -10px; width: 48px; height: 48px; font-size: 21px; }
+    .feedback-btn { right: -4px; bottom: -10px; width: 38px; height: 38px; font-size: 26px; }
   }
   /* 节庆主题下换成金环配色，与中秋皮肤呼应 */
   body.festival-midautumn .feedback-btn {
-    background: linear-gradient(135deg, #f3cf75, #d69e2e);
-    border-color: rgba(255, 248, 230, .95);
+    background: #fff; border-color: rgba(214, 158, 46, .6);
   }
 </style>
 </head>
@@ -687,6 +686,7 @@
       <button class="sug-btn" data-cmd="查角色">查角色</button>
       <button class="sug-btn" data-cmd="查攻略">查攻略</button>
       <button class="sug-btn" data-cmd="计算工具">计算工具</button>
+      <button class="sug-btn" data-cmd="活动">活动</button>
       <button class="sug-btn" data-cmd="遭遇战模拟">遭遇战模拟</button>
     </div>
   </div>
@@ -1838,7 +1838,7 @@ function renderSecretaryReply(data, msgEl) {
           + '</div>';
     // 模式一：数值索敌线
     html += '<div class="scout-pane" data-pane="line">';
-    html += '<div class="fill-row"><label class="fill-label">敌方索敌数值 <span class="fill-req">*</span></label>'
+    html += '<div class="fill-row"><label class="fill-label">我方索敌数值 <span class="fill-req">*</span></label>'
           + '<input class="fill-input" data-key="scout_value" placeholder="如 1000"></div>';
     html += '<button class="fill-submit">算索敌线</button></div>';
     // 模式二：队伍最高索敌（6 名角色全部必填，额外算式/系数可留空）
@@ -1887,7 +1887,7 @@ function renderSecretaryReply(data, msgEl) {
       pane.querySelector('.fill-submit').addEventListener('click', () => {
         if (mode === 'line') {
           const v = (pane.querySelector('.fill-input[data-key="scout_value"]').value || '').trim();
-          if (!v) { alert('请填写敌方索敌数值'); return; }
+          if (!v) { alert('请填写我方索敌数值'); return; }
           sendChat('索敌 ' + v);
           return;
         }
@@ -2426,7 +2426,7 @@ inputEl.addEventListener('focus', reportLocation, { once: true });
 
 // ==================== 自动注册 + 登录遮罩（用户口径 2026-09-25）====================
 // 设计：用户拿到「网址 + 邀请码」后**打开即用**，不需要自己注册、也不需要记住 uid。
-//   ① 老用户/老设备：后端按 IP 认人（或本机已存口令）→ 静默就位，直接进
+//   ① 老用户/老设备：后端按 device_id 认人（或本机已存口令）→ 静默就位，直接进
 //   ② 新用户：带 ?invite=<邀请码> 打开 → 自动注册 → 分配 uid + 生成个人口令 → 直接进
 //   ③ 没带邀请码的新用户 → 弹遮罩，让他输邀请码
 // 未注册成功前 authUnlocked=false，避免其他请求打出去吃 401。
@@ -2866,8 +2866,9 @@ function initFeedbackButtons() {
       const last = messagesEl ? messagesEl.lastElementChild : null;
       target = (last && last.classList && last.classList.contains('secretary')) ? last : null;
     }
-    // 防重复注入：同一条消息只挂一个按钮（重渲染不会堆叠）
-    if (target && !target.querySelector('.feedback-btn')) {
+    // 只有「向量库 QA 检索类回复」（后端 from_kb 标记）才挂反馈按钮（用户口径 2026-09-25）：
+    // 固定话术/计算面板等回复没有可反馈的问答价值，反馈会污染收集数据。
+    if (target && data.from_kb && !target.querySelector('.feedback-btn')) {
       const msgEl2 = target;
       const msgId = 'msg-' + Date.now() + '-' + Math.random().toString(36).substr(2, 6);
       msgEl2.setAttribute('data-msg-id', msgId);
@@ -2890,7 +2891,8 @@ function initFeedbackButtons() {
             user_input: userText,
             assistant_reply: replyText,
             timestamp: new Date().toISOString(),
-            feedback_type: 'unsatisfied'
+            feedback_type: 'unsatisfied',
+            from_kb: !!data.from_kb
           };
           // 提交后把按钮改成绿勾（不再弹 alert 打断对话；失败则还原并提示一次）
           fetch('/api/feedback', {
