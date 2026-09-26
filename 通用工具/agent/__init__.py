@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""agent 包：用 LangChain function calling 替代正则做「选工具 + 抽参数」。
+"""agent 包：用 qwen_agent 底层 chat 的强制 function calling 替代正则做「选工具 + 抽参数」。
 
 - 只负责"调用"（选工具、填参数）；不负责生成回复。
 - 工具确定性执行、输出逐字透传（含 <<AVATAR>> 等 marker）。

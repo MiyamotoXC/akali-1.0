@@ -29,10 +29,6 @@ jieba>=0.42.0
 # ===== 攻略 docx 网页预览（web_app 内 docx→HTML，零 LLM）=====
 python-docx>=1.1.0
 
-# ===== 路由层：LangChain function calling（AKALI_ROUTE_MODE=agent 时启用）=====
-langchain-core>=1.6,<2.0
-langchain-openai>=1.6,<2.0
-
 # ===== 开发者入口（开发者入口/app.py，数据管理工具；服务端可不装）=====
 streamlit>=1.28.0
 pandas>=1.5.0

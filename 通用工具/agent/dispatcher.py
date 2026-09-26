@@ -84,6 +84,43 @@ def _usable(text) -> bool:
     return bool(t) and not t.startswith(invalid)
 
 
+def _extract_tool_calls(stream):
+    """从 qwen_agent chat() 的流式输出里收集最后一个完整 function_call。
+
+    qwen_agent 在 fncall_mode=False（未传 functions）、tools 经 extra_generate_cfg 下发时，
+    以 OpenAI 原生 tool_calls 形式流式返回：每个 chunk 是消息列表，消息为 dict 或 Message 对象，
+    function_call.arguments 是逐步拼接的 JSON 字符串。tool_choice 已强制只调一个函数，
+    取最后一个完整调用即可（等价于 LangChain 的 tool_choice='select_route'）。
+    """
+    last = None  # (name, arguments_str)
+    try:
+        for chunk in stream:
+            for m in chunk:
+                fc = m.get('function_call') if isinstance(m, dict) else getattr(m, 'function_call', None)
+                if not fc:
+                    tcs = m.get('tool_calls') if isinstance(m, dict) else getattr(m, 'tool_calls', None)
+                    if tcs:
+                        for tc in tcs:
+                            f = tc.get('function') if isinstance(tc, dict) else getattr(tc, 'function', None)
+                            if f:
+                                fc = f
+                if not fc:
+                    continue
+                name = fc.get('name') if isinstance(fc, dict) else getattr(fc, 'name', None)
+                args = fc.get('arguments') if isinstance(fc, dict) else getattr(fc, 'arguments', None)
+                if name:
+                    last = (name, args if isinstance(args, str) else json.dumps(args, ensure_ascii=False))
+    except Exception:
+        return []
+    if not last:
+        return []
+    try:
+        parsed = json.loads(last[1]) if isinstance(last[1], str) else (last[1] or {})
+    except Exception:
+        parsed = {}
+    return [{'name': last[0], 'args': parsed}]
+
+
 def _select_route(msg, sel_tools, history=None):
     """用一个强制调用的元路由函数，让模型先判意图，再选唯一业务工具及参数。
 
@@ -147,16 +184,26 @@ def _select_route(msg, sel_tools, history=None):
             getattr(tool, 'name', ''), desc,
             json.dumps(params, ensure_ascii=False, separators=(',', ':'))))
     system = ROUTER_SYSTEM + '\n可用工具参数目录：\n' + '\n'.join(catalog)
-    bound = llm.bind_tools([route_tool], tool_choice='select_route')
-    messages = [('system', system)]
+    # 用 qwen_agent 底层 chat 做单次强制 function calling：
+    # - 不传 functions（避免进 fncall 模式被后处理剥掉 function_call），
+    #   改把 tools+tool_choice 直接塞进 extra_generate_cfg，走原生 tool_calls 流式解析；
+    # - tool_choice 强制只调 select_route，等价于 LangChain 的 bind_tools(..., tool_choice='select_route')；
+    #   stream 必须保持默认 True（qwen_agent 仅在流式路径解析 tool_calls，非流式会丢）。
+    messages = [{'role': 'system', 'content': system}]
     for item in list(history or [])[-6:]:
         role = str((item or {}).get('role') or '')
         content = str((item or {}).get('content') or '').strip()
         if role in ('user', 'assistant') and content:
-            messages.append((role, content[:1600]))
-    messages.append(('user', msg))
-    resp = bound.invoke(messages)
-    calls = list(getattr(resp, 'tool_calls', None) or [])
+            messages.append({'role': role, 'content': content[:1600]})
+    messages.append({'role': 'user', 'content': msg})
+    stream = llm.chat(
+        messages,
+        extra_generate_cfg={
+            'tools': [route_tool],
+            'tool_choice': {'type': 'function', 'function': {'name': 'select_route'}},
+        },
+    )
+    calls = _extract_tool_calls(stream)
     if not calls:
         # 兼容端点在并发限流时偶尔返回空 tool_calls。模型已经完成过本轮尝试，
         # 若当前句恰好是人工维护的标准攻略问法，则直接走对应检索，避免掉进旧规则。

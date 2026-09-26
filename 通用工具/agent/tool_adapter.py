@@ -14,7 +14,7 @@ _EMPTY_PARAMS = {'type': 'object', 'properties': {}}
 
 
 def to_openai_tool(t) -> dict:
-    """qwen BaseTool → OpenAI 原生 function 描述（LangChain bind_tools 直接接受此格式）。"""
+    """qwen BaseTool → OpenAI 原生 function 描述（OpenAI function 格式，qwen_agent / LangChain 均接受）。"""
     return {
         'type': 'function',
         'function': {
