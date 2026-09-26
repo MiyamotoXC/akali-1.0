@@ -2120,7 +2120,7 @@ var fabWrap = document.getElementById('fabWrap');
 var fabBall = document.getElementById('fabBall');
 var fabMenu = document.getElementById('fabMenu');
 var FAB_PAD = 20, FAB_DEF_TOP = 8;   // 默认位：标题栏（72px）内右侧居中
-function fabSize() { return window.matchMedia('(max-width: 640px)').matches ? 46 : 54; }   // 与媒体查询的 .fab-ball 尺寸同步
+function fabSize() { return window.matchMedia('(max-width: 640px)').matches ? 46 : 72; }   // 与媒体查询的 .fab-ball 尺寸同步
 function fabClamp(x, y) {
   var s = fabSize();
   return [Math.min(Math.max(x, FAB_PAD), window.innerWidth - s - FAB_PAD),
