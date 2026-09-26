@@ -70,7 +70,7 @@
   .avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
   /* 悬浮球：默认挂在标题栏（高 72px）内右侧居中，可拖动换位；点击展开工具菜单（位置由 JS 控制） */
   .fab-wrap { position: fixed; left: calc(100vw - 64px); top: 8px; z-index: 60; }
-  .fab-ball { width: 56px; height: 56px; border-radius: 50%; overflow: hidden; cursor: grab;
+  .fab-ball { width: 54px; height: 54px; border-radius: 50%; overflow: hidden; cursor: grab;
     border: 2px solid var(--line); box-shadow: 0 4px 12px rgba(30, 40, 50, 0.18);
     background: var(--panel); padding: 0; transition: box-shadow .15s;
     touch-action: none; user-select: none; -webkit-user-select: none; }
@@ -610,7 +610,7 @@
     header { padding: 8px 12px; }
     .avatar { width: 46px; height: 46px; }
     .msg .ava { width: 44px; height: 44px; }
-    .fab-ball { width: 40px; height: 40px; }
+    .fab-ball { width: 46px; height: 46px; }
     .title { font-size: 15px; }
     .subtitle { font-size: 12px; }
     .warm-tip { top: 10px; font-size: 13px; padding: 5px 12px;
@@ -620,7 +620,7 @@
     .bubble { font-size: 15px; padding: 10px 12px; overflow-wrap: anywhere; }
     .bubble table, .bubble pre.code { max-width: 100%; }
     .sug-btn { padding: 6px 12px; font-size: 14px; }
-    .fab-ball { width: 54px; height: 54px; }
+    .fab-ball { width: 46px; height: 46px; }
     .fab-menu { min-width: 124px; }
     .story-modal-box { width: 94%; max-height: 86vh; }
     .input-row { gap: 6px; }
@@ -2120,7 +2120,7 @@ var fabWrap = document.getElementById('fabWrap');
 var fabBall = document.getElementById('fabBall');
 var fabMenu = document.getElementById('fabMenu');
 var FAB_PAD = 20, FAB_DEF_TOP = 8;   // 默认位：标题栏（72px）内右侧居中
-function fabSize() { return window.matchMedia('(max-width: 640px)').matches ? 54 : 56; }   // 与手机端媒体查询的 .fab-ball 尺寸同步
+function fabSize() { return window.matchMedia('(max-width: 640px)').matches ? 46 : 54; }   // 与媒体查询的 .fab-ball 尺寸同步
 function fabClamp(x, y) {
   var s = fabSize();
   return [Math.min(Math.max(x, FAB_PAD), window.innerWidth - s - FAB_PAD),
