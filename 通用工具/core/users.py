@@ -263,14 +263,11 @@ def auth(token) -> dict:
 def register_invite() -> str:
     """**注册邀请码**（入场券，所有人共用），用户口径 2026-09-25。
 
-    AKALI_REGISTER_INVITE 优先；留空则回退 AKALI_INVITE_CODE（兼容既有部署）。
+    读取 AKALI_INVITE_CODE（与 owner 口令共用同一变量）。
     留空时 register() 会拒绝新注册（只允许已有账号登录）。
     """
-    for name in ('AKALI_REGISTER_INVITE', 'AKALI_INVITE_CODE'):
-        v = (os.environ.get(name) or '').strip()
-        if v:
-            return v
-    return ''
+    v = (os.environ.get('AKALI_INVITE_CODE') or '').strip()
+    return v
 
 
 def allow_register() -> bool:
@@ -392,20 +389,6 @@ def find_by_device(device_id: str):
     return None
 
 
-def find_by_ip(ip: str):
-    """按注册时记录的 IP 找账号；找不到返回 None（用于"老设备直接放行"）。"""
-    ip = str(ip or '').strip()
-    if not ip:
-        return None
-    with _LOCK:
-        d = _load_file_raw()
-        for uid, u in (d.get('users') or {}).items():
-            if isinstance(u, dict) and str(u.get('ip') or '').strip() == ip and u.get('token'):
-                return {'uid': str(uid), 'token': u['token'], 'name': u.get('name') or '',
-                        'created': u.get('created') or '', 'enabled': bool(u.get('enabled', True))}
-    return None
-
-
 def register(device_id: str = '', ip: str = '', name: str = '') -> dict:
     """**首次打开自动注册**：按**设备标识**认人（用户口径 2026-09-25）。
 
@@ -414,7 +397,7 @@ def register(device_id: str = '', ip: str = '', name: str = '') -> dict:
       · 新设备 → 分配下一个 uid（000001 起）+ 生成口令，写回 users.json
       · 关闭注册 → ok=False reason='register_off'
 
-    认人顺序：**device_id 优先**（稳定、一人一号），IP 仅作兜底与记录 ——
+    认人：**只认 device_id**（稳定、一人一号）；IP 仅作记录（排障用），不参与身份识别 ——
     IP 会因切网/家宽重播而变（→ 同人反复注册），也会因同 WiFi 多人共用而撞车
     （→ 多人被认成一人），故不当主标识。
     口令现阶段**不需要用户输入**（前端自动保存并随请求带上），将来可升级为用户

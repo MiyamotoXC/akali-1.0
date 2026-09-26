@@ -39,10 +39,36 @@ from typing import Optional
 __all__ = [
     "set_panel_overrides", "reset_panel_overrides",
     "get_panel_overrides", "get_panel_override", "current_token",
+    "set_quota_key", "reset_quota_key", "get_quota_key",
 ]
 
 _panel_overrides: contextvars.ContextVar = contextvars.ContextVar(
     'akali_panel_overrides', default=None)
+
+# 本次请求的配额键（uid 优先）：LLM 记账（core/llm_accounting）在 SDK 层拿不到
+# Request 对象，靠这里把「这次 API 调用该记到谁头上」传给深层调用点。
+_quota_key: contextvars.ContextVar = contextvars.ContextVar(
+    'akali_quota_key', default=None)
+
+
+def set_quota_key(key) -> contextvars.Token:
+    """设置本次请求的配额键（uid 优先），返回 token（调用方在 finally 里 reset）。"""
+    return _quota_key.set(str(key or '').strip() or None)
+
+
+def reset_quota_key(token: Optional[contextvars.Token]) -> None:
+    """还原上下文（token 为 None 时忽略）。"""
+    if token is None:
+        return
+    try:
+        _quota_key.reset(token)
+    except (ValueError, LookupError):
+        pass
+
+
+def get_quota_key():
+    """当前请求的配额键；无请求上下文（离线脚本）返回 None（不记账）。"""
+    return _quota_key.get()
 
 
 def set_panel_overrides(mapping) -> contextvars.Token:

@@ -632,14 +632,14 @@
 
   /* 反馈按钮：常显在阿卡莉气泡**外侧右下角**（用户口径 2026-09-25）。
      此前是 opacity:0，只在 PC 悬停气泡 / 移动端长按 2 秒才出现 —— 用户实际反馈
-     「按钮好像没了」。现改为常显，并加大尺寸、实心主题色 + 白描边 + 投影，
+     「按钮好像没了」。现改为常显，并加大尺寸、白底 + 主题色描边 + 投影，
      保证压在背景立绘上也足够醒目。 */
   .feedback-btn {
     position: absolute; right: -30px; bottom: -8px;
-    width: 56px; height: 56px; border-radius: 50%;
-    background: linear-gradient(135deg, #7fa4c4, #4a7297);
-    color: #fff; border: 2px solid rgba(255, 255, 255, .92);
-    font-size: 24px; line-height: 1; cursor: pointer; padding: 0;
+    width: 44px; height: 44px; border-radius: 50%;
+    background: #fff;
+    color: #4a7297; border: 2px solid rgba(74, 114, 151, .45);
+    font-size: 30px; line-height: 1; cursor: pointer; padding: 0;
     display: flex; align-items: center; justify-content: center;
     box-shadow: 0 4px 14px rgba(31, 58, 84, .42), 0 0 0 3px rgba(255, 255, 255, .32);
     transition: transform .15s, box-shadow .15s, filter .15s, background .2s;
@@ -652,7 +652,7 @@
   .feedback-btn:active { transform: scale(.96); }
   /* 提交成功后的短暂反馈态（不再弹 alert 打断对话） */
   .feedback-btn.done {
-    background: linear-gradient(135deg, #7fc48f, #4a9761); cursor: default;
+    background: #fff; color: #3f7a4f; border-color: rgba(63, 122, 79, .5); cursor: default;
   }
   /* 气泡定位修复 */
   .bubble {
@@ -660,12 +660,11 @@
   }
   /* 移动端：气泡外侧留白有限，按钮贴回气泡右下角内缩一点，避免超出屏幕 */
   @media (max-width: 640px) {
-    .feedback-btn { right: -4px; bottom: -10px; width: 48px; height: 48px; font-size: 21px; }
+    .feedback-btn { right: -4px; bottom: -10px; width: 38px; height: 38px; font-size: 26px; }
   }
   /* 节庆主题下换成金环配色，与中秋皮肤呼应 */
   body.festival-midautumn .feedback-btn {
-    background: linear-gradient(135deg, #f3cf75, #d69e2e);
-    border-color: rgba(255, 248, 230, .95);
+    background: #fff; border-color: rgba(214, 158, 46, .6);
   }
 </style>
 </head>
@@ -688,6 +687,7 @@
       <button class="sug-btn" data-cmd="查角色">查角色</button>
       <button class="sug-btn" data-cmd="查攻略">查攻略</button>
       <button class="sug-btn" data-cmd="计算工具">计算工具</button>
+      <button class="sug-btn" data-cmd="活动">活动</button>
       <button class="sug-btn" data-cmd="遭遇战模拟">遭遇战模拟</button>
     </div>
   </div>

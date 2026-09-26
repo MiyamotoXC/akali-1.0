@@ -964,12 +964,34 @@ async def admin_usage(request: Request, day: Optional[str] = None):
     rows = _quota.usage_snapshot(day)
     # 把 uid 对应的人名补上，便于一眼看出是谁在用
     name_of = {u['uid']: u.get('name') or '' for u in _users.list_accounts()}
+    # 流量口径 = 请求数：按 uid 统计今天 /api/chat 请求次数（含未走 LLM 的工具类请求）
+    req_cnt = {}
+    for e in _quota.recent_requests(day):
+        req_cnt[e['key']] = req_cnt.get(e['key'], 0) + 1
+    owner = _users.owner_uid()
+    owner_seen = False
     for r in rows:
         r['name'] = name_of.get(r['key'], '')
+        r['req_count'] = req_cnt.get(r['key'], 0)
+        r['is_owner'] = (r['key'] == owner)
+        if r['key'] == owner:
+            owner_seen = True
+    # 开发者本人**始终置顶**：在「按 token 降序」之外再强制排第一（用户口径 2026-09-25）；
+    # 即便当天零用量、不在记录里，也补一行置顶，保证开发者始终可见。
+    rows.sort(key=lambda x: (0 if x['key'] == owner else 1, -x['tok_total']))
+    if not owner_seen:
+        rows.insert(0, {'key': owner, 'name': name_of.get(owner, '开发者本人'),
+                        'req_count': 0, 'rounds': 0, 'tok_in': 0, 'tok_out': 0,
+                        'tok_total': 0, 'cost': 0.0, 'plan': 'unlimited',
+                        'limit': 0, 'is_owner': True})
     total = sum(r['tok_total'] for r in rows)
     cost = round(sum(r['cost'] for r in rows), 4)
+    # 请求级明细（最近 100 条，token=0 表示该请求未走 LLM）：供控制台「请求明细」表
+    recent = _quota.recent_requests(day)
+    for e in recent:
+        e['name'] = name_of.get(e['key'], '')
     return {'ok': True, 'day': day or _quota._today(), 'dim': runtime.quota_key(),
-            'rows': rows, 'total_tok': total, 'total_cost': cost,
+            'rows': rows, 'total_tok': total, 'total_cost': cost, 'recent': recent,
             'backend': type(_quota.STORE).__name__}
 
 
@@ -978,7 +1000,7 @@ async def register(request: Request):
     """用户端**首次打开自动注册**（用户口径 2026-09-25）。
 
     免鉴权：它本来就是用来"换取口令"的入口。流程 ——
-      ① 若该请求 IP 已有账号 → 直接返回原账号（老用户/老设备无感，不必重注册）
+      ① 若该请求 device_id 已有账号 → 直接返回原账号（老用户/老设备无感，不必重注册）
       ② 否则：注册开关须打开，且（配了邀请码时）邀请码须正确
       ③ 通过后分配下一个 uid（000001 起）+ 生成个人口令，写回 users.json
     邀请码来源：请求体 {"invite": "..."} 或 URL ?invite=...（便于发带码的链接）。
@@ -992,7 +1014,7 @@ async def register(request: Request):
     name = str(body.get('name') or '').strip()
     device_id = str(body.get('device_id') or '').strip()
     from core import quota as _quota
-    ip = _quota._client_ip(request)        # 仅记录/兜底，不用来认人
+    ip = _quota._client_ip(request)        # 仅记录，不参与身份识别
 
     # 新设备才需要过闸：老设备（device_id 已登记）直接回位，不看邀请码。
     # 注意这里**只认 device_id，不认 IP**（用户口径 2026-09-25 公网实测发现）：
@@ -1049,6 +1071,12 @@ async def my_profile(request: Request):
 
 # 注入三无秘书人设
 agent = AgentApp(prompt_template=WEB_PERSONA_PROMPT)
+
+# LLM token 统一记账（用户口径 2026-09-26：所有消耗 LLM API 的 token 都要计算）：
+# 在 openai SDK 层挂钩一次，覆盖闲聊主链（含工具循环每轮）、工作路由与内部增强
+# 的全部调用，读响应真实 usage，按请求配额键记入 core.quota。
+from core import llm_accounting as _llm_accounting
+_llm_accounting.install()
 
 
 class ChatRequest(BaseModel):
@@ -2316,7 +2344,55 @@ def chat(req: ChatRequest, request: Request):
     """
     if not getattr(req, 'uid', None):
         req.uid = getattr(request.state, 'uid', None) or None
-    return _chat_impl(req)
+    # LLM 记账上下文（用户口径 2026-09-26）：本次请求内的全部 LLM 调用
+    # （闲聊主链工具循环/意图分类/攻略生成/检索增强/表情与越界判定…）
+    # 由 openai SDK 层挂钩统一记账（core/llm_accounting），这里只告知记账对象。
+    from core import req_ctx as _req_ctx
+    try:
+        from core.quota import resolve_identity as _q_ident
+        _qkey = _q_ident(request)
+    except Exception:
+        _qkey = str(getattr(request.state, 'uid', '') or '')
+    _qkey_tok = _req_ctx.set_quota_key(_qkey)
+    try:
+        resp = _chat_impl(req)
+    finally:
+        _req_ctx.reset_quota_key(_qkey_tok)
+    # 请求级用量明细（开发者侧「流量/请求明细」数据源）：走 LLM 的请求由 _chat_impl
+    # 把本轮 token 以 _tok 附在响应里；未走 LLM（工具类/超限提示）按 0 记。
+    try:
+        from core.quota import log_request as _q_log
+        _q_log(req.uid or '', int(resp.pop('_tok', 0) or 0))
+    except Exception:
+        pass
+    return resp
+
+
+# ===== 悬浮球“活动”按钮：从活动日历取打捞活动周期 + 对应攻略合集 =====
+# 数据来源为 知识库/活动/活动日历.xlsx（归一化后含 开始/结束/兑换 与 攻略 关键词），
+# 改完活动日历即生效（mtime 感知），无需重启。
+def _handle_salvage_event() -> dict:
+    from tools.knowledge import load_events_normalized, _format_activity, _event_status
+    today = datetime.date.today()
+    now = datetime.datetime.now()
+    events = load_events_normalized()
+    # 打捞识别口径（用户口径 2026-09-25）：活动日历**备注里写了「打捞」**的就是打捞活动；
+    # 名称/类型里带「打捞」的也照旧认（备注列为日历改动的正式标注位，其余为兜底措辞）。
+    salvage = [e for e in events
+               if '打捞' in ((e.get('name') or '') + (e.get('type') or '') + (e.get('notes') or ''))]
+    if not salvage:
+        return {'reply': '指挥官，活动日历里暂时没有进行中的打捞活动哟～有新打捞我第一时间告诉你。',
+                'tool_outputs': [], 'suggestions': [], 'fill_form': [],
+                'encounter_form': [], 'guide_files': [], 'guide_lib': '打捞活动', 'ok': True, 'bye': False}
+    _order = {'进行中': 0, '兑换中': 1, '未开始': 2, '已结束': 3}
+    salvage.sort(key=lambda e: _order.get(_event_status(e, today, now), 9))
+    e = salvage[0]
+    lines = _format_activity(e, _event_status(e, today, now), today, now)
+    reply = chr(10).join(lines)
+    guide = (e.get('guide') or '').strip()
+    return {'reply': reply, 'tool_outputs': [], 'suggestions': [], 'fill_form': [],
+            'encounter_form': [], 'guide_files': [], 'guide_lib': guide or '打捞活动',
+            'ok': True, 'bye': False}
 
 
 def _chat_impl(req: ChatRequest):
@@ -2400,6 +2476,12 @@ def _chat_impl(req: ChatRequest):
         # 只有 calc_state / favor_pending 等已明确启动的结构化工具状态会续接下一步。
         # AKALI_ROUTE_MODE=agent(默认,function calling) | legacy(故障回退)
         # 分发层在 agent 模式懒加载 LangChain，异常自动回落 legacy，见 core/route_dispatch.py
+        # 顶层路由 1c0-2：悬浮球「活动」按钮（精确匹配单字『活动』）→ 打捞活动周期 + 空攻略合集。
+        # 自由文本里的「活动」（如「活动什么时候结束」「查活动攻略」）仍交 route_work 处理；
+        # 仅菜单按钮的精确『活动』走这里（用户口径 2026-09-25）。
+        if (req.message or '').strip() == '活动':
+            return _handle_salvage_event()
+
         from core.route_dispatch import route_work_dispatch as route_work
         work_tools = build_tools(agent.app, sover, location_ref=agent)
         work_result = route_work(work_tools, sover, req.message, agent=agent, history=hist)
@@ -2455,7 +2537,7 @@ def _chat_impl(req: ChatRequest):
         # 仅拦截「走 LLM 的闲聊」（工作类已在上面 route_work 分支正常返回、不受影响）。
         # 超限额 → 停用 LLM，返回固定提示；基础工具（查询/计算/攻略）仍可用，次日零点恢复。
         from core.quota import (get_client_key as _q_key, get_user_plan as _q_plan,
-                                check_llm_quota as _q_check, record_llm_usage as _q_rec,
+                                check_llm_quota as _q_check,
                                 quota_prompt as _q_prompt)
         _uid = _q_key(req)
         _plan = _q_plan(_uid)
@@ -2720,9 +2802,11 @@ def _chat_impl(req: ChatRequest):
             print('[待机] 已进入待机状态，会话临时记忆已清理', flush=True)
         if _flirt_finishing and not _no_hist:
             s['flirt_standby'] = True
-        # Token 监控日志（服务控制台）：本轮输入/输出估算 + 会话累计
+        # Token 监控日志（服务控制台）：本轮输入/输出估算 + 会话累计。
+        # 真实记账已由 openai SDK 层挂钩完成（core/llm_accounting，读 API 响应 usage，
+        # 覆盖闲聊主链工具循环每一轮与全部工作路由调用）；此处估算仅打印观察，
+        # 不再重复记账（用户口径 2026-09-26）。
         _tok_out = _est_tokens(clean_reply)
-        _q_rec(_uid, _plan, _tok_in, _tok_out)  # 多用户算力配额记账（云端模式生效；本地仅内存统计）
         _sk = req.session_id or 'default'
         _session_token_total[_sk] = _session_token_total.get(_sk, 0) + _tok_in + _tok_out
         print('[token] 会话[%s] 输入≈%s 输出≈%s 本轮≈%s | 会话累计≈%s'
@@ -2731,6 +2815,7 @@ def _chat_impl(req: ChatRequest):
                 "fill_form": fill_form, "encounter_form": encounter_form,
                 "guide_files": guide_files, "guide_lib": guide_lib, "ok": True,
                 "expression": expression_url,
+                "_tok": _tok_in + _tok_out,   # 本轮 token 给 chat 出口打点用，响应前会被 pop 掉
                 "sticker": None}
     except Exception as e:
         # 报错轮不消耗闲聊轮次计数（越界/ojbk 后继续对话不受影响）
@@ -2774,34 +2859,47 @@ def _chat_impl(req: ChatRequest):
 
 @app.post("/api/feedback")
 async def feedback(req: Request):
-    """接收用户反馈，存入本地文件并返回确认"""
+    """接收用户反馈，连问答上下文一起存云端（用户口径 2026-09-25）。
+
+    反馈按钮只在「向量库 QA 检索类回复」（from_kb 标记）上出现，因此每条反馈
+    都天然携带可复盘的问答上下文。云端模式写 Redis（列表 akali:feedback，
+    保留最近 2000 条，跨重启不丢）；本地模式落盘 调试/反馈收集/反馈收集.txt。
+    """
     try:
         data = await req.json()
         required_fields = ['session_id', 'message_id', 'user_input', 'assistant_reply', 'timestamp', 'feedback_type']
         for f in required_fields:
             if f not in data:
                 return {"ok": False, "error": f"Missing field: {f}"}
-        
+
         # 脱敏处理：移除敏感词、模糊角色名
         from core.sensitive_filter import filter_sensitive_words
-        safe_user = filter_sensitive_words(data['user_input'])
-        safe_reply = filter_sensitive_words(data['assistant_reply'])
-        
-        # 写入本地反馈文件
-        feedback_dir = os.path.join(PROJECT_ROOT, "调试", "反馈收集")
-        os.makedirs(feedback_dir, exist_ok=True)
-        feedback_file = os.path.join(feedback_dir, "反馈收集.txt")
-        
-        with open(feedback_file, "a", encoding="utf-8") as f:
-            f.write(f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] "
-                    f"Session: {data['session_id']} | "
-                    f"Message: {data['message_id']} | "
-                    f"Type: {data['feedback_type']} | "
-                    f"User: {safe_user[:100]}... | "
-                    f"Reply: {safe_reply[:100]}...\n")
-        
-        # 记录日志
-        print(f"[FEEDBACK] {data['session_id']} -> {data['feedback_type']}", flush=True)
+        record = {
+            'time': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            'session_id': str(data.get('session_id') or ''),
+            'message_id': str(data.get('message_id') or ''),
+            'feedback_type': str(data.get('feedback_type') or ''),
+            'from_kb': bool(data.get('from_kb')),
+            'user_input': filter_sensitive_words(str(data.get('user_input') or ''))[:2000],
+            'assistant_reply': filter_sensitive_words(str(data.get('assistant_reply') or ''))[:2000],
+            'client_time': str(data.get('timestamp') or ''),
+            'uid': str(getattr(req.state, 'uid', '') or ''),
+        }
+        line = json.dumps(record, ensure_ascii=False)
+
+        if runtime.is_cloud():
+            import redis as _redis
+            r = _redis.from_url(os.getenv('FX_REDIS_URL', 'redis://localhost:6379/0'), decode_responses=True)
+            r.rpush('akali:feedback', line)
+            r.ltrim('akali:feedback', -2000, -1)
+        else:
+            feedback_dir = os.path.join(PROJECT_ROOT, "调试", "反馈收集")
+            os.makedirs(feedback_dir, exist_ok=True)
+            with open(os.path.join(feedback_dir, "反馈收集.txt"), "a", encoding="utf-8") as f:
+                f.write(line + "\n")
+
+        print("[FEEDBACK] %s -> %s (uid=%s)" % (record['session_id'], record['feedback_type'], record['uid']),
+              flush=True)
         return {"ok": True}
     except Exception as e:
         print(f"[FEEDBACK ERROR] {_mask(e, _API_TOKEN)}", flush=True)

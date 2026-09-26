@@ -42,7 +42,7 @@ class QueryShipInfo(BaseTool):
     """查询已有角色信息。支持昵称/简称/谐音匹配（如"大哥"→威尔士亲王、"凌波"→绫波）。
     可选 field 参数查询具体字段（如航空、天赋、必杀技、舰种等），不填则返回完整面板。"""
     name = 'query_ship_info'
-    description = '查询已有角色信息。支持昵称/简称/谐音匹配。可选 field 参数查询具体字段（如 天赋/航空/炮击/必杀技/通常技/舰种/装甲 等），不填返回完整面板。'
+    description = '查询已有角色信息。支持昵称/简称/谐音匹配。可选 field 参数查询具体字段（如 天赋/航空/炮击/必杀技/通常技/舰种/装甲/舰级 等），不填返回完整面板。'
     parameters = {
         'type': 'object',
         'properties': {
@@ -52,7 +52,7 @@ class QueryShipInfo(BaseTool):
             },
             'field': {
                 'type': 'string',
-                'description': '可选，查询具体字段。支持：天赋/天赋树；航空/炮击/雷击/轰炸/鱼雷/索敌/命中/幸运/装填/装甲/对空/机动/血量/回避率/防暴击率/航速（面板数值）；舰种/装甲类型/弹种/稀有/所属（元信息）；旗舰技/支援技/通常技/必杀技/技能（技能描述）；buff。',
+                'description': '可选，查询具体字段。支持：天赋/天赋树；航空/炮击/雷击/轰炸/鱼雷/索敌/命中/幸运/装填/装甲/对空/机动/血量/回避率/防暴击率/航速（面板数值）；舰种/装甲类型/弹种/稀有/所属/舰级（元信息）；旗舰技/支援技/通常技/必杀技/技能（技能描述）；buff。',
             },
         },
         'required': ['ship_name'],
@@ -61,7 +61,7 @@ class QueryShipInfo(BaseTool):
     def call(self, params, **kwargs):
         params = self._verify_json_format_args(params)
         app = self.cfg['app']
-        ship_name = params['ship_name']
+        ship_name = (params['ship_name'] or '').strip().strip('，。、；：,.!? ')
 
         # 引导性输入（无具体名字）→ 反问查阅哪位舰灵
         if ship_name.strip() in ('角色', '舰灵', '舰娘', '舰船', '船', '舰', '哪位', '哪些'):
@@ -272,6 +272,7 @@ _FIELD_KEYWORDS = {
     '弹种': ('panel_meta', '弹种'),
     '稀有': ('panel_meta', '稀有'),
     '所属': ('panel_meta', '所属'),
+    '舰级': ('ship_class', ''),
     # 普攻
     '普攻': ('normal', ''),
     '普通攻击': ('normal', ''),
@@ -290,6 +291,23 @@ _FIELD_KEYWORDS = {
     'buff': ('buff', ''),
     '加成': ('buff', ''),
 }
+
+
+def _class_members_in_game(cls, app):
+    """游戏库内属于该舰级的已实装角色（按舰名排序）。
+    仅遍历 app.storage，史实未实装舰船不列入（用户 2026-09-25 口径）。"""
+    try:
+        from core import skill_buff_extractor as _sbe
+    except Exception:
+        return []
+    names = []
+    for nm in (getattr(app, 'storage', {}) or {}):
+        try:
+            if _sbe.match_ship_class(nm, cls):
+                names.append(nm)
+        except Exception:
+            continue
+    return sorted(names)
 
 
 def _format_field_result(name: str, raw: dict, field: str, app) -> str:
@@ -344,6 +362,27 @@ def _format_field_result(name: str, raw: dict, field: str, app) -> str:
             lines.append(f"  {field_key}: 未设置")
         else:
             lines.append(f"  {field_key}: {val}")
+
+    elif category == 'ship_class':
+        # 舰级权威来源：原型舰历史.json（经 skill_buff_extractor 归一）
+        try:
+            from core import skill_buff_extractor as _sbe
+            ref = _sbe.load_reference()
+            cls = (ref.get('ship_class_by_name') or {}).get(name)
+        except Exception:
+            cls = None
+        if cls:
+            lines.append(f"  舰级: {cls}（史实原型）")
+            # 用户 2026-09-25 口径：涉及史实舰级时，只列游戏库内已实装角色
+            members = _class_members_in_game(cls, app)
+            if members and len(members) <= 40:
+                lines.append("  该级已实装：%s" % '、'.join(members))
+            elif members:
+                lines.append("  该级已实装共 %d 名（可问「%s有哪些」查看完整列表）" % (len(members), cls))
+            else:
+                lines.append("  该级已实装：无（该级舰灵暂未实装）")
+        else:
+            lines.append("  舰级: 未设置")
 
     elif category == 'normal':
         # 普攻信息：用户要求不输出任何普攻相关内容

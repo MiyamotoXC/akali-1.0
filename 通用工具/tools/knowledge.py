@@ -935,7 +935,15 @@ _GUIDE_QA_SCORE_MIN = 0.35
 # 片段输出阈值：低于此分的命中说明相关性不足，贴出来只会得到"回复不太清楚"的含糊作答，
 # 不如不输出并提示指挥官自行查阅（自测：0.56~0.83 命中方向正确，0.49~0.54 对错参半，0.49 以下基本错文档）
 _GUIDE_QA_SCORE_SHOW = 0.50
+# 轻量自检触发区间：首跳命中但处于 [SHOW, SHOW+MARGIN) 边缘时，做一次覆盖度校验，
+# 不足则补充检索（增强③）。低于 SHOW 走多查询改写（增强①）。
+_SELFCHECK_MARGIN = 0.08
 _QA_CACHE = {"mtime": None, "data": None}
+
+
+def _agent_enhance_on() -> bool:
+    """三项增强（多查询改写/有界工具循环/轻量自检）总开关，默认开；AKALI_AGENT_ENHANCE=off 全关。"""
+    return (os.environ.get('AKALI_AGENT_ENHANCE') or 'on').strip().lower() != 'off'
 
 
 def _load_guide_qa():
@@ -960,19 +968,13 @@ def _load_guide_qa():
 
 
 # ======================================================================
-# 检索增强（2026-09-07）：① query 归一（昵称/机制简称 → 书面术语）
-# ② 关键词(BM25-lite, 字符2gram) 与向量分 RRF 融合重排
+# 检索增强（2026-09-07 起；2026-09-25 改词级）：① query 归一（实体标准化 +
+# 机制/玩法口语 → 书面术语）② jieba 词级 BM25 与向量分 RRF 全量融合。
 # 背景（实测诊断）：纯向量 top1/top2 差经常 <0.05、专名口语（北卡/T优）易错召回，
-# 排序不可靠 → 引入关键词路做硬召回兜底。判定阈值仍沿用 top1 的向量余弦分。
+# 排序不可靠 → 引入关键词路做硬召回。判定阈值仍沿用 top1 的向量余弦分。
 # ======================================================================
 _QA_KW_CACHE = {"mtime": None, "index": None}
 _NICK_MAP = None
-# 向量 top1 与次高分之差 ≥ 此值视为排序已明确，不再重排（诊断：差 <0.05 时对错参半）
-_RERANK_GAP = 0.03
-# 关键词局部重排总开关：历史实测 42 条真实口语集。
-# 字符 2-gram 关键词路在短 query 上噪声大 → hit@1 81.0% → 76.2%（负收益），默认关闭；
-# 保留实现供后续换分词/rerank 模型后对比复用（改 True 即启用）
-_HYBRID_RERANK = False
 # 选择性语义 rerank：只在向量候选分差小或问题含多个子问题时调用。
 # 不替换向量召回，也不引入候选集外的片段。
 _SEMANTIC_RERANK = os.environ.get('AKALI_RAG_RERANK', '1').strip().lower() not in ('0', 'false', 'off', 'no')
@@ -981,6 +983,9 @@ _RERANK_CACHE = {}
 # 口语变体向量折扣（2026-09-07 扫描实测）：变体分 × 0.92 参与 chunk 归并——
 # 变体只做"低分兜底/补召回"，不抢 top1（penalty=1.0 时 hit@1 81.0%→76.2%，负收益）
 _VARIANT_DISCOUNT = 0.92
+# BM25 召回片段放行门槛：向量分低于「输出线 - 此值」的片段不放行。
+# 词级 BM25 修好前实测出现过 0.32 的无关片段被 BM25 顶到输出首位，故加向量下限兜住。
+_BM25_PASS_MARGIN = 0.12
 
 
 def _load_nick_map():
@@ -1021,29 +1026,37 @@ _TERM_ALIAS = {
 
 
 def _expand_query(query: str) -> str:
-    """query 归一/扩展：①实体标准化（舰名/BOSS 名 昵称·谐音·错字 → 正规名）
-    ②昵称→正规名、口语简称→书面术语（原话保留，尾部追加术语）。"""
+    """query 归一：① 昵称表硬性对齐 ② 实体标准化 ③ 机制/玩法口语 → 书面术语。
+
+    2026-09-25 口径（用户要求昵称表**硬性**）：扫**原始 query**，凡命中昵称表
+    （≥2 字别名）即强制把正规名追加到 query 尾部，确保 BM25/向量两路都能对齐；
+    在实体标准化**之前**扫，是因为 entity_norm 的原地替换会消耗掉别名，标准化后再扫
+    就扫不到（硬性保证不能依赖 entity_norm 的拼音模糊是否命中）。
+    """
     if not query:
         return query
-    q = query
-    # ① 实体标准化（检索前预处理）：把输入里的实体名与知识库用词对齐。
+    adds = []
+    # ① 昵称表硬性对齐：仅收 ≥2 字别名（单字昵称如"雷/电"在长句里极易误命中、稀释语义）
+    try:
+        nicks = _load_nick_map() or {}
+        hits = sorted([a for a in nicks if len(a) >= 2 and a in query], key=len, reverse=True)
+        for a in hits[:2]:
+            if nicks[a] not in adds:
+                adds.append(nicks[a])
+    except Exception:
+        pass
+    # ② 实体标准化（检索前预处理）：把输入里的实体名与知识库用词对齐。
     #    BOSS 名一字之差若不纠正，向量与关键词两路都对不上——这正是
     #    「遭遇战阿斯莫德配装配队有吗」检索落空的根因之一（库内记为 阿丝莫德）。
     #    查询期标准化，无需重建/重新嵌入向量库。
+    q = query
     try:
         from core.entity_norm import standardize
         q = standardize(q)
     except Exception:
         pass
     low = q.lower()
-    adds = []
-    nicks = _load_nick_map()
-    # ② 舰名昵称：仅收 ≥2 字别名（单字昵称如"雷/电"在长句里极易误命中、稀释语义）
-    hits = sorted([a for a in nicks if len(a) >= 2 and a in q], key=len, reverse=True)
-    for a in hits[:2]:
-        if nicks[a] not in adds:
-            adds.append(nicks[a])
-    # ③ 机制/玩法口语：最多补 2 个术语，避免长 query 被无关术语稀释
+    # ③ 机制/玩法口语：昵称已占满 2 个则不再追加；最多补 2 个术语，避免长 query 被无关术语稀释
     if len(adds) < 2:
         for k, v in sorted(_TERM_ALIAS.items(), key=lambda x: -len(x[0])):
             if k in low:
@@ -1056,8 +1069,73 @@ def _expand_query(query: str) -> str:
     return q if not adds else (q + " " + " ".join(adds[:2]))
 
 
+# jieba 词级分词（BM25 词项来源）：用户词典由内置词典表生成——
+# 舰名昵称表 ship_nicknames.json（正规名 + 各别名）与术语表 _TERM_ALIAS（口语 key + 书面词）。
+# 词典用于「分词」；昵称表另在 _expand_query 做匹配期硬性对齐（追加正规名），两者并存。
+_JIEBA = None
+
+
+def _user_dict_words():
+    """jieba 用户词典词集：舰名昵称 + 术语表（仅用于分词，不参与匹配）。
+
+    只收 ≥2 字词：单字（雷/电/架/门 等）入词典会被 jieba 与相邻字合并成怪词
+    （实测「2架飞机」→「架飞机」），且原昵称表本就只取 ≥2 字别名。"""
+    words = set()
+
+    def _add(w):
+        w = (w or '').strip()
+        if len(w) >= 2:
+            words.add(w)
+
+    try:
+        for a, canon in (_load_nick_map() or {}).items():
+            _add(a)
+            _add(canon)
+    except Exception:
+        pass
+    # BOSS 名（拉古兹.json）：与舰名同理必须整体成词，否则 BM25 对不上专名
+    # （实测未加时「阿丝莫德」被切成「阿丝」「莫德配」）。
+    try:
+        from core.entity_norm import boss_names
+        for b in boss_names():
+            _add(b)
+    except Exception:
+        pass
+    for k, v in _TERM_ALIAS.items():
+        _add(k)
+        for t in (v or '').split():
+            _add(t)
+    return words
+
+
+def _jieba_mod():
+    """懒加载 jieba 并注入用户词典（仅分词用）。"""
+    global _JIEBA
+    if _JIEBA is None:
+        import jieba as _jb
+        _jb.initialize()
+        for w in _user_dict_words():
+            _jb.add_word(w)
+        _JIEBA = _jb
+    return _JIEBA
+
+
+def _terms(text: str):
+    """BM25 词项：jieba 词级切分（小写；纯标点/空白丢弃，其余含单字保留，噪声交由 idf 压制）。"""
+    t = (text or "").lower()
+    if not t.strip():
+        return []
+    out = []
+    for w in _jieba_mod().lcut(t):
+        w = w.strip()
+        if w and re.search(r'\w', w):
+            out.append(w)
+    return out
+
+
 def _bigrams(text: str):
-    """字符 2-gram 词项（无分词依赖，中文可用；英文/数字按词保留）。"""
+    """字符 2-gram 词项（无分词依赖，中文可用；英文/数字按词保留）。
+    仍供精准问句命中的模糊覆盖率计算使用；BM25 词项已改用 _terms。"""
     t = re.sub(r"\s+", "", (text or "").lower())
     if not t:
         return []
@@ -1067,7 +1145,7 @@ def _bigrams(text: str):
 
 
 def _build_kw_index(data):
-    """关键词索引（BM25-lite）：doc 文本 = question/keywords 加权 + content。"""
+    """关键词索引（BM25，jieba 词级）：doc 文本 = question/keywords 加权 + content。"""
     import numpy as np
     ids = list(data["ids"])
     docs, df = [], {}
@@ -1076,12 +1154,15 @@ def _build_kw_index(data):
         head = " ".join([m.get("question", "")] + list(m.get("keywords") or []))
         # 头部（问题+关键词）重复 2 次以提升权重
         txt = (head + " ") * 2 + (m.get("content") or "")
-        terms = _bigrams(txt)
+        terms = _terms(txt)
         docs.append(terms)
         for t in set(terms):
             df[t] = df.get(t, 0) + 1
     n = max(len(docs), 1)
-    idf = {t: (1.0 + float((n - c + 0.5) / (c + 0.5))) for t, c in df.items()}
+    # BM25 标准 idf（log 形式、非负）：共现于全部文档的词（「吗/有」等）≈0，避免
+    # 长文档靠常见字刷分——旧的下限式（1.0+…）给共现词保底 1.0，实测会让无关长文
+    # 章靠「吗/有」把 BM25 顶到最高分。
+    idf = {t: float(np.log(1.0 + (n - c + 0.5) / (c + 0.5))) for t, c in df.items()}
     return {"ids": ids, "docs": docs, "idf": idf,
             "lens": [len(d) for d in docs], "avg": (sum(len(d) for d in docs) / n)}
 
@@ -1103,7 +1184,7 @@ def _kw_scores(data, query):
     """BM25 关键词分（与向量同长度数组，未归一化）。"""
     import numpy as np
     idx = _kw_index(data)
-    qterms = _bigrams(_expand_query(query))
+    qterms = _terms(_expand_query(query))
     if not qterms:
         return np.zeros(len(idx["ids"]), dtype=np.float32)
     k1, b = 1.5, 0.75
@@ -1126,57 +1207,69 @@ def _kw_scores(data, query):
     return out
 
 
-def _fuse_order(data, query, vec_scores, k, rrf_k=60, vec_top=15, lam=0.5):
-    """候选内重排：先取向量 top-N，再用关键词(BM25)分在该集合内局部重排。
+def _hybrid_order(data, query, vec_scores, k, vec_top=15, bm25_top=15, rrf_k=60,
+                  w_vec=2.0, w_bm25=1.0):
+    """向量 + BM25 全量 RRF 融合（2026-09-25：由「候选内局部重排」改为真·混合）。
 
-    只调序、不引入向量集外文档（实测：全局关键词召回会把短 query 的 2-gram
-    噪声文档带进 top，真实口语集反而下降 86.7%→80%）——专名召回靠 query 归一。
-    lam：关键词路权重（0=纯向量，0.5 默认）。
+    两路各自召回 topN，再按名次 Σ w/(rrf_k+rank) 融合——只比名次、免分数校准。
+    **向量权重大于 BM25（2:1）**：实测等权时 BM25 的噪声能把向量 top1 挤下去
+    （「遭遇战阿斯莫德配队」精确页 0.74 被无关页顶掉），故以向量为准、BM25 做补充。
+    变体行（同一 chunk 多行）仍按 _VARIANT_DISCOUNT 归并，取该 chunk 的代表行。
+
+    返回 (rows, bm25_ids)：
+      rows     ：融合排序后的代表行号（每 chunk 一行，可直接索引 scores/meta）
+      bm25_ids ：进入 BM25 topN 且关键词分 > 0 的 chunk id 集合——供输出端放行
+                 「词汇强命中」片段（其向量分可能略低于输出线，但不该被整段丢弃）。
     """
     import numpy as np
-    vec_scores = np.asarray(vec_scores)
-    # 变体向量（同一 chunk 多行）→ 按 chunk 归并取最高分，避免同一片段重复占位
     ids_all = data.get("ids")
-    if ids_all is not None and len(ids_all) == len(vec_scores):
-        best = {}
-        _seen = set()
-        for i, sv in enumerate(vec_scores):
-            cid = str(ids_all[i])
-            # 首次出现=原行（question+content）；后续=口语变体行（打折扣，只兜底）
-            w = float(sv) if cid not in _seen else float(sv) * _VARIANT_DISCOUNT
-            _seen.add(cid)
-            if cid not in best or w > best[cid][0]:
-                best[cid] = (w, int(i))
-        rows = [v[1] for v in best.values()]
-        pooled = np.asarray([v[0] for v in best.values()], dtype=vec_scores.dtype)
-    else:
-        rows = list(range(len(vec_scores)))
-        pooled = vec_scores
-    n = len(pooled)
-    k = max(1, min(int(k), n))
-    cand = [rows[j] for j in np.argsort(-pooled)[:max(vec_top, k)]]
-    # 仅当向量区分度不足（top1 与次高差 < 阈值）才启用关键词重排：
-    # 向量已明确时不动它，避免"支援技/装备"这类被关键词噪声打乱（实测变差项）
-    if not _HYBRID_RERANK:
-        return list(cand[:k])
-    if len(cand) > 1 and float(vec_scores[cand[0]] - vec_scores[cand[1]]) >= _RERANK_GAP:
-        return list(cand[:k])
+    vec = np.asarray(vec_scores, dtype=np.float32)
     try:
-        kw = _kw_scores(data, query)[cand]
+        kw = np.asarray(_kw_scores(data, query), dtype=np.float32)
+        if len(kw) != len(vec):
+            kw = np.zeros(len(vec), dtype=np.float32)
     except Exception:
-        return list(cand[:k])
-    kw_max = float(kw.max()) if len(kw) else 0.0
-    if kw_max <= 0:
-        return list(cand[:k])
-    fused = []
-    for rank, i in enumerate(cand):
-        s = 1.0 / (rrf_k + rank + 1) + lam * (float(kw[rank]) / kw_max) / (rrf_k + 1)
-        fused.append((int(i), s))
-    fused.sort(key=lambda x: -x[1])
-    return [i for i, _ in fused[:k]]
+        kw = np.zeros(len(vec), dtype=np.float32)
+    n_all = len(vec)
+    if not n_all:
+        return [], set()
+    if ids_all is None or len(ids_all) != n_all:
+        k = max(1, min(int(k), n_all))
+        return [int(i) for i in np.argsort(-vec)[:k]], set()
+    # 行 → chunk 归并：代表行取「折价后向量最高」的行；两路分各取该 chunk 的最大值
+    best = {}
+    seen = set()
+    for i in range(n_all):
+        cid = str(ids_all[i])
+        v = float(vec[i])
+        w = v if cid not in seen else v * _VARIANT_DISCOUNT
+        seen.add(cid)
+        rec = best.get(cid)
+        if rec is None or w > rec[0]:
+            best[cid] = [w, int(i), float(kw[i])]
+        elif float(kw[i]) > rec[2]:
+            rec[2] = float(kw[i])
+    k = max(1, min(int(k), len(best)))
+    vec_ranked = sorted(best.items(), key=lambda kv: -kv[1][0])[:max(vec_top, k)]
+    bm25_ranked = sorted(best.items(), key=lambda kv: -kv[1][2])[:max(bm25_top, k)]
+    score, bm25_ids = {}, set()
+    for rank, (cid, _) in enumerate(vec_ranked):
+        score[cid] = score.get(cid, 0.0) + w_vec / (rrf_k + rank + 1)
+    for rank, (cid, _) in enumerate(bm25_ranked):
+        score[cid] = score.get(cid, 0.0) + w_bm25 / (rrf_k + rank + 1)
+        # 只放行「词汇强命中且向量分不太低」的片段，避免 BM25 噪声片段入输出
+        if best[cid][2] > 0 and best[cid][0] >= _GUIDE_QA_SCORE_SHOW - _BM25_PASS_MARGIN:
+            bm25_ids.add(cid)
+    ordered = sorted(score.items(), key=lambda kv: (-kv[1], kv[0]))
+    return [best[cid][1] for cid, _ in ordered[:k]], bm25_ids
 
 
 def _needs_semantic_rerank(query: str, order, scores) -> bool:
+    """是否需要 LLM 语义重排：向量分差小 / 多子问 / 含量词时触发。
+
+    保留（未随词级 BM25 移除）：BM25 是词袋模型，无法区分「2架」与「2门」这类
+    数字+量词的组合约束，多子问的覆盖也需语义裁决，故这些触发条件继续保留。
+    """
     if not _SEMANTIC_RERANK or len(order) < 2:
         return False
     try:
@@ -1243,7 +1336,11 @@ def _semantic_rerank(query: str, order, scores, data):
 
 
 def _unit_consistent_order(query: str, order, data):
-    """显式数量词优先于语义相似度，防止“2架飞机”召回“2门发射器”。"""
+    """显式数量词优先于语义相似度，防止“2架飞机”召回“2门发射器”。
+
+    保留（未随词级 BM25 移除）：jieba 把「2架」「2门」切成「2」+「架/门」，
+    BM25 无法保证“数字+单位”整体一致，故仍需这层确定性硬约束兜住量词。
+    """
     pairs = re.findall(r'(\d+)\s*([架门艘次])', query or '')
     if not pairs:
         return list(order)
@@ -1268,7 +1365,7 @@ def retrieve_guide(query: str, topk: int = 4):
         return []
     qv = _embed_query(_expand_query(query))
     vec = data["matrix"] @ qv
-    order = _fuse_order(data, query, vec, topk * 3)
+    order, _ = _hybrid_order(data, query, vec, topk * 3)
     out = []
     for i in order:
         m = data["meta"].get(str(data["ids"][int(i)]))
@@ -1435,6 +1532,161 @@ def _split_rag_segments(text: str):
 _FRAME_Q_RE = re.compile(r'还是|分别|对应|归属|区别|对比')
 
 
+# ======================================================================
+# 检索增强（仅首跳弱/空才触发，平时零额外开销）
+#   ① 多查询改写：1 次 LLM 扩成 2~3 子查询 → 各 retrieve_guide → RRF 融合去重
+#   ③ 轻量自检：命中但处置信边缘时，校验片段覆盖度，不足则「问题+缺口」补充检索
+# ======================================================================
+
+def _expand_queries_llm(query: str):
+    """低置信闸门触发：1 次 LLM 把问题拆成 2~3 个聚焦子查询。失败返回 []。"""
+    try:
+        from openai import OpenAI
+        from llm.llm_client import get_llm_config, MODEL_SERVER
+        cfg = get_llm_config(temperature=0.0)
+        client = OpenAI(api_key=cfg['api_key'], base_url=MODEL_SERVER, timeout=20)
+        resp = client.chat.completions.create(
+            model=cfg['model'],
+            messages=[
+                {'role': 'system', 'content':
+                 '你是攻略问答的查询扩展器，不回答。把用户的具体游戏攻略问题，'
+                 '拆成 2~3 个更聚焦、互不重复的子查询，分别覆盖问题的不同侧面，'
+                 '便于多路向量检索召回更全。保持原意与专有名词，不要改写风格。'
+                 '只输出 JSON：{"queries":["子查询1","子查询2","子查询3"]}'},
+                {'role': 'user', 'content': query},
+            ],
+            temperature=0.0,
+            extra_body=cfg['generate_cfg']['extra_body'],
+        )
+        raw = (resp.choices[0].message.content or '').strip()
+        m = re.search(r'\{[\s\S]*\}', raw)
+        if not m:
+            return []
+        obj = json.loads(m.group(0))
+        qs = [str(x).strip() for x in (obj.get('queries') or []) if str(x).strip()]
+        return qs[:3]
+    except Exception:
+        return []
+
+
+def _multi_query_retrieve(query: str, max_results: int = 4):
+    """低置信闸门触发：扩展子查询 → 各 retrieve_guide → RRF 融合去重 → (order_indices, scores)。
+
+    返回 None 表示无有效子查询或检索失败，调用方回落原 low 行为。
+    scores 为各 chunk 在子查询中的最高向量分（供下方阈值过滤/重排复用）。
+    """
+    subs = _expand_queries_llm(query)
+    if not subs:
+        return None
+    data = _load_guide_qa()
+    if not data:
+        return None
+    ids = data.get('ids')
+    if ids is None:
+        return None
+    n = len(ids)
+    id_to_idx = {str(x): i for i, x in enumerate(ids)}
+    max_scores = [-1.0] * n
+    rank_maps = []
+    for sq in subs:
+        try:
+            res = retrieve_guide(sq, max_results)
+        except Exception:
+            continue
+        if not res:
+            continue
+        rm = {}
+        for rank, (meta, sc) in enumerate(res):
+            cid = str((meta or {}).get('id') or '')
+            idx = id_to_idx.get(cid)
+            if idx is None:
+                continue
+            rm[idx] = rank
+            if sc > max_scores[idx]:
+                max_scores[idx] = sc
+        if rm:
+            rank_maps.append(rm)
+    if not rank_maps:
+        return None
+    fused = {}
+    for rm in rank_maps:
+        for idx, rank in rm.items():
+            fused[idx] = fused.get(idx, 0.0) + 1.0 / (60 + rank + 1)
+    order = sorted(fused, key=lambda i: -fused[i])[: max(8, max_results * 3)]
+    return order, max_scores
+
+
+def _selfcheck_llm(query: str, frag: str):
+    """轻量自检：片段是否足够直接回答用户问题。充足返回 None；不足返回 {'gap':...}；失败返回 None。"""
+    try:
+        from openai import OpenAI
+        from llm.llm_client import get_llm_config, MODEL_SERVER
+        cfg = get_llm_config(temperature=0.0)
+        client = OpenAI(api_key=cfg['api_key'], base_url=MODEL_SERVER, timeout=15)
+        resp = client.chat.completions.create(
+            model=cfg['model'],
+            messages=[
+                {'role': 'system', 'content':
+                 '你是答案覆盖度校验器，不回答。给定用户问题与一段知识片段，'
+                 '判断该片段是否足以直接、完整地回答用户问题。'
+                 '只输出 JSON：{"sufficient":true/false,"gap":"若不足，用户还需知道什么（一句话，用于补充检索）"}'},
+                {'role': 'user', 'content': '用户问题：%s\n\n知识片段：%s' % (query, frag)},
+            ],
+            temperature=0.0,
+            extra_body=cfg['generate_cfg']['extra_body'],
+        )
+        raw = (resp.choices[0].message.content or '').strip()
+        m = re.search(r'\{[\s\S]*\}', raw)
+        if not m:
+            return None
+        obj = json.loads(m.group(0))
+        if obj.get('sufficient'):
+            return None
+        return obj
+    except Exception:
+        return None
+
+
+def _selfcheck_supplement(query: str, base_order, base_scores, max_results: int, data):
+    """增强③：当前 top 片段处置信边缘时，校验覆盖度；不足则「问题+缺口」补充检索并并入。
+
+    返回 (order, scores, top) 或 None（不补充/补充后仍弱）。
+    """
+    try:
+        top_i = base_order[0]
+        meta0 = data['meta'].get(str(data['ids'][int(top_i)])) or {}
+        frag = (meta0.get('content') or '')[:1200]
+    except Exception:
+        return None
+    if not frag:
+        return None
+    suf = _selfcheck_llm(query, frag)
+    if not suf:
+        return None
+    gap = str(suf.get('gap') or '').strip()
+    if not gap:
+        return None
+    aug = (query + ' ' + gap).strip()
+    mq = _multi_query_retrieve(aug, max_results)
+    if not mq:
+        return None
+    order2, scores2 = mq
+    n = len(data['ids'])
+    comb = list(base_scores)
+    while len(comb) < n:
+        comb.append(-1.0)
+    for i in range(n):
+        if scores2[i] > comb[i]:
+            comb[i] = scores2[i]
+    merged = list(order2) + [i for i in base_order if i not in set(order2)]
+    merged = _semantic_rerank(query, merged, comb, data)
+    merged = _unit_consistent_order(query, merged, data)[:max_results]
+    top2 = max((float(comb[i]) for i in merged), default=0.0)
+    if top2 < _GUIDE_QA_SCORE_SHOW:
+        return None
+    return merged, comb, top2
+
+
 def _guide_rag_search(query: str, max_results: int = 4):
     """攻略片段检索核心（向量 + 关键词 RRF 融合）→ (text, reason)。
 
@@ -1482,7 +1734,8 @@ def _guide_rag_search(query: str, max_results: int = 4):
             candidate = head + ' ' + (meta.get('content') or '')
             q_terms = set(_bigrams(_expand_query(query)))
             coverage = (len(q_terms & set(_bigrams(candidate))) / max(1, len(q_terms)))
-            if best_kw < 15.0 or coverage < 0.30 or not meta.get('content'):
+            # kw 阈值随 BM25 改词级 + 标准 log idf 重标定（量级从数百降到十余）
+            if best_kw < 6.0 or coverage < 0.30 or not meta.get('content'):
                 return '', 'embed:%s' % (e,)
             shown = max(_GUIDE_QA_SCORE_SHOW, min(0.95, coverage))
             text, doc = _format_rag_hit(meta, shown)
@@ -1492,15 +1745,32 @@ def _guide_rag_search(query: str, max_results: int = 4):
         except Exception:
             return '', 'embed:%s' % (e,)
     scores = data["matrix"] @ qv
-    # 向量 + 关键词 RRF 融合重排（判定阈值仍取 top1 的向量余弦分）
+    # 向量 + BM25 全量 RRF 融合（输出线仍取向量 top1 余弦分，保持低置信闸门语义）
     candidate_n = max(max_results, 6)
     try:
-        order = _fuse_order(data, query, scores, candidate_n)
+        order, bm25_ids = _hybrid_order(data, query, scores, candidate_n)
     except Exception:
-        order = np.argsort(-scores)[:candidate_n]
-    top = max((float(scores[i]) for i in order), default=0.0)
+        order, bm25_ids = list(np.argsort(-scores)[:candidate_n]), set()
+    top = max((float(s) for s in scores), default=0.0)
     if not len(order) or top < _GUIDE_QA_SCORE_SHOW:
-        return '', 'low:%.2f' % top
+        # 增强①：低置信闸门触发多查询改写（RRF 融合）；命中则就地提升、复用下方格式化
+        if _agent_enhance_on():
+            mq = _multi_query_retrieve(query, max_results)
+            if mq:
+                order2, scores2 = mq
+                top2 = max((float(scores2[i]) for i in order2), default=0.0)
+                if top2 >= _GUIDE_QA_SCORE_SHOW:
+                    order, scores, top = order2, scores2, top2
+        # 仍未命中（或增强关/失败）→ 维持低置信回落
+        if not len(order) or top < _GUIDE_QA_SCORE_SHOW:
+            return '', 'low:%.2f' % top
+    else:
+        # 增强③：命中但处置信边缘 [SHOW, SHOW+MARGIN) 时，轻量自检是否真正覆盖问题，
+        # 不足则用「问题+缺口」补充检索（复用多查询改写）。高分命中时零额外开销。
+        if _agent_enhance_on() and top < _GUIDE_QA_SCORE_SHOW + _SELFCHECK_MARGIN:
+            supp = _selfcheck_supplement(query, list(order), scores, max_results, data)
+            if supp:
+                order, scores, top = supp
     order = _semantic_rerank(query, list(order), scores, data)
     order = _unit_consistent_order(query, order, data)[:max_results]
     # 框架类问法放行后，精确命中块仍是最高置信度索引，钉到首位，
@@ -1525,8 +1795,10 @@ def _guide_rag_search(query: str, max_results: int = 4):
         pinned_ids = {str(exact.get('id'))}
     for i in order:
         sc = float(scores[i])
-        # 精确命中块即使向量分偏低也保留（它是人工索引，置信度高于向量分）
-        if sc < _GUIDE_QA_SCORE_SHOW and str(data["ids"][i]) not in pinned_ids:
+        cid = str(data["ids"][i])
+        # 精确命中块（人工索引）与 BM25 词汇强命中块即使向量分略低于输出线也保留；
+        # 其余低于输出线的片段仍丢弃，避免弱相关噪声灌进回答。
+        if sc < _GUIDE_QA_SCORE_SHOW and cid not in pinned_ids and cid not in bm25_ids:
             continue
         m = data["meta"].get(str(data["ids"][i]))
         if not m:
@@ -1608,11 +1880,34 @@ class GuideRAG(BaseTool):
 # 从当前 QA 库随机取样复测，并将证据评分保存为 JSONL。
 # ======================================================================
 
-# 描述性信号词：出现在舰名附近才认定「这段在讲她」，而不是「把她排进了一张名单」。
-_MENTION_DESC_RE = re.compile(
-    r'获取|获得|打捞|建造|改造|专武|练级|配队|配装|培养|定位|强度|评价|推荐|优先|'
-    r'技能|通常技|必杀|支援技|旗舰|站位|适合|核心|输出|生存|辅助|奶|拐|模组|用途|'
-    r'优点|缺点|面板|命中|暴击|对空|索敌|机动|油耗|成本|入手|值得|简评|点评')
+# 描述性判据（2026-09-25 改）：替掉硬编码描述词表 _MENTION_DESC_RE——
+# 用 jieba 词性标注判断「这段在讲她」而不是「把她排进名单」：名字附近出现
+# **动词类**（推荐/建造/培养/对待/值得……等动作）才算描述；纯名词并列（名单/阵容/
+# 表格）不算。判据来自语法，不再维护词表。
+# 只取动词类（v/vn/vd）：9 条样本实测对「名单/操作轴 vs 描述」完全分离；
+# 纳入形容词/副词会被「大范围」「通常」这类词误判（把名单/操作轴当成描述）。
+_MENTION_DESC_POS = frozenset(('v', 'vn', 'vd'))
+_MENTION_POS_CACHE = {}
+
+
+def _desc_words(text: str):
+    """text 里的描述性词集合（动词/形容词/副词）；带缓存。"""
+    t = (text or '').strip()
+    if not t:
+        return frozenset()
+    cached = _MENTION_POS_CACHE.get(t)
+    if cached is not None:
+        return cached
+    try:
+        import jieba.posseg as _ps
+        _jieba_mod()  # 先注入用户词典，保证专名完整成词
+        words = frozenset(w.word for w in _ps.cut(t) if w.flag in _MENTION_DESC_POS)
+    except Exception:
+        words = frozenset()
+    if len(_MENTION_POS_CACHE) > 4096:
+        _MENTION_POS_CACHE.clear()
+    _MENTION_POS_CACHE[t] = words
+    return words
 # 实体为中心的检索查询（单条，控时延；召回兜底靠全语料扫名）
 _MENTION_QUERY = '%s 练级 配队 阵容推荐 强度 获取方式 定位'
 # 摘录窗口：名字所在**行**过长时，只取名字附近 ±win 字（而不是整段 chunk）。
@@ -1689,7 +1984,7 @@ def _mention_excerpt_level(exc: str, alias: str) -> str:
         return ''
     win = _MENTION_CHAR_WIN if len(alias) <= 1 else _MENTION_PROX_WIN
     seg = exc[max(0, m.start() - win): m.end() + win]
-    if _MENTION_DESC_RE.search(seg):
+    if _desc_words(seg):
         # 单字舰名的词组防误切（复用 PVP 解析既有的守卫表：鹰/响/晓/电/雷）
         g = _PVP_1CHAR_GUARD.get(alias)
         if len(alias) <= 1 and g:
@@ -1701,7 +1996,7 @@ def _mention_excerpt_level(exc: str, alias: str) -> str:
         return 'prox'
     if len(alias) <= 1:
         return ''
-    return 'wide' if _MENTION_DESC_RE.search(exc) else ''
+    return 'wide' if _desc_words(exc) else ''
 
 
 def _best_mention(content: str, aliases):
@@ -1744,7 +2039,7 @@ def find_ship_mentions(name: str, limit: int = 5, use_vector: bool = True):
         if not exc:
             return
         # 微调：摘录里不同描述词的种数越多，越可能真在讲她（防止「名单式」并列拿同分）
-        score += 0.03 * min(len(set(_MENTION_DESC_RE.findall(exc))), 5)
+        score += 0.03 * min(len(_desc_words(exc)), 5)
         key = (doc, section, exc[:48])
         cur = got.get(key)
         if cur is None:
@@ -2794,6 +3089,36 @@ _SHIP_FILTER_RARITY_WORDS = ('彩', '金', '紫', '蓝', '绿', '白')
 # 大小分类（与 formula_engine._SHIP_SIZE_MAP 同源）：小船=驱逐/补给/水母/潜艇，中船=轻巡等，大船=战列/航母等
 _SHIP_FILTER_SIZE_WORDS = ('小船', '小型', '中船', '中型', '大船', '大型')
 _SHIP_FILTER_SIZE_CANON = {'小船': '小型', '中船': '中型', '大船': '大型'}
+# 单字稀有度（彩/金/紫/蓝/绿/白）的合法上下文：见 _extract_rarities
+_RARITY_NEIGHBOR_WORDS = ('角色', '舰灵', '舰娘', '船', '驱逐', '轻巡', '重巡', '战巡', '战列',
+                          '航母', '轻母', '装母', '潜艇', '潜舰', '航战', '重炮', '雷巡', '水母',
+                          '维修', '小船', '中船', '大船')
+_RARITY_CLAUSE_BOUND = '，,。.、；;：:！!？?　 \t\n（(【[「'
+
+
+def _extract_rarities(m):
+    """从原话抽取稀有度维度（保序，按 _SHIP_FILTER_RARITY_WORDS 顺序）。
+
+    稀有度是单字，纯子串匹配会误命中词内字（实测「说明白」→白），使与筛选无关的
+    长问句被拦成「稀有度 白」名单。故单字须满足其一：
+      ① 后接「色」；② 与另一稀有度字相邻（蓝白绿）；③ 前面是「稀有/稀有度」；
+      ④ 处于子句开头或标点/空白之后；⑤ 后接舰种类或角色类词（金航母、金角色）。
+    """
+    ok = set()
+    n = len(m or '')
+    for w in _SHIP_FILTER_RARITY_WORDS:
+        for mt in re.finditer(re.escape(w), m or ''):
+            i, j = mt.start(), mt.end()
+            prev = m[i - 1] if i else ''
+            nxt = m[j] if j < n else ''
+            if (nxt == '色'
+                    or prev in _SHIP_FILTER_RARITY_WORDS or nxt in _SHIP_FILTER_RARITY_WORDS
+                    or m[max(0, i - 3):i].endswith('稀有度') or m[max(0, i - 2):i].endswith('稀有')
+                    or i == 0 or prev in _RARITY_CLAUSE_BOUND
+                    or any(m.startswith(d, j) for d in _RARITY_NEIGHBOR_WORDS)):
+                ok.add(w)
+                break
+    return [w for w in _SHIP_FILTER_RARITY_WORDS if w in ok]
 
 
 def _ship_talent_names(raw: dict) -> dict:
@@ -2875,14 +3200,59 @@ def _size_allowed_stypes(app, size: str):
     return {st for st in all_types if get_ship_size(st) == size}
 
 
+_CLASS_RE = re.compile(r'([一-鿿]{1,8})级')
+_CLASS_JOIN = ('的', '且', '与', '及', '中', '至', '或')
+
+
+def _ship_class_ref():
+    """返回 (ship_class_by_name, class_values)。懒加载并缓存（复用 skill_buff_extractor 权威舰级表）。"""
+    try:
+        from core import skill_buff_extractor as _sbe
+        ref = _sbe.load_reference()
+        sc = ref.get('ship_class_by_name') or {}
+        return sc, set(sc.values())
+    except Exception:
+        return {}, set()
+
+
+def _extract_ship_class(m):
+    """从筛选原话抽取舰级（如「约克城级」）。仅接受权威表里存在的级名，避免「一级」误命中。返回 'X级' 或 None。"""
+    sc_by_name, class_vals = _ship_class_ref()
+    if not class_vals:
+        return None
+    for mm in _CLASS_RE.finditer(m or ''):
+        val = mm.group(1)
+        for sep in _CLASS_JOIN:
+            if val.startswith(sep):
+                val = val[len(sep):]
+        if not val:
+            continue
+        cand = val + '级'
+        if cand in class_vals:
+            return cand
+    return None
+
+
+def _ship_class_match(name, target):
+    """判断 name 是否属于 target 舰级（处理改造前后/姊妹船，复用 skill_buff_extractor.match_ship_class）。"""
+    try:
+        from core import skill_buff_extractor as _sbe
+        if _sbe.match_ship_class(name, target):
+            return True
+    except Exception:
+        pass
+    sc_by_name, _ = _ship_class_ref()
+    return sc_by_name.get(name) == target
+
+
 def _parse_filter_conditions(msg, app):
-    """解析属性筛选条件。返回 dict（含 stype/nation/rarities/refit/talents/size 中命中的键）或 None（无任何维度）。"""
+    """解析属性筛选条件。返回 dict（含 stype/nation/rarities/refit/talents/size/ship_class 中命中的键）或 None（无任何维度）。"""
     m = msg or ''
     stype = next((w for w in _SHIP_FILTER_TYPE_WORDS if w in m), None)
     if stype:
         stype = _SHIP_FILTER_TYPE_CANON.get(stype, stype)
     nation = next((w for w in _SHIP_FILTER_NATION_WORDS if w in m), None)
-    rarities = [w for w in _SHIP_FILTER_RARITY_WORDS if w in m]
+    rarities = _extract_rarities(m)
     refit = None
     refittable = False
     if re.search(r'没\s*改造|未\s*改造|无\s*改造|非\s*改造|不\s*改造|没有\s*改造', m):
@@ -2905,10 +3275,12 @@ def _parse_filter_conditions(msg, app):
     # 防碰撞：「大型特攻」等天赋名含尺寸词时，尺寸维度是天赋名的子串，丢弃尺寸（只走天赋）
     if size and hit_talents and any(size in t for t in hit_talents):
         size = None
-    if not (stype or nation or rarities or refit or refittable or hit_talents or size):
+    ship_class = _extract_ship_class(m)
+    if not (stype or nation or rarities or refit or refittable or hit_talents or size or ship_class):
         return None
     return {'stype': stype, 'nation': nation, 'rarities': rarities,
-            'refit': refit, 'refittable': refittable, 'talents': hit_talents, 'size': size}
+            'refit': refit, 'refittable': refittable, 'talents': hit_talents, 'size': size,
+            'ship_class': ship_class}
 
 
 def _run_ship_filter(app, conds):
@@ -2952,6 +3324,9 @@ def _run_ship_filter(app, conds):
             tn = _ship_talent_names(raw_storage.get(name) or {})
             if not any(t in tn for t in conds['talents']):
                 continue
+        if conds.get('ship_class'):
+            if not _ship_class_match(name, conds['ship_class']):
+                continue
         rows.append((name, na, st, ra))
     rows.sort(key=lambda r: r[0])
     return rows
@@ -2973,6 +3348,8 @@ def _filter_cond_desc(conds):
         dims.append('有改造形态')
     if conds.get('talents'):
         dims.append('天赋 %s' % '/'.join(conds['talents']))
+    if conds.get('ship_class'):
+        dims.append('舰级 %s（已实装）' % conds['ship_class'])
     return ' · '.join(dims) or '未指定'
 
 
@@ -2987,9 +3364,13 @@ def _structured_filter_reply(conds, rows):
             lines.append('……等共 %d 名，可再加维度缩小范围。' % len(rows))
     else:
         lines.append('底层舰库里没有符合条件的角色，不编造。')
-        lines.append('可换维度再筛：舰种（驱逐/轻巡/重巡/战列/航母…）、尺寸（小船=驱逐/潜艇/水母/补给、'
-                     '中船=轻巡等、大船=战列/航母等）、阵营（尤奈特/八咫/洛蒙瑞亚…）、'
+        lines.append('可换维度再筛：舰种（驱逐/轻巡/重巡/战列/航母…）、舰级（约克城级/翔鹤级…）、'
+                     '尺寸（小船=驱逐/潜艇/水母/补给、中船=轻巡等、大船=战列/航母等）、阵营（尤奈特/八咫/洛蒙瑞亚…）、'
                      '稀有度（彩/金/紫/蓝/绿/白）、是否改造（没改造/改造）。')
+    # 舰级维度依据史实原型表（原型舰历史.json）解析：只列游戏库内已实装角色，
+    # 未实装的史实同级舰船不列入（用户 2026-09-25 口径）。
+    if conds.get('ship_class'):
+        lines.append('（舰级依据史实原型；以上仅列游戏内已实装舰灵，未实装的史实同级舰船不计入）')
     return '\n'.join(lines)
 
 
@@ -3046,13 +3427,14 @@ class ShipFilter(BaseTool):
     的组合筛选，并自动剔除信息不全的舰灵。适用于「蓝白绿小船有哪些」「没改造的金航母」等属性组合查询。"""
     name = 'ship_filter'
     description = ('按角色属性（非技能效果）筛选并列举舰灵，返回自然分析式回复（非死板编号清单）：'
-                   '维度=舰种（驱逐/航母/…）、尺寸（小船=驱逐/潜艇/水母/补给，中船=轻巡等，大船=战列/航母等）、'
+                   '维度=舰种（驱逐/航母/…）、**舰级（如约克城级/翔鹤级，查「X级有哪些」）**、'
+                   '尺寸（小船=驱逐/潜艇/水母/补给，中船=轻巡等，大船=战列/航母等）、'
                    '阵营（尤奈特/八咫/…）、稀有度（可多重，如「蓝白绿」同时指蓝/绿/白）、'
                    '改造状态（口径=「有无改造形态」，均列本体名：「没有改造的/没改造/未改造」=无任何改造形态的本体；'
                    '「有改造的/改造的/可以改造的/可改造」=有改造形态的本体；·改 形态与 remap 改造如 雪风→信赖 都算）。'
                    '自动剔除信息不全的舰灵。'
                    '适用于「没有改造的蓝白绿小船有哪些」「有改造的大船有哪些」「可以改造的绿色小船」'
-                   '「八咫的驱逐」「中型船有哪些」等属性组合查询。'
+                   '「八咫的驱逐」「中型船有哪些」「约克城级有哪些」「和企业同舰级的船」等属性组合查询。'
                    '（注意：按技能效果/能力问"哪些船有护盾/自奶船"请用 query_ships_by_skill，不要混淆。）')
     parameters = {
         'type': 'object',

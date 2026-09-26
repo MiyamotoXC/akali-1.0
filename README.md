@@ -37,21 +37,19 @@
 │   │   ├── data_api.py           # 数据 API 层（三源提取、差异对照、增量导入管线）
 │   │   └── user_engine.py        # 用户端口径时间轴模拟引擎
 │   ├── build/                    # 知识库构建链（逐文件逐函数说明见 开发者入口/构建说明.md）
-│   │   ├── main.py               # 控制台入口：合并表格 + 增量 LLM + 规则补全（--stage 1/2/3/all）
-│   │   ├── build.py              # 知识库唯一开发者接口（增量自动构建 --full）
-│   │   ├── postprocess.py        # stage 3 规则补全（点燃/持续buff/航速/CD/光环/暴击/条件增伤）
-│   │   ├── standard_copy.py      # 标准化副本生成（raw_data → data.json 面板数值调整）
-│   │   ├── kb_incremental.py     # 攻略 KB 增量切块（file/section 级 MD5）
-│   │   ├── guide_qa_build.py     # 攻略 QA 问答库构建（chunk → LLM 生成问句）
-│   │   ├── guide_qa_embed.py     # 攻略 QA 向量化（→ 攻略QA向量库.npz）
-│   │   ├── docx_to_md.py         # 攻略 docx → md 转换
-│   │   ├── guide_index.py        # 攻略索引 guide_index.json 生成（--watch 可选）
-│   │   ├── src/                  # 核心实现模块
-│   │   │   ├── file_extractor.py # Excel 源提取（面板/技能/天赋/普攻列表/克制表）
-│   │   │   ├── raw_data_store.py # raw_data.json 读写（精确正规名 prune）
-│   │   │   ├── name_normalizer.py# 舰名归一化（canonicalize_name / match_key）
-│   │   │   ├── xlsx_std.py       # 纯标准库 xlsx 读取（数值自动化表专用）
-│   │   │   ├── skill_buff_extractor.py / parser.py / llm_client.py / …
+│   │   ├── 构建入口.py            # ★ 一键入口：按依赖链增量重建全部产物（--suite a|b|all / --full / --list）
+│   │   ├── 角色数据构建.py         # 套A：Excel 源表 → raw_data.json / data.json / talent_*.json（stage 1/2/3）
+│   │   ├── 规则补全.py            # stage 3 规则补全（点燃/持续buff/航速/CD/光环/暴击/条件增伤，幂等不调 LLM）
+│   │   ├── 标准化副本.py          # data.json 标准化副本（面板比例调整 + 去重，手动单独跑）
+│   │   ├── 攻略转文档.py          # 套B：攻略 docx → 攻略_md/
+│   │   ├── 攻略索引.py            # → guide_index.json（攻略滑块）
+│   │   ├── 知识库增量.py          # → 拂晓知识库_agent.json（agent kb_search 用）
+│   │   ├── 攻略问答库构建.py       # → 攻略QA库.json（chunk → LLM 生成问句）
+│   │   ├── 问答变体生成.py        # QA 口语问法增强（alt_questions）
+│   │   ├── 问答向量化.py          # → 攻略QA向量库.npz（语义召回）
+│   │   ├── 补充问答录入.py / 补充技巧录入.py   # 问答补充.txt → QA 库 / tips.json
+│   │   ├── 技巧概览.py / 头像裁剪.py / 生成节庆素材.py    # 只读工具 / 一次性脚本
+│   │   ├── src/                  # 构建公共库（表格读取/技能解析/舰船命名/名称归一化/模型客户端/提示词/…）
 │   │   └── config/               # ship_name_map.json 等
 │   └── requirements.txt          # 开发者端依赖（streamlit/pandas/openpyxl/pypinyin…）
 │
@@ -113,8 +111,7 @@
 ├── .env.cloud.example            # 【云服务器】env 模板（cp 后填 3 项必填，配 docker compose）
 ├── Dockerfile                    # 云端镜像（Python 3.12 + 依赖分层，自带知识库兜底）
 ├── docker-compose.yml            # 云端编排：akali(FastAPI) + nginx + redis
-├── .dockerignore / .gitignore    # 构建忽略（密钥零进镜像）/ 闭源入库规则
-├── build_package.py              # 闭源打包脚本（Nuitka + PyInstaller）
+├── .dockerignore / .gitignore    # 构建忽略（密钥零进镜像）
 ├── 一键发布到GitHub.bat           # git add + commit + push 三连（双击即发布）
 ├── README.md                     # 本文件（项目说明：架构 / 功能 / 本地运行 / 开发）
 ├── 云端部署运维.md                # 云服务器部署与运维手册（部署步骤 + 命令速查 + 踩坑记录）
@@ -212,9 +209,9 @@ streamlit run app.py         # 或双击 start.bat
 ### 6. 数据构建 / 自测
 
 ```bash
-python 开发者入口/build/build.py              # 知识库一键增量构建（推荐）
-python 开发者入口/build/main.py --stage all   # 合并表格 + 增量 LLM + 规则补全（或交互菜单）
-python 开发者入口/build/main.py --stage 3     # 仅重跑规则补全（不调 LLM，幂等）
+python 开发者入口/build/构建入口.py            # 知识库一键增量构建（推荐，交互选套A/套B）
+python 开发者入口/build/构建入口.py --list     # 只看哪些环节需要重建
+python 开发者入口/build/角色数据构建.py --stage 3   # 仅重跑规则补全（不调 LLM，幂等）
 python 调试\随机测试.py --suite all            # 三类随机测试
 ```
 
@@ -249,8 +246,8 @@ python 调试\随机测试.py --suite all            # 三类随机测试
 | 导入先对照后确认 | 非手动模式：差异先**逐处列出 旧值→新值**，批量确认后才写入；未确认差异保持原值（confirm 流程自动跳过 prune） | 表格导入 → 扫描对照 |
 | 手动更新 | **保存即直写**底层角色 json（面板/技能/天赋/普攻），不走对照 | 「手动更新」页 |
 | 角色查询/伤害计算器 | 自定义角色配置、单次伤害、Buff 对比、时间轴总伤害对比、遭遇战模拟 | 侧边栏各页 |
-| 数据管理 | 源表解析 → raw_data.json → 标准副本 → talent_map/talent_pvp → custom_ship_config 同步 | `build/main.py` / Streamlit |
-| 规则补全（stage 3） | 点燃/持续 buff/旗舰光环/航速/技能 CD/递增光环/必定暴击/条件增伤/buffs 归一/普攻基准比对，代码规则自动产出（幂等，不调 LLM） | `build/postprocess.py`（随 `--stage all` 自动执行） |
+| 数据管理 | 源表解析 → raw_data.json → 标准副本 → talent_map/talent_pvp → custom_ship_config 同步 | `build/角色数据构建.py` / Streamlit |
+| 规则补全（stage 3） | 点燃/持续 buff/旗舰光环/航速/技能 CD/递增光环/必定暴击/条件增伤/buffs 归一/普攻基准比对，代码规则自动产出（幂等，不调 LLM） | `build/规则补全.py`（随 stage 链自动执行） |
 
 ---
 
@@ -374,45 +371,19 @@ git push
 
 ## 开发者模式
 
-### 规则补全（`开发者入口/build/postprocess.py`，随 `--stage all` 自动执行）
+### 构建链（`开发者入口/build/`）
 
-原先的 `patch.py` 11 个一次性补丁子命令**已删除**，逻辑统一收进构建流程 stage 3：
+逐文件逐函数说明见 `开发者入口/构建说明.md`。常用：
 
 ```bash
-python 开发者入口/build/main.py --stage 3    # 单独重跑（不调 LLM，全部幂等）
+python 开发者入口/build/构建入口.py --list    # 只看哪些环节需要重建
+python 开发者入口/build/构建入口.py           # 增量重建（交互选套A/套B/全部）
+python 开发者入口/build/角色数据构建.py --stage 3   # 仅重跑规则补全（不调 LLM，幂等）
 ```
 
-覆盖：换行规范化 / 航速对齐 / 常驻 buffs 归一 / `skill_buffs`·`flagship_buffs`·`raguz_bonus`·`cd_effects`
+规则补全（stage 3）覆盖：换行规范化 / 航速对齐 / 常驻 buffs 归一 / `skill_buffs`·`flagship_buffs`·`raguz_bonus`·`cd_effects`
 代码提取 / 递增光环 `ramp_buffs` / 技能循环 CD 回填 / `always_crit` / 条件增伤 `static_buffs` /
 点燃 part 补全 / 普攻基准比对（自动补 `slot`/`weapon_code`，**不碰数值**；报告 → `调试/普攻基准识别报告.txt`）。
-
-### 数据管理入口（`build/main.py`）
-
-```bash
-python 开发者入口/build/main.py                # 交互式控制台
-python 开发者入口/build/main.py --stage 1      # 合并表格 → raw_data.json
-python 开发者入口/build/main.py --stage 2      # 增量 LLM 解析 → data.json（--force 全量）
-python 开发者入口/build/main.py --stage 3      # 规则补全（不调 LLM）
-python 开发者入口/build/main.py --stage all    # 1 + 2 + 3（完整流程）
-```
-
-### 知识库构建（`build/build.py`）
-
-检测源变化按依赖链增量重建所有产物（Excel 底层数据 / 攻略 docx / 遭遇战历史数据）：
-
-```bash
-python 开发者入口/build/build.py           # 增量（默认）
-python 开发者入口/build/build.py --full    # 强制全量
-```
-
-### 攻略 QA 管线
-
-```bash
-python 开发者入口/build/docx_to_md.py      # 攻略 docx → 攻略_md/
-python 开发者入口/build/guide_qa_build.py  # 攻略_md → QA 问答库（增量，LLM 生成问句）
-python 开发者入口/build/guide_qa_embed.py  # QA 库 → 向量库 .npz
-python 开发者入口/build/guide_index.py     # 生成/更新 guide_index.json（本地关键词直连检索用）
-```
 
 ### 自测脚本
 
@@ -430,23 +401,6 @@ python 调试\随机测试.py --suite qa --seed 20260920 --qa-n 30
 
 ---
 
-## 闭源打包
-
-```
-开发者模式：源码开发调试
-    ↓ Nuitka 编译：通用工具/ → .pyd 闭源模块
-    ↓ PyInstaller 打包：用户端特用/ → .exe
-    ↓
-用户分发：用户只能调用闭源包，开发者保留源码权限
-```
-
-```bash
-python build_package.py --release   # 完整发布（编译闭源 + 打包用户端）
-python build_package.py             # 开发者模式（不编译，仅输出说明）
-```
-
----
-
 ## 常用命令速查
 
 ```bash
@@ -456,20 +410,14 @@ cd 用户端特用 && python web_app.py
 # 开发者端 Streamlit 工具（端口 8501）
 cd 开发者入口 && streamlit run app.py
 
-# 数据管理（合并 + 增量 LLM）
-python 开发者入口/build/main.py --stage all
-
-# 知识库一键增量构建
-python 开发者入口/build/build.py
+# 知识库一键增量构建（套A 角色数据 / 套B 攻略问答向量）
+python 开发者入口/build/构建入口.py
 
 # 普攻基准识别（只读审计，随 stage 3 自动产出报告）
-python 开发者入口/build/main.py --stage 3
+python 开发者入口/build/角色数据构建.py --stage 3
 
 # 自测（工具路由、随机问答、计算工具）
 python 调试\随机测试.py --suite all
-
-# 闭源打包
-python build_package.py --release
 ```
 
 ---

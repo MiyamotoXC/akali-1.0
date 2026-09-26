@@ -49,6 +49,14 @@ TIER1_FULL_EXTRA = (
     'list_user_ships',
 )
 
+# 有界工具循环白名单（增强②）：仅这些确定性、原文直出的**数据查询**工具可作为同轮第二个调用
+# （数据→数据）。禁止 guide_rag / query_guide / 闲聊进入循环，避免把检索/自由生成塞进串行链、
+# 破坏"原文直出"口径。示例：先 query_ship_info 再 query_talent_ships / query_ships_by_skill。
+LOOPABLE_DATA_TOOLS = (
+    'query_ship_info', 'query_talent_ships', 'query_ships_by_skill',
+    'ship_filter', 'query_scout_sum', 'ammo_mech_qa',
+)
+
 
 def is_retrieval(name: str) -> bool:
     """该工具是否属于「检索→依据片段作答」分支。"""

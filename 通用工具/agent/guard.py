@@ -32,6 +32,21 @@ _ANSWER_CHALLENGE_RE = re.compile(
     r'好像.{0,6}(?:不对|在编|胡说)'
 )
 _UNSUPPORTED_ARCHIVE_RE = re.compile(r'RA[\s\-－—_]*0*1\s*(?:档案|编号)?', re.I)
+# 库外问法（2026-09-25 随机问答发现）：未来/未公布内容 与 创作请求，知识库无据——
+# 与「不存在的 RA-01 档案」同族（自由生成链路会臆造），统一在前置闸止住并回 _NO_DATA_REPLY。
+# 只拦「下期…会不会/什么时候/出什么/叫什么」这类猜测式问法，「下期活动怎么打/带路条件」不拦。
+_NO_KB_FUTURE_RE = re.compile(
+    r'(?:下期|下个版本|下一个版本|以后的?版本|未来|明年)[^。！？\n]{0,12}'
+    r'(?:会不会|是否|什么(?:时候|时)|何时|要出|出新|新(?:舰灵|角色|皮肤|活动)|叫什么)'
+    r'|会不会(?:加强|削弱|出|上线|进|改)'
+    r'|(?:什么(?:时候|时)|何时)(?:上线|开放|公测|开服)'
+    r'|公测|内测|爆料|剧透|舅舅党'
+)
+_NO_KB_CREATIVE_RE = re.compile(
+    r'(?:写|编|来|整|作|弄|搞)(?:一)?(?:段|篇|个|首)?[^。！？\n]{0,8}'
+    r'(?:故事|同人|小作文|段子|小说|诗|歌词|剧本|梗)'
+    r'|同人(?:文|小说|故事)|角色扮演|扮演一下'
+)
 _ARCHIVE_ACTION_RE = re.compile(r'^(?:帮我)?(?:调取|打开|展开|查看|看下|看看)(?:一下)?[？?。.!！]*$')
 _UNANSWERABLE_REPLY_RE = re.compile(
     r'知识库.{0,12}(?:没有|未找到|找不到|缺少|不足)|'
@@ -70,6 +85,8 @@ def guarded_backend_reason(msg, history=None):
     if (_ARCHIVE_ACTION_RE.match(m)
             and _UNSUPPORTED_ARCHIVE_RE.search(_last_history(history, 'assistant'))):
         return 'unsupported_archive'
+    if _NO_KB_FUTURE_RE.search(m) or _NO_KB_CREATIVE_RE.search(m):
+        return 'no_kb_basis'
     return ''
 
 
@@ -128,6 +145,10 @@ def guard(tools, overrides, msg, agent=None, history=None):
     guarded_reason = guarded_backend_reason(m, history)
     if guarded_reason == 'unsupported_archive':
         return True, _work_dict(_NO_DATA_REPLY, expression_hint='惊讶')
+
+    # 2b) 库外问法（未来/未公布内容、创作请求）：知识库无据，统一 _NO_DATA_REPLY，不进自由生成。
+    if guarded_reason == 'no_kb_basis':
+        return True, _work_dict(_NO_DATA_REPLY)
 
     # 3) 用户质疑上一条回答：先撤回，再把最近一条用户问题补全指代后送回确定性
     # 业务处理层复核。复核失败则只承认无依据，不允许自由生成模型自行“校验通过”。

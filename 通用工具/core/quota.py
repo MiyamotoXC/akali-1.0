@@ -33,7 +33,7 @@
 import os
 import json
 import threading
-from datetime import date
+from datetime import date, datetime
 from typing import Optional
 
 from core import runtime
@@ -203,6 +203,31 @@ def daily_limit(key: str) -> int:
     return _TOK_LIMIT_MONTH if plan == 'month' else _TOK_LIMIT_FREE
 
 
+# ===== 请求级用量明细（内存环形缓冲，重启清零；日汇总仍以 usage 记账为准）=====
+_REQLOG_MAX = 500          # 只留最近 500 条，够运营侧回看且不无界增长
+_REQLOG: list = []
+_REQLOG_LOCK = threading.Lock()
+
+
+def log_request(key: str, tok: int):
+    """记录一次 /api/chat 请求的 token 消耗（tok=0 = 本请求未走 LLM，如攻略/计算）。"""
+    # 时间记录**日期 + 时分秒**（用户口径 2026-09-26：时间要记录日期）
+    entry = {'date': _today(), 'ts': datetime.now().strftime('%H:%M:%S'),
+             'key': str(key or ''), 'tok': int(tok or 0)}
+    with _REQLOG_LOCK:
+        _REQLOG.append(entry)
+        del _REQLOG[:-_REQLOG_MAX]
+
+
+def recent_requests(day: Optional[str] = None, limit: int = 100) -> list:
+    """最近请求明细（仅当天有效；缓冲不跨日保留）。"""
+    if (day or _today()).strip() != _today():
+        return []
+    with _REQLOG_LOCK:
+        items = list(_REQLOG)
+    return items[-max(1, int(limit)):]
+
+
 def usage_snapshot(day: Optional[str] = None) -> list:
     """导出某天（默认今天）各维度键的用量 —— 供**开发者侧**查看谁在用（用户口径 2026-09-25）。
 
@@ -224,6 +249,7 @@ def usage_snapshot(day: Optional[str] = None) -> list:
             continue
         tin = int(e.get('tok_in') or 0)
         tout = int(e.get('tok_out') or 0)
+        calls = e.get('calls') or {}
         rows.append({
             'key': dim,
             'rounds': int(e.get('rounds') or 0),
@@ -231,6 +257,8 @@ def usage_snapshot(day: Optional[str] = None) -> list:
             'tok_out': tout,
             'tok_total': tin + tout,
             'cost': round(float(e.get('cost') or 0), 4),
+            # 调用类型细则（闲聊/攻略生成/…）：控制台点开才显示，默认不下发到用户侧
+            'calls': {k: dict(v) for k, v in calls.items() if isinstance(v, dict)},
             'plan': get_user_plan(dim),
             'limit': daily_limit(dim),
         })
@@ -395,6 +423,28 @@ def record_llm_usage(key: str, plan: str, tok_in: int, tok_out: int):
         e['tok_in'] += int(tok_in)
         e['tok_out'] += int(tok_out)
         e['cost'] += tok_in / 1000.0 * PRICE_IN_YUAN_PER_K + tok_out / 1000.0 * PRICE_OUT_YUAN_PER_K
+    STORE.persist()
+
+
+def record_llm_call(key: str, kind: str, tok_in: int, tok_out: int):
+    """记录一次**真实** LLM API 调用（openai SDK 层统一挂钩，见 core/llm_accounting.py）。
+
+    与 record_llm_usage（按请求估算）**互斥使用**：同一轮只能走其一，否则双算。
+    token 来自 API 响应 usage（非估算）；kind = 调用类型（闲聊/攻略生成/检索重排…），
+    按类型细分累计进 entry['calls']，供控制台「同一个用户只显总量、点开才显示细则」
+    （用户口径 2026-09-26）。
+    """
+    with _lock:
+        e = _get_entry(key)
+        e['rounds'] += 1
+        e['tok_in'] += int(tok_in)
+        e['tok_out'] += int(tok_out)
+        e['cost'] += tok_in / 1000.0 * PRICE_IN_YUAN_PER_K + tok_out / 1000.0 * PRICE_OUT_YUAN_PER_K
+        calls = e.setdefault('calls', {})
+        c = calls.setdefault(str(kind or 'LLM'), {'n': 0, 'tok_in': 0, 'tok_out': 0})
+        c['n'] += 1
+        c['tok_in'] += int(tok_in)
+        c['tok_out'] += int(tok_out)
     STORE.persist()
 
 

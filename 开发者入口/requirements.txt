@@ -16,3 +16,5 @@ streamlit>=1.28.0
 pandas>=1.5.0
 openpyxl>=3.0.0
 pypinyin>=0.50.0
+# 攻略检索词级 BM25 分词（通用工具/tools/knowledge.py _terms；纯 Python）
+jieba>=0.42.0

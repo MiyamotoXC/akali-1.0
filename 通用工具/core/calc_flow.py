@@ -1811,7 +1811,7 @@ def _handle_guide_qa(tools, msg: str, identity: str = '普通', search_query: st
             reply = '\n'.join('- %s切换时间点：%s' % (name, '、'.join(grouped[name]))
                               for name in ('赤城', '苍龙') if grouped.get(name))
             return {'reply': reply, 'tool_outputs': [text], 'suggestions': [], 'fill_form': [],
-                    'encounter_form': [], 'guide_files': [], 'guide_lib': '', 'ok': True}
+                    'encounter_form': [], 'guide_files': [], 'guide_lib': '', 'from_kb': True, 'ok': True}
     # 原文里的公式若只以图片存在，文本抽取会留下“公式如下/其中”但没有等式。
     # 这种证据不能交给生成模型补全，否则它会凭训练记忆拼出一套看似完整的公式。
     if (re.search(r'伤害.*(?:怎么计算|怎么算|公式)', msg or '')
@@ -1828,7 +1828,7 @@ def _handle_guide_qa(tools, msg: str, identity: str = '普通', search_query: st
         return {'reply': '这个问题阿卡莉也没能从攻略库里找到足够相关的内容，回复不太清楚。\n\n'
                          '建议指挥官自行查阅相关攻略（已为你打开攻略目录）。',
                 'tool_outputs': [], 'suggestions': [], 'fill_form': [], 'encounter_form': [],
-                'guide_files': [], 'guide_lib': '*', 'ok': True}
+                'guide_files': [], 'guide_lib': '*', 'from_kb': True, 'ok': True}
     # 检索无命中/未建库/向量化失败 → 一律回落攻略面板路径，不把错误文本交给 LLM。
     # 注意：这三类原先合并成同一个 return None，排障时**看不到真实原因**——
     # 「遭遇战阿斯莫德配装配队有吗」当时只看到配装分支的固定话术，无法判断是
@@ -1926,7 +1926,7 @@ def _handle_guide_qa(tools, msg: str, identity: str = '普通', search_query: st
     if not answer:
         return None
     return {'reply': answer, 'tool_outputs': [text], 'suggestions': [], 'fill_form': [],
-            'encounter_form': [], 'guide_files': [], 'guide_lib': '', 'ok': True}
+            'encounter_form': [], 'guide_files': [], 'guide_lib': '', 'from_kb': True, 'ok': True}
 
 
 # 通用知识检索兜底：正则/固定分支全漏后，把"带问意、疑似拂晓内容"的输入交给

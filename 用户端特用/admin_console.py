@@ -36,6 +36,7 @@ ADMIN_HTML = r"""<!DOCTYPE html>
           white-space:nowrap; }
   th { color:var(--soft); font-weight:600; font-size:12px; }
   tr:last-child td { border-bottom:none; }
+  tr.owner > td { background:#eef4f9; }
   td.num { text-align:right; font-variant-numeric:tabular-nums; }
   .bar { position:relative; height:7px; border-radius:4px; background:#eee7d9; min-width:60px; }
   .bar > i { position:absolute; inset:0 auto 0 0; border-radius:4px; background:var(--accent); }
@@ -110,24 +111,57 @@ ADMIN_HTML = r"""<!DOCTYPE html>
       .then(function (r) { return r.json().then(function (d) { return { s: r.status, d: d }; }); });
   }
 
+  // 同一个用户只统计总量，点开才显示细则（用户口径 2026-09-26）：
+  // 细则 = 该用户按调用类型（闲聊/攻略生成/检索重排…）的 次数/输入/输出 + 带日期的请求明细。
+  function renderDetail(r, d) {
+    var h = '';
+    var calls = r.calls || {};
+    var kinds = Object.keys(calls);
+    if (kinds.length) {
+      h += '<table style="margin:6px 0"><tr><th>调用类型</th><th class="num">次数</th>'
+         + '<th class="num">输入</th><th class="num">输出</th><th class="num">合计</th></tr>';
+      kinds.forEach(function (k) {
+        var c = calls[k];
+        h += '<tr><td>' + k + '</td><td class="num">' + fmt(c.n) + '</td>'
+          + '<td class="num">' + fmt(c.tok_in) + '</td><td class="num">' + fmt(c.tok_out) + '</td>'
+          + '<td class="num">' + fmt((c.tok_in || 0) + (c.tok_out || 0)) + '</td></tr>';
+      });
+      h += '</table>';
+    } else {
+      h += '<div class="empty">无 LLM 调用记录。</div>';
+    }
+    var rc = (d.recent || []).filter(function (e) { return e.key === r.key; });
+    if (rc.length) {
+      h += '<table><tr><th>日期</th><th>时间</th><th class="num">本轮token(估算)</th></tr>';
+      rc.slice().reverse().forEach(function (e) {
+        h += '<tr><td class="mono">' + (e.date || '') + '</td><td class="mono">' + e.ts + '</td>'
+          + '<td class="num">' + fmt(e.tok) + '</td></tr>';
+      });
+      h += '</table>';
+    }
+    return h;
+  }
+
   function renderUsage(d) {
     var rows = d.rows || [];
     if (!rows.length) {
       $('usage').innerHTML = '<div class="empty">今天还没有用量记录。（维度：' + d.dim + '，存储：' + d.backend + '）</div>';
       return;
     }
-    var h = '<table><tr><th>uid</th><th>备注</th><th>套餐</th><th class="num">轮次</th>'
+    var h = '<table><tr><th>uid</th><th>备注</th><th>套餐</th><th class="num">流量(请求)</th>'
+          + '<th class="num">LLM调用</th>'
           + '<th class="num">输入</th><th class="num">输出</th><th class="num">合计</th>'
-          + '<th>占额度</th><th class="num">参考成本</th></tr>';
+          + '<th>占额度</th><th class="num">参考成本</th><th>细则</th></tr>';
     rows.forEach(function (r) {
       // limit = 0 表示不限量（开发者本人），不画进度条
       var unlimited = !r.limit;
       var pct = unlimited ? 0 : Math.min(100, r.tok_total / r.limit * 100);
-      h += '<tr>'
+      h += '<tr' + (r.is_owner ? ' class="owner"' : '') + '>'
         + '<td class="mono">' + r.key + '</td>'
-        + '<td>' + (r.name || '') + '</td>'
+        + '<td>' + (r.name || '') + (r.is_owner ? ' <span class="pill on">我</span>' : '') + '</td>'
         + '<td>' + (r.plan === 'unlimited' ? '开发者' : r.plan) + '</td>'
-        + '<td class="num">' + r.rounds + '</td>'
+        + '<td class="num">' + (r.req_count || 0) + '</td>'
+        + '<td class="num">' + fmt(r.rounds) + '</td>'
         + '<td class="num">' + fmt(r.tok_in) + '</td>'
         + '<td class="num">' + fmt(r.tok_out) + '</td>'
         + '<td class="num"><b>' + fmt(r.tok_total) + '</b></td>'
@@ -137,10 +171,26 @@ ADMIN_HTML = r"""<!DOCTYPE html>
               + '<span class="pill">' + pct.toFixed(1) + '% / ' + fmt(r.limit) + '</span>')
         + '</td>'
         + '<td class="num">￥' + (r.cost || 0).toFixed(4) + '</td>'
+        + '<td><details><summary style="cursor:pointer">点开</summary>' + renderDetail(r, d) + '</details></td>'
         + '</tr>';
     });
     h += '</table><div class="empty">合计 ' + fmt(d.total_tok) + ' token，参考成本 ￥'
        + (d.total_cost || 0).toFixed(4) + '　（' + d.day + '，维度：' + d.dim + '，存储：' + d.backend + '）</div>';
+    // 请求明细：全部请求的流水（本轮token=0 表示该请求未走 LLM，如攻略/计算）
+    var rc = d.recent || [];
+    h += '<div style="margin-top:12px;font-size:12px;color:var(--soft);font-weight:600">'
+       + '请求明细（最近 ' + rc.length + ' 条 · 内存保留，重启清零）</div>';
+    if (!rc.length) {
+      h += '<div class="empty">暂无请求记录。</div>';
+    } else {
+      h += '<table style="margin-top:6px"><tr><th>日期</th><th>时间</th><th>uid</th><th>备注</th><th class="num">本轮token</th></tr>';
+      rc.slice().reverse().forEach(function (e) {
+        h += '<tr><td class="mono">' + (e.date || '') + '</td><td class="mono">' + e.ts + '</td>'
+          + '<td class="mono">' + e.key + '</td>'
+          + '<td>' + (e.name || '') + '</td><td class="num">' + fmt(e.tok) + '</td></tr>';
+      });
+      h += '</table>';
+    }
     $('usage').innerHTML = h;
   }
 
