@@ -62,6 +62,7 @@ schema_used_range.txt
 # ---- IDE / OS / 工具 ----
 .idea/
 .vscode/
+.codebuddy/
 .codex/
 .workbuddy/
 .DS_Store
