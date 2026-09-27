@@ -1562,7 +1562,7 @@ def _llm_intent_classify(msg: str, recent=None):
                     '怎么获得舰灵/求攻略，含"XX攻略""boss怎么打"）；\n'
                     'theme_intro=询问玩法或系统是什么、求介绍（XX是什么玩法/XX介绍）\n'
                     'encounter=遭遇战模拟（6人打拉古兹boss，含遭遇战模拟参数）\n'
-                    'pvp=模拟PVP（6人打防守角色）\n'
+                    'pvp=模拟组队（6人打防守角色）\n'
                     'query=查询舰灵数据、筛选或实时资料（查面板/哪些舰灵有XX/属性求和/天赋反查/'
                     '看看某舰灵/按舰种或阵营或稀有度筛选角色/活动/天气/时间）；\n'
                     'compare=两个及以上舰灵横向比较（对比A和B/比较A与B/A和B哪个好/A还是B/谁更强/两个哪个值得）\n'
@@ -2137,10 +2137,10 @@ _THEME_INTRO = {
     '拂晓': ('拂晓 游戏 介绍 玩法 舰灵', '想进一步了解什么？①入坑/新手攻略 ②某个舰灵/角色 ③具体玩法（练级/装备/竞技场等）？'),
     '这游戏': ('拂晓 游戏 介绍 玩法 舰灵', '想进一步了解什么？①入坑/新手攻略 ②某个舰灵/角色 ③具体玩法（练级/装备/竞技场等）？'),
     '遭遇战': ('遭遇战 玩法 介绍 规则', '指挥官是想**算遭遇战伤害**（遭遇战模拟），还是查**遭遇战攻略**（怎么打/配队/冲榜）？'),
-    '竞技场': ('争锋竞技场 玩法 介绍 规则', '是想**模拟PVP**伤害、查**竞技场攻略**（阵容/防守），还是看**天赋加点**？'),
-    '争锋': ('争锋竞技场 玩法 介绍 规则', '是想**模拟PVP**伤害、查**竞技场攻略**（阵容/防守），还是看**天赋加点**？'),
-    'jjc': ('争锋竞技场 玩法 介绍 规则', '是想**模拟PVP**伤害、查**竞技场攻略**（阵容/防守），还是看**天赋加点**？'),
-    'jzc': ('争锋竞技场 玩法 介绍 规则', '是想**模拟PVP**伤害、查**竞技场攻略**（阵容/防守），还是看**天赋加点**？'),
+    '竞技场': ('争锋竞技场 玩法 介绍 规则', '是想**模拟组队**伤害、查**竞技场攻略**（阵容/防守），还是看**天赋加点**？'),
+    '争锋': ('争锋竞技场 玩法 介绍 规则', '是想**模拟组队**伤害、查**竞技场攻略**（阵容/防守），还是看**天赋加点**？'),
+    'jjc': ('争锋竞技场 玩法 介绍 规则', '是想**模拟组队**伤害、查**竞技场攻略**（阵容/防守），还是看**天赋加点**？'),
+    'jzc': ('争锋竞技场 玩法 介绍 规则', '是想**模拟组队**伤害、查**竞技场攻略**（阵容/防守），还是看**天赋加点**？'),
     '练级': ('练级 玩法 练级点 经验', '是想查**练级攻略**（怎么练/去哪练），还是查**练级点**（18-7/19-5 等具体图）？'),
     '无尽海域': ('无尽海域 玩法 介绍', '是想查**无尽海域配队/攻略**，还是查**通关/层数**相关的？'),
     '拉古兹': ('拉古兹 专题 boss 介绍', '是想查**拉古兹boss攻略/图鉴**，还是**算某个boss的遭遇战伤害**？'),
@@ -2881,11 +2881,11 @@ def _handle_ship_attr_query(tools, msg, agent=None, overrides=None):
 
 
 def _pvp_form_reply():
-    """模拟PVP 空表单引导（6 人 + 旗舰 + 防守角色）。供 争锋竞技场/模拟PVP 伤害意图复用。
+    """模拟组队 空表单引导（6 人 + 旗舰 + 防守角色）。供 争锋竞技场/模拟组队 伤害意图复用。
 
     文案只做一句话引导：规则细节（不分前后排 / 不算支援技 / 无需 buff / 黑夜自动 = 120−白天）
     与填写说明统一由前端表单提示承载 —— 避免气泡与表单两处重复同一段话（用户口径 2026-09-23）。"""
-    return {'reply': '指挥官，模拟 PVP。请填写防守角色、白天时长与 6 人名单（含 1 名旗舰）：',
+    return {'reply': '指挥官，模拟组队。请填写防守角色、白天时长与 6 人名单（含 1 名旗舰）：',
             'tool_outputs': [], 'suggestions': [],
             'fill_form': [], 'encounter_form': [
                 {'key': 'defender', 'label': '防守角色', 'placeholder': '角色名', 'required': True, 'value': ''},
@@ -3390,7 +3390,7 @@ def _handle_calc_menu():
             {'label': '好感度', 'cmd': '好感度计算'},
             {'label': '索敌计算', 'cmd': '索敌线'},
             {'label': '经验值计算', 'cmd': '经验值计算'},
-            {'label': '模拟PVP', 'cmd': '模拟pvp'},
+            {'label': '模拟组队', 'cmd': '模拟pvp'},
         ],
         'fill_form': [], 'encounter_form': [], 'guide_files': [], 'guide_lib': '', 'ok': True,
     }
@@ -4165,7 +4165,7 @@ def route_work(tools, overrides, msg: str, agent=None, allow_intent_llm=True, up
         return _handle_daily_work()
 
     # 0. 计算工具菜单（用户口径 2026-09-13）：悬浮球「计算工具」→ 回复中弹窗子选项
-    # （角色伤害/好感度/索敌计算/经验值计算/模拟PVP）。必须早于 calc 门控——「计算工具」含「计算」。
+    # （角色伤害/好感度/索敌计算/经验值计算/模拟组队）。必须早于 calc 门控——「计算工具」含「计算」。
     if re.search(r'计算工具|计算菜单', msg):
         return _handle_calc_menu()
 
@@ -4298,8 +4298,8 @@ def route_work(tools, overrides, msg: str, agent=None, allow_intent_llm=True, up
         return {'reply': '模拟功能有两种：\n'
                          '①**遭遇战模拟**：6人组队打拉古兹boss，白天+时间轴排轴，求理论最高伤害（黑夜自动=150-白天）。'
                          '输入「遭遇战模拟 boss：嘉波 白天：60 前排：A B C 后排：D E F」即可。\n'
-                         '②**模拟PVP**：6人打1个防守角色，不分前后排、不算支援技，按CD自动循环算定时总伤害。'
-                         '输入「模拟pvp 防守：俾斯麦 时间：60 前排：A B C 后排：D E F」即可。',
+                         '②**模拟组队**：6人打1个防守角色，不分前后排、不算支援技，按CD自动循环算定时总伤害。'
+                         '输入「模拟组队 防守：俾斯麦 时间：60 前排：A B C 后排：D E F」即可。',
                 'tool_outputs': [], 'suggestions': [], 'fill_form': [], 'encounter_form': [],
                 'guide_files': [], 'guide_lib': '', 'ok': True}
     if _li is None and _bare in ('boss', 'BOSS', 'boss呢'):
@@ -4426,12 +4426,12 @@ def route_work(tools, overrides, msg: str, agent=None, allow_intent_llm=True, up
                 'guide_files': [], 'guide_lib': '*', 'ok': True}
 
     # ---- 单体角色打 boss 伤害：不支持（boss 伤害仅存在于组队玩法）----
-    # 「飞龙打boss」类误送单人计算流程 → 诚实引导到遭遇战模拟 / 模拟PVP，不落「系统处理。」
+    # 「飞龙打boss」类误送单人计算流程 → 诚实引导到遭遇战模拟 / 模拟组队，不落「系统处理。」
     if re.search(r'打\s*boss|对\s*boss|boss\s*伤害|boss\s*输出', msg, re.I) \
             and not re.search(r'遭遇战|组队|模拟\s*pvp|pvp|副本', msg, re.I):
         return {'reply': '单个角色打 boss 的伤害暂不支持计算——boss 伤害只在**组队玩法**里：\n'
                          '①**遭遇战模拟**：6人打拉古兹boss（输入「遭遇战模拟 boss：嘉波 白天：60 前排：A B C 后排：D E F」）；\n'
-                         '②**模拟PVP**：6人打1个防守角色（输入「模拟pvp 防守：俾斯麦 时间：60 前排：A B C 后排：D E F」）。',
+                         '②**模拟组队**：6人打1个防守角色（输入「模拟组队 防守：俾斯麦 时间：60 前排：A B C 后排：D E F」）。',
                 'tool_outputs': [], 'suggestions': [], 'fill_form': [], 'encounter_form': [],
                 'guide_files': [], 'guide_lib': '', 'ok': True}
 
@@ -4532,7 +4532,7 @@ def route_work(tools, overrides, msg: str, agent=None, allow_intent_llm=True, up
         r = _handle_user_ship(tools, msg)
         if r is not None:
             return r
-    # ---- 组队伤害计算优先：遭遇战模拟 / 模拟PVP（不落入单人计算流程）----
+    # ---- 组队伤害计算优先：遭遇战模拟 / 模拟组队（不落入单人计算流程）----
     if '组队' in msg and not overrides.get('calc_state', {}).get('attacker'):
         # 组队建议/推荐/搭配 → 引导查相关攻略（非模拟）
         if re.search(r'建议|推荐|搭配|怎么组|如何组|怎么配|如何配|阵容|配置|求攻略|攻略|求教|求助|求推荐', msg):
@@ -4544,10 +4544,10 @@ def route_work(tools, overrides, msg: str, agent=None, allow_intent_llm=True, up
                     'fill_form': [], 'encounter_form': [], 'guide_files': [], 'guide_lib': '*', 'ok': True}
         # 已有明确子模式（遭遇战/boss/pvp/防守/前排参数）→ 交给下方组队分支
         if not ('pvp' in msg.lower() or ('防守' in msg or '前排' in msg or '遭遇战' in msg or 'boss' in msg)):
-            return {'reply': '组队伤害计算：①遭遇战模拟（6人打boss，拉古兹+时间轴寻优最高伤害）；②模拟PVP（6人打防守角色，无buff定时总伤害）。要哪种？',
+            return {'reply': '组队伤害计算：①遭遇战模拟（6人打boss，拉古兹+时间轴寻优最高伤害）；②模拟组队（6人打防守角色，无buff定时总伤害）。要哪种？',
                     'tool_outputs': [], 'suggestions': [
                         {'label': '遭遇战模拟', 'tool': 'encounter_simulator'},
-                        {'label': '模拟PVP', 'tool': 'simulate_pvp'}],
+                        {'label': '模拟组队', 'tool': 'simulate_pvp'}],
                     'fill_form': [], 'encounter_form': [], 'guide_files': [], 'guide_lib': '', 'ok': True}
     # ---- 多角色求和：仅支持「索敌」之和（其他属性友好拒绝，避免交回 LLM 乱算） ----
     # 必须早于单角色查询分支，避免「丹阳+女灶神」被单角色逻辑截断
@@ -4803,11 +4803,11 @@ def route_work(tools, overrides, msg: str, agent=None, allow_intent_llm=True, up
                         or (_li is None and (not _calc_rq)
                             and (_calc_strong or (_calc_weak and _llm_is_calc_request(msg))))))
     # 组队意图：跳过单人计算流程（由下方遭遇战/PVP 分支处理）。
-    # 遭遇战/boss/模拟PVP 的明确意图词优先于"算…伤害"——"算遭遇战伤害"应弹遭遇战表单
+    # 遭遇战/boss/模拟组队 的明确意图词优先于"算…伤害"——"算遭遇战伤害"应弹遭遇战表单
     # 而非被 _calc_strong（含"伤害"）截进单人计算流程
     is_team = ((('组队' in msg) or bool(re.search(r'遭遇战|boss|BOSS|模拟\s*pvp', msg, re.I)))
                and not overrides.get('calc_state', {}).get('attacker'))
-    # ---- 争锋竞技场 / 模拟PVP 伤害意图 → 直接弹模拟PVP表单（避免回落 LLM「系统处理。」）----
+    # ---- 争锋竞技场 / 模拟组队 伤害意图 → 直接弹模拟组队表单（避免回落 LLM「系统处理。」）----
     # 关键词驱动（不依赖 LLM 意图分类），兜住 LLM 把「争锋竞技场伤害」判成 calc 的情况
     # 排除词补充（2026-09-24）："争锋竞技场的伤害怎么算 / 排行在哪看 / 收益如何"是**咨询**，
     # 不该弹模拟表单；只有真正要发起模拟时才进（残留的同类误伤）。
@@ -4843,11 +4843,14 @@ def route_work(tools, overrides, msg: str, agent=None, allow_intent_llm=True, up
     # 0c. 具体装备查询：停用 query_equipment，给「常用装备速览」表 —— 已上移至玩法介绍
     # 拦截器之前（装备词问法会被 _handle_theme_intro 抢成「装备系统」介绍）
 
-    # 4c. 模拟PVP：无完整参数 → 表单引导；有参数（防守/前排）→ 直接模拟
+    # 4c. 模拟组队：无完整参数 → 表单引导；有参数（防守/前排）→ 直接模拟
     # 排除咨询类（天赋/加点/攻略/推荐/阵容/怎么玩 等）：这些是 PVP 攻略，不触发模拟
     _pvp_ask = re.search(r'天赋|加点|攻略|推荐|怎么[玩打配点加]|如何[玩打配点加]|阵容|强度|谁', msg)
-    if _li_is('pvp') and (('pvp' in msg.lower() or ('组队' in msg and ('防守' in msg or '前排' in msg)))
-            and not _pvp_ask):
+    # 用户口径 2026-09-27：功能名改为「模拟组队」，显式写「模拟组队 / 模拟pvp」时
+    # 不再依赖 LLM 意图分类，关键词直接确定性进入表单/模拟分支（兼容旧「模拟pvp」）。
+    if (_li_is('pvp') or re.search(r'模拟\s*(组队|pvp)', msg, re.I)) \
+            and (('pvp' in msg.lower() or ('组队' in msg and ('防守' in msg or '前排' in msg)))
+                 and not _pvp_ask):
         tool = _tool(tools, 'simulate_pvp')
         if tool:
             if ('防守' in msg or 'defender' in msg.lower()) and '前排' in msg:

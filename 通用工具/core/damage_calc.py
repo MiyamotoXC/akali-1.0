@@ -111,7 +111,8 @@ class SimpleDamageCalculator:
                               course: str = '同航',
                               air_status: str = '均势',
                               ammo_type: str = '通常',
-                              enemy: Dict = None) -> Dict[str, Any]:
+                              enemy: Dict = None,
+                              is_normal: bool = False) -> Dict[str, Any]:
         """计算伤害（enemy=None 时为原始伤害口径）
 
         使用 engine.compute_single_type_factors 计算，确保与用户端逻辑完全相同。
@@ -171,6 +172,7 @@ class SimpleDamageCalculator:
                 hit_count=hit_count,
                 fallback_ammo=str(attacker.get('ammo_type', '') or ''),
                 fallback_weapon=str(attacker.get('secondary_weapon', '') or ''),
+                is_normal=is_normal,
             )
 
             # 无防守方口径：修正防御衰减和减伤为默认值

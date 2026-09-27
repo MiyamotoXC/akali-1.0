@@ -22,6 +22,7 @@ from core.constants import (
 )
 from core.combat_data import CombatData
 from core import formula_engine as engine
+from core.reload_cd import reload_reduced_cd
 
 
 def _modifier_show_line(modifier_key: str, ammo_type: str, armor: str, modifier: float) -> str:
@@ -198,13 +199,13 @@ class DamageCalculator:
         )
 
     @staticmethod
-    def compute_damage_increase(data: CombatData, damage_type: str, course: str, air_status: str, enemy: Dict = None, ammo_type: str = "") -> float:
+    def compute_damage_increase(data: CombatData, damage_type: str, course: str, air_status: str, enemy: Dict = None, ammo_type: str = "", is_normal: bool = False) -> float:
         enemy_ship_type = enemy.get("ship_type", "") if enemy else ""
         return engine.compute_damage_increase(
             data.buffs, damage_type, course, air_status,
             data.ship_type, enemy_ship_type=enemy_ship_type,
             ship_type_bonus=getattr(data, 'ship_type_damage_bonus', None),
-            ammo_type=ammo_type,
+            ammo_type=ammo_type, is_normal=is_normal,
         )
 
     @staticmethod
@@ -282,6 +283,7 @@ class DamageCalculator:
             enemy: Dict,
             course: str,
             air_status: str,
+            is_normal: bool = False,
             attack_expr: Optional[str] = None,
             crit_expect: Optional[float] = None,
             crit_rate: Optional[float] = None,
@@ -329,7 +331,7 @@ class DamageCalculator:
             data.buffs, damage_type, course, air_status, data.ship_type,
             enemy_ship_type=enemy.get("ship_type", ""),
             ship_type_bonus=getattr(data, 'ship_type_damage_bonus', None),
-            ammo_type=_ma,
+            ammo_type=_ma, is_normal=is_normal,
         )
         enemy_reduction = engine.compute_damage_reduction(
             damage_type, enemy, ship_type=data.ship_type,
@@ -660,9 +662,14 @@ class DamageCalculator:
             damage_type = attack_dict.get("preset_damage_type") or dmg_map.get(weapon_type, "炮击")
             factors = DamageCalculator._compute_single_type_factors(
                 data, attack_dict, damage_type, weapon_type, ammo_type,
-                enemy, course, air_status
+                enemy, course, air_status, is_normal=True
             )
             factors["index"] = idx + 1
+            # 装填计入伤害链路：普攻 CD 按面板「装填」缩减（≤25%），影响点燃触发频率
+            _base_cd = float(attack_dict.get("cd", 0) or 0)
+            if _base_cd > 0:
+                _rv = float((data.attack_panel or {}).get("装填", 0) or 0)
+                factors["cd"] = reload_reduced_cd(_rv, _base_cd)
             results.append(factors)
         return results
 

@@ -34,6 +34,7 @@ from collections import defaultdict
 from core.damage_formula import DamageCalculator
 from core.output_handler import OutputHandler
 from core.skill_buff_extractor import match_ship_class, _SPECIAL_TYPE_MEMBERS
+from core.reload_cd import reload_reduced_cd
 
 
 # boss 数据文件路径：拉古兹.json 为人工维护的源数据（只读），放 源文件/
@@ -840,9 +841,13 @@ def _simulate_encounter_buff_aware(attackers, boss, day_time, course, air,
             else:
                 self_windows[idx].append(entry)
 
+    # 装填计入伤害链路：普攻 CD 按各角色面板「装填」缩减（≤25%），影响时间轴触发频率
+    reload_vals = [float((getattr(atk, 'attack_panel', {}) or {}).get('装填', 0) or 0)
+                   for atk in attackers]
     # ---- 普攻计时器：按"前排在场"推进；切到前排立即发射一次并重置 CD（q-1：后排不普攻）----
-    normal_cds = [[float(na.get("cd", 0) or 0) for na in (atk.normal_attacks or [])]
-                  for atk in attackers]
+    normal_cds = [[reload_reduced_cd(reload_vals[idx], float(na.get("cd", 0) or 0))
+                   for na in (atk.normal_attacks or [])]
+                  for idx, atk in enumerate(attackers)]
     basic_next = [None] * 6
     init_front = front_set_at(0)
     for idx in range(6):
@@ -1658,7 +1663,7 @@ def build_detail_module(attackers: List, boss: dict, day_time: float,
     lines = []
     lines.append("=" * 64)
     if is_pvp:
-        lines.append("        模拟PVP · 详细伤害计算（逐次释放 · 含技能绑定 buff 窗口）")
+        lines.append("        模拟组队 · 详细伤害计算（逐次释放 · 含技能绑定 buff 窗口）")
     else:
         lines.append("        详细伤害计算（逐次释放 · 含技能绑定 buff 窗口）")
     lines.append("=" * 64)
@@ -1680,7 +1685,7 @@ def build_detail_module(attackers: List, boss: dict, day_time: float,
     lines.append("      已去掉「航母类 2s」旧机制，所有伤害延迟恒为 1s。标注形如")
     lines.append("      「释放Xs→结算Ys · 延迟1s」。")
     if is_pvp:
-        lines.append("      模拟PVP：全出战位、无交换、不算支援技；天赋=默认PVP推荐。")
+        lines.append("      模拟组队：全出战位、无交换、不算支援技；天赋=默认PVP推荐。")
     else:
         lines.append(f"      黑夜 boss 装甲{_NIGHT_ARMOR_DESC}、航母/轻母/装母禁用；普攻作紧凑汇总（详见各船普攻段）。")
     lines.append("")
@@ -1688,7 +1693,7 @@ def build_detail_module(attackers: List, boss: dict, day_time: float,
     # 全局 buff 来源
     lines.append("【全局 buff 来源】")
     if is_pvp:
-        lines.append("  · 拉古兹阵营增伤：无（模拟PVP 无拉古兹增伤）")
+        lines.append("  · 拉古兹阵营增伤：无（模拟组队 无拉古兹增伤）")
         if flagship_name and flagship_aura:
             aura_txt = "、".join(f"{k}{v:.0%}" if abs(v) < 1 else f"{k}{v:.0f}" for k, v in flagship_aura.items())
             lines.append(f"  · 旗舰光环（{flagship_name}）：{aura_txt}（已按范围/条件生效）")
@@ -1947,7 +1952,7 @@ def validate_encounter_input(app, boss_name, day_time, front_ships, back_ships,
 
 def validate_pvp_input(app, defender_name, day_time, front_ships, back_ships,
                        flagship_name=''):
-    """校验模拟PVP输入（与遭遇战同款：识别全部无法识别项）。
+    """校验模拟组队输入（与遭遇战同款：识别全部无法识别项）。
     field 取值：defender / day_time / front1~3 / back1~3 / flagship。
     战斗时长分白天/黑夜：白天由用户输入（0~120），黑夜 = 120 − 白天（自动推导）。"""
     errors = []
@@ -1996,7 +2001,7 @@ def validate_pvp_input(app, defender_name, day_time, front_ships, back_ships,
     else:
         # 组队 PVP 必须有旗舰（用户口径 2026-09-17）：未勾选旗舰 → 报错拦截
         errors.append({'field': 'flagship', 'label': '旗舰', 'raw': '',
-                       'message': '模拟PVP必须指定 1 名旗舰（在 6 人中勾选）'})
+                       'message': '模拟组队必须指定 1 名旗舰（在 6 人中勾选）'})
         resolved['flagship_name'] = ''
     return {'ok': len(errors) == 0, 'errors': errors, 'resolved': resolved}
 
@@ -2426,7 +2431,7 @@ def simulate_pvp(app, defender_name: str, day_time: float, front_ships: List[str
                  back_ships: List[str], flagship_name: str = '',
                  course: str = '同航', air: str = '均势',
                  night_time: float = None) -> str:
-    """模拟 PVP：6 人（可带 1 名旗舰）打 1 个防守角色。
+    """模拟组队：6 人（可带 1 名旗舰）打 1 个防守角色。
     规则（用户约定）：6 人一律按前排逻辑（普攻/通常技/必杀技，必杀按 CD 自动释放），
     不算支援技、无 buff 输入；天赋采用各角色默认 PVP 推荐点法（talent_pvp.json）。
     战斗时长：总时长固定 120s，分白天/黑夜两段——白天由用户输入（0~120），
@@ -2518,7 +2523,7 @@ def simulate_pvp(app, defender_name: str, day_time: float, front_ships: List[str
 
     lines = []
     lines.append("=" * 64)
-    lines.append(f"  模拟PVP：6人组队 → {enemy.get('name') or defender_name}")
+    lines.append(f"  模拟组队：6人组队 → {enemy.get('name') or defender_name}")
     lines.append(f"  战斗时长: 白天 {int(duration)}s | 黑夜 {int(night_time)}s | 总时长 {total_time}s"
                  f"（黑夜 = 120 - 白天） | 航向: {course} | 制空: {air} | 逐秒时间轴")
     lines.append("=" * 64)

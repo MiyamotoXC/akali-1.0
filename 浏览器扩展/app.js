@@ -12,6 +12,50 @@ window.AKALI_BOOT_ID = '__AKALI_BOOT_ID__';
     return _f(u, o);
   };
 })();
+
+// ===== 凭证持久化：localStorage 为主 + cookie 兜底（用户口径 2026-09-27）=====
+// 现象：老用户「页面挂久了 / 过几天再回来」被重新要求输入邀请码。
+// 根因：口令与设备标识**只存在 localStorage**，而 iOS Safari 的 ITP 会清掉
+//       「7 天以上未访问」站点的 localStorage（cookie 不受此策略影响）→ 页面
+//       把老用户当成新设备 → 自动注册被邀请码闸门拦下（/api/register 403，
+//       云端日志已实证）→ 弹「输入邀请码」遮罩。
+// 方案：口令 / 设备标识 / 邀请码 同时写一份一年期 cookie；读取时 localStorage
+//       缺失就回落 cookie 并回写 localStorage —— 做到「待再久也不用重新输入」。
+function _cookieRead(name) {
+  try {
+    const m = document.cookie.match(new RegExp('(?:^|;\\s*)' + name + '=([^;]*)'));
+    return m ? decodeURIComponent(m[1]) : '';
+  } catch (e) { return ''; }
+}
+function _cookieWrite(name, val) {
+  try {
+    document.cookie = name + '=' + encodeURIComponent(val)
+      + '; Max-Age=31536000; Path=/; SameSite=Lax'
+      + (location.protocol === 'https:' ? '; Secure' : '');
+  } catch (e) {}
+}
+function _cookieDel(name) {
+  try { document.cookie = name + '=; Max-Age=0; Path=/'; } catch (e) {}
+}
+// 读凭证：localStorage → cookie（命中 cookie 时回写 localStorage，后续走快路径）
+function credGet(key) {
+  let v = '';
+  try { v = localStorage.getItem(key) || ''; } catch (e) { v = ''; }
+  if (v) return v;
+  v = _cookieRead('akali_' + key);
+  if (v) { try { localStorage.setItem(key, v); } catch (e) {} }
+  return v;
+}
+// 写凭证：localStorage + cookie 双份
+function credSet(key, val) {
+  try { localStorage.setItem(key, val); } catch (e) {}
+  _cookieWrite('akali_' + key, val);
+}
+function credDel(key) {
+  try { localStorage.removeItem(key); } catch (e) {}
+  _cookieDel('akali_' + key);
+}
+
 const messagesEl = document.getElementById('messages');
 const inputEl = document.getElementById('input');
 const sendBtn = document.getElementById('sendBtn');
@@ -38,7 +82,7 @@ function panelOverrides() { return ARKLY_PANEL_STORE === 'client' ? panelLSLoad(
 function panelMerge(base, ov) { return Object.assign({}, base || {}, ov || {}); }
 
 async function upFetch(url, opts) {
-  const _t = localStorage.getItem('arkly_api_token') || new URLSearchParams(location.search).get('token') || '';
+  const _t = credGet('arkly_api_token') || new URLSearchParams(location.search).get('token') || '';
   const _h = Object.assign({ 'Content-Type': 'application/json' }, _t ? { 'X-API-Token': _t } : {});
   const r = await fetch(url, Object.assign({ headers: _h }, opts || {}));
   if (!r.ok) throw new Error('HTTP ' + r.status);
@@ -291,8 +335,8 @@ function addMsg(role, text, avatarUrl) {
   wrap.className = 'msg ' + role;
   // 自己的头像挂提示：双击（手机长按）可看自己的 uid 与口令（事件见下方委托绑定）
   const ava = role === 'user'
-    ? '<img src="' + esc(USER_AVATAR) + '" alt="指挥官" title="双击（手机长按）查看我的 UID 与口令">'
-    : '<img src="' + esc(resolveAsset(avatarUrl || ARKLY_AVATAR)) + '" alt="阿卡莉">';
+    ? '<img loading="lazy" src="' + esc(USER_AVATAR) + '" alt="指挥官" title="双击（手机长按）查看我的 UID 与口令">'
+    : '<img loading="lazy" src="' + esc(resolveAsset(avatarUrl || ARKLY_AVATAR)) + '" alt="阿卡莉">';
   wrap.innerHTML = '<div class="ava">' + ava + '</div>'
                  + '<div class="bubble">' + (role === 'user' ? '' : '<div class="role-tag">阿卡莉</div>')
                  + render(text) + '</div>';
@@ -313,7 +357,7 @@ function _maskToken(s) {
 
 function showMyIdentity() {
   let uid = '';
-  const token = localStorage.getItem('arkly_api_token') || '';
+  const token = credGet('arkly_api_token') || '';
   const ov = document.createElement('div');
   ov.className = 'me-card-mask';
   ov.innerHTML =
@@ -389,12 +433,12 @@ messagesEl.addEventListener('touchstart', function (e) {
 function openGuidePreview(g) {
   const ext = (g.path.split('.').pop() || '').toLowerCase();
   // 预览/下载走浏览器直接请求（iframe/img/a），须在 URL 上带 token（外部访问时防 401）
-  const t = localStorage.getItem('arkly_api_token') || '';
+  const t = credGet('arkly_api_token') || '';
   const q = t ? '?token=' + encodeURIComponent(t) : '';
   const url = resolveAsset('/kb/' + encodeURI(g.path));
   let body = '';
   if (ext === 'png' || ext === 'jpg' || ext === 'jpeg') {
-    body = '<img src="' + url + '" alt="' + esc(g.title) + '">';
+    body = '<img loading="lazy" src="' + url + '" alt="' + esc(g.title) + '">';
   } else if (ext === 'docx' || ext === 'doc') {
     // 预览路由 /kb_html/ 不在 ASSET_BASE 的 /kb/ 映射内：跨域/扩展场景需显式拼 API 基址
     const _htmlBase = String(window.ARKLY_API_BASE || '').replace(/\/$/, '');
@@ -512,7 +556,7 @@ async function openGuideLib(focusKw, msgEl, scopeFiles) {
 async function openShipStory(encodedName) {
   const name = decodeURIComponent(encodedName || '');
   if (!name) return;
-  const ta = localStorage.getItem('arkly_api_token') || '';
+  const ta = credGet('arkly_api_token') || '';
   const qa = ta ? '?token=' + encodeURIComponent(ta) : '';
   try {
     const resp = await fetch('/api/ship_story?name=' + encodeURIComponent(name) + qa, { headers: _apiHeaders() });
@@ -592,7 +636,7 @@ function sbTabList(ships) {
 }
 function sbAvatarUrl(p) {
   if (!p) return resolveAsset('/kb/图片素材/阿卡莉.png');
-  const t = localStorage.getItem('arkly_api_token') || '';
+  const t = credGet('arkly_api_token') || '';
   const q = t ? '?token=' + encodeURIComponent(t) : '';
   return resolveAsset('/avatar/' + String(p).replace(/\\/g, '/')) + q;
 }
@@ -701,7 +745,7 @@ async function sbShowDetail(name) {
     if (!d.found) { body.innerHTML = '<div class="sb-empty">未找到该角色。</div>'; return; }
     let html = '<div class="sb-detail-actions"><button class="sb-tab" id="sbBack">← 返回名单</button></div>'
       + '<div class="sb-detail">';
-    if (d.avatar) html += '<img class="sb-detail-ava" src="' + sbAvatarUrl(d.avatar) + '" alt="' + esc(d.name) + '">';
+    if (d.avatar) html += '<img loading="lazy" class="sb-detail-ava" src="' + sbAvatarUrl(d.avatar) + '" alt="' + esc(d.name) + '">';
     html += '<div class="sb-detail-text">' + esc(d.text || '') + '</div></div>';
     if (d.story) html += '<div class="sb-detail-actions"><button class="story-btn" data-story="'
       + encodeURIComponent(d.name) + '">📖 历史上的故事</button></div>';
@@ -728,19 +772,19 @@ function renderSecretaryReply(data, msgEl) {
   let html = '<div class="role-tag">阿卡莉</div>';
   // 伤害公式一图流：后端调用伤害计算工具时固定附带（top_image），渲染在回复文本之前
   if (data.top_image && data.top_image.path) {
-    const tf = localStorage.getItem('arkly_api_token') || '';
+    const tf = credGet('arkly_api_token') || '';
     const qf = tf ? '?token=' + encodeURIComponent(tf) : '';
-    html += '<div class="calc-formula-wrap"><img class="calc-formula-img" src="' + resolveAsset('/kb/' + esc(data.top_image.path)) + qf
+    html += '<div class="calc-formula-wrap"><img loading="lazy" class="calc-formula-img" src="' + resolveAsset('/kb/' + esc(data.top_image.path)) + qf
       + '" alt="' + esc(data.top_image.title || '伤害公式一图流') + '"></div>';
   }
   html += render(data.reply || '（无回复）');
   // 头像标记 <<AVATAR>>path|title：查询角色时由后端插入到「--- 名字 ---」行后，
   // render() 已把 < 转义为 &lt;，这里把转义后的标记替换为头像图片（名字下面的位置）
   if (/&lt;&lt;AVATAR&gt;&gt;/.test(html)) {
-    const ta = localStorage.getItem('arkly_api_token') || '';
+    const ta = credGet('arkly_api_token') || '';
     const qa = ta ? '?token=' + encodeURIComponent(ta) : '';
     html = html.replace(/&lt;&lt;AVATAR&gt;&gt;([^<\n]+?)\|([^<\n]+)/g, function (m, p, t) {
-      return '<div class="avatar-wrap"><img class="avatar-img" src="' + resolveAsset('/avatar/' + p.replace(/\\/g, '/')) + qa
+      return '<div class="avatar-wrap"><img loading="lazy" class="avatar-img" src="' + resolveAsset('/avatar/' + p.replace(/\\/g, '/')) + qa
         + '" alt="' + t + '"></div>';
     });
   }
@@ -763,7 +807,7 @@ function renderSecretaryReply(data, msgEl) {
     html += '<div class="fill-hint">';
     html += '<div class="hint-title">默认誓约满好感带20%全增伤和20%全减伤。数值支持百分比（如 +20%）和负数（如 炮击伤害-20%）；面板相关支持固定值和百分比，示例：航空+15%，航空+200；多字段用顿号、逗号或空格分隔，示例：全伤害+15%、暴击率+20%。字段无法识别将提示重新填空输入。</div>';
     html += '<div class="hint-group"><b>攻击方buff</b>（可选）：</div>';
-    html += '<div class="hint-group">增伤类：<code>全伤害</code> <code>炮击伤害</code> <code>雷击伤害</code> <code>航空伤害</code> <code>轰炸伤害</code> <code>鱼雷伤害</code> <code>近战伤害</code> <code>高平炮伤害</code></div>';
+    html += '<div class="hint-group">增伤类：<code>全伤害</code> <code>炮击伤害</code> <code>雷击伤害</code> <code>航空伤害</code> <code>轰炸伤害</code> <code>鱼雷伤害</code> <code>近战伤害</code> <code>高平炮伤害</code> <code>普攻伤害</code></div>';
     html += '<div class="hint-group">大小型加成：<code>对小型伤害增加</code> <code>对中型伤害增加</code> <code>对大型伤害增加</code></div>';
     html += '<div class="hint-group">舰种专属增伤：<code>对驱逐伤害增加</code> <code>对巡洋伤害增加</code> <code>对战列伤害增加</code> <code>对航母伤害增加</code> <code>对轻母伤害增加</code> <code>对雷巡伤害增加</code> <code>对战巡伤害增加</code> <code>对装母伤害增加</code></div>';
     html += '<div class="hint-group">注：拉古兹增伤由角色技能自带（无需输入），仅在遭遇战模式生效</div>';
@@ -912,7 +956,7 @@ function renderSecretaryReply(data, msgEl) {
     // 按表单字段区分：PVP（defender 字段）显示 PVP 提示，遭遇战（boss 字段）显示遭遇战提示
     const isPvpForm = data.encounter_form.some(f => f.key === 'defender');
     if (isPvpForm) {
-      html += '<div class="hint-title">模拟PVP：选 6 人（不分前后排、不算支援技，普攻/通常技/必杀技）、1 名旗舰、1 个防守角色，无需 buff，直接计算一定时间内的全队伤害。</div>';
+      html += '<div class="hint-title">模拟组队：选 6 人（不分前后排、不算支援技，普攻/通常技/必杀技）、1 名旗舰、1 个防守角色，无需 buff，直接计算一定时间内的全队伤害。</div>';
       html += '<div class="hint-group" style="margin-top:6px"><b>战斗时长</b>：总时长 120s，分「白天」与「黑夜」——填白天（0~120 秒），黑夜自动 = 120 − 白天，无需输入。</div>';
       html += '<div class="hint-group" style="margin-top:6px"><b>旗舰</b>：在任意角色名旁勾选「旗舰」（有且仅能选 1 个），该角色的旗舰技光环将对全队生效。</div>';
     } else {
@@ -1050,7 +1094,7 @@ function renderSecretaryReply(data, msgEl) {
       if (isPvp) {
         if (!defenderVal) { alert('请填写防守角色名'); return; }
         if (front.length !== 3 || front.some(v => !v) || back.length !== 3 || back.some(v => !v)) { alert('请填写全部 6 个角色名'); return; }
-        if (!flagshipVal) { alert('模拟PVP必须指定 1 名旗舰（在角色名右侧勾选「旗舰」）'); return; }
+        if (!flagshipVal) { alert('模拟组队必须指定 1 名旗舰（在角色名右侧勾选「旗舰」）'); return; }
         if (front.concat(back).indexOf(flagshipVal) === -1) { alert('旗舰必须是这 6 个角色之一'); return; }
         const dayNum = parseFloat(dayVal);
         if (dayVal === '' || isNaN(dayNum) || dayNum < 0 || dayNum > 120) { alert('请填写白天战斗时长（0~120 秒，黑夜自动 = 120 - 白天）'); return; }
@@ -1078,7 +1122,7 @@ function renderSecretaryReply(data, msgEl) {
   if (data.scout_form) {
     html += '<div class="fill-hint">';
     html += '<div class="hint-title">索敌计算：选模式，填参数。</div>';
-    html += '<div class="hint-group">① <b>数值索敌线</b>：填敌方索敌数值，算 T优 / 不T劣 线 + 各航向区间 buff。</div>';
+    html += '<div class="hint-group">① <b>数值索敌线</b>：填我方索敌值，分别算「我方进攻/敌方防守」「敌方进攻/我方防守」的 T优 / T劣 线（不列具体 buff）。</div>';
     html += '<div class="hint-group">② <b>队伍最高索敌</b>：<b>必须填满 6 名角色</b>；每角色 = 基础索敌×(1+各组索敌天赋%之和) + 98×2 + 额外索敌，再 ×乘算系数，求和下取整。1/2/3/4 每组各可选 1 个索敌天赋。</div>';
     html += '<div class="hint-group">例：<code>胡德·改 14*3+10 1.1</code> </div>';
     html += '</div>';
@@ -1089,7 +1133,7 @@ function renderSecretaryReply(data, msgEl) {
           + '</div>';
     // 模式一：数值索敌线
     html += '<div class="scout-pane" data-pane="line">';
-    html += '<div class="fill-row"><label class="fill-label">敌方索敌数值 <span class="fill-req">*</span></label>'
+    html += '<div class="fill-row"><label class="fill-label">我方索敌数值 <span class="fill-req">*</span></label>'
           + '<input class="fill-input" data-key="scout_value" placeholder="如 1000"></div>';
     html += '<button class="fill-submit">算索敌线</button></div>';
     // 模式二：队伍最高索敌（6 名角色全部必填，额外算式/系数可留空）
@@ -1138,7 +1182,7 @@ function renderSecretaryReply(data, msgEl) {
       pane.querySelector('.fill-submit').addEventListener('click', () => {
         if (mode === 'line') {
           const v = (pane.querySelector('.fill-input[data-key="scout_value"]').value || '').trim();
-          if (!v) { alert('请填写敌方索敌数值'); return; }
+          if (!v) { alert('请填写我方索敌数值'); return; }
           sendChat('索敌 ' + v);
           return;
         }
@@ -1264,9 +1308,9 @@ function renderSecretaryReply(data, msgEl) {
   // 表情包（sticker）：后端返回时直接渲染图片（如资源不足追问 → 「氪啊」），
   // 不走 guide_files/攻略面板，避免被攻略意图门控清除
   if (data.sticker && data.sticker.path) {
-    const t2 = localStorage.getItem('arkly_api_token') || '';
+    const t2 = credGet('arkly_api_token') || '';
     const q2 = t2 ? '?token=' + encodeURIComponent(t2) : '';
-    html += '<div class="sticker-wrap"><img class="sticker-img" src="' + resolveAsset('/kb/' + esc(data.sticker.path)) + q2
+    html += '<div class="sticker-wrap"><img loading="lazy" class="sticker-img" src="' + resolveAsset('/kb/' + esc(data.sticker.path)) + q2
       + '" alt="' + esc(data.sticker.title || '表情包') + '"></div>';
   }
   msgEl.querySelector('.bubble').innerHTML = html;
@@ -1323,15 +1367,15 @@ function renderSecretaryReply(data, msgEl) {
 // 会话隔离：浏览器本地生成稳定 session_id（localStorage），多人/多标签互不串；
 // token 鉴权：支持 URL 带 ?token=xxx（自动记忆）或 localStorage 存 API_TOKEN
 function _sessionId() {
-  let sid = localStorage.getItem('arkly_session_id');
-  if (!sid) { sid = 'web-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8); localStorage.setItem('arkly_session_id', sid); }
+  let sid = credGet('arkly_session_id');
+  if (!sid) { sid = 'web-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8); credSet('arkly_session_id', sid); }
   return sid;
 }
 function _apiHeaders() {
   const h = { 'Content-Type': 'application/json' };
   const q = new URLSearchParams(location.search);
-  const t = localStorage.getItem('arkly_api_token') || q.get('token') || '';
-  if (t) { localStorage.setItem('arkly_api_token', t); h['X-API-Token'] = t; }
+  const t = credGet('arkly_api_token') || q.get('token') || '';
+  if (t) { credSet('arkly_api_token', t); h['X-API-Token'] = t; }
   return h;
 }
 // 算力提醒（用户口径 2026-09-25）：用户**不需要常驻查看**用量 ——
@@ -1364,14 +1408,14 @@ function checkQuotaAlert() {
 document.addEventListener('DOMContentLoaded', checkQuotaAlert);
 // 功能菜单（悬浮球）：默认位于标题栏最右侧，可拖动换位（位置不持久化，页面级）；
 // 短按（未拖动）展开/收起菜单；查角色→直接开角色面板（不发对话），
-// 计算工具→发指令后端在回复中弹子菜单（角色伤害/好感度/索敌计算/经验值计算/模拟PVP），
+// 计算工具→发指令后端在回复中弹子菜单（角色伤害/好感度/索敌计算/经验值计算/模拟组队），
 // 查攻略/遭遇战模拟→发对应指令。好感度表单由后端 favor_form 标记、索敌表单由 scout_form
 // 标记、经验值表单由 exp_form 标记触发（菜单项全部来自后端 suggestions，前端不硬编码）。
 var fabWrap = document.getElementById('fabWrap');
 var fabBall = document.getElementById('fabBall');
 var fabMenu = document.getElementById('fabMenu');
 var FAB_PAD = 20, FAB_DEF_TOP = 8;   // 默认位：标题栏（72px）内右侧居中
-function fabSize() { return window.matchMedia('(max-width: 640px)').matches ? 54 : 56; }   // 与手机端媒体查询的 .fab-ball 尺寸同步
+function fabSize() { return window.matchMedia('(max-width: 640px)').matches ? 46 : 72; }   // 与媒体查询的 .fab-ball 尺寸同步
 function fabClamp(x, y) {
   var s = fabSize();
   return [Math.min(Math.max(x, FAB_PAD), window.innerWidth - s - FAB_PAD),
@@ -1425,6 +1469,7 @@ document.querySelectorAll('#fabMenu .sug-btn').forEach(function (btn) {
     fabWrap.classList.remove('open');
     var cmd = btn.dataset.cmd;
     if (cmd === '查角色') { openShipBrowser(); return; }   // 「查角色」直接开角色面板，不发对话
+    if (cmd === '退出') { requestExit(); return; }          // 「退出」关闭网页，不触发后端退出/清记忆
     sendChat(cmd);   // 查攻略/计算工具/遭遇战模拟 → 发对应指令，后端按路由展开
   });
 });
@@ -1589,12 +1634,12 @@ ${weatherData.location}实时天气：${weatherData.weather}
         headers: _apiHeaders(),
         body: JSON.stringify(_payload)
       });
-      if (resp.status === 401) { typing.innerHTML = '<div class="role-tag">阿卡莉</div>服务器ojbk中。<div class="sticker-wrap"><img class="sticker-img" src="' + resolveAsset('/kb/图片素材/表情包/ojbk.png') + '" alt="ojbk"></div>'; sendBtn.disabled = false; return; }
+      if (resp.status === 401) { typing.innerHTML = '<div class="role-tag">阿卡莉</div>服务器ojbk中。<div class="sticker-wrap"><img loading="lazy" class="sticker-img" src="' + resolveAsset('/kb/图片素材/表情包/ojbk.png') + '" alt="ojbk"></div>'; sendBtn.disabled = false; return; }
       const data = await resp.json();
       renderSecretaryReply(data, typing);
       checkQuotaAlert();   // 本轮消耗了 LLM 额度 → 若已跌破 10% 则自动提醒
     } catch (e) {
-      typing.querySelector('.bubble').innerHTML = '<div class="role-tag">阿卡莉</div>服务器ojbk中。<div class="sticker-wrap"><img class="sticker-img" src="' + resolveAsset('/kb/图片素材/表情包/ojbk.png') + '" alt="ojbk"></div>';
+      typing.querySelector('.bubble').innerHTML = '<div class="role-tag">阿卡莉</div>服务器ojbk中。<div class="sticker-wrap"><img loading="lazy" class="sticker-img" src="' + resolveAsset('/kb/图片素材/表情包/ojbk.png') + '" alt="ojbk"></div>';
     } finally {
       sendBtn.disabled = false;
       inputEl.focus();
@@ -1626,21 +1671,19 @@ endTaskBtn.addEventListener('click', () => {
   if (endTaskBtn.disabled) return;
   sendChat('结束本轮');
 });
-// 「关闭」按钮：直接关闭网页（不触发后端退出/清记忆）
-const exitBtn = document.getElementById('exitBtn');
-exitBtn.addEventListener('click', () => {
-  if (exitBtn.disabled) return;
-  // 确认对话框
-  if (!confirm('确定要关闭网页吗？当前会话将被重置。')) return;
+// 「退出」：直接关闭网页（不触发后端退出/清记忆）；由悬浮球菜单「退出」项调用
+function requestExit() {
+  // 确认对话框：阿卡莉休眠提示，并说明会重置对话
+  if (!confirm('阿卡莉即将进入休眠，会重置对话。确定要退出吗？')) return;
   // 直接请求关闭网页；部分浏览器/容器策略可能拦截脚本关闭
   window.close();
   // 兜底：若窗口未被关闭（脚本关闭被拦截），提示用户手动关闭
   setTimeout(() => {
     if (!window.closed) {
-      alert('已请求关闭，请手动关闭此网页/标签页。');
+      alert('阿卡莉已进入休眠。请手动关闭此网页/标签页。');
     }
   }, 300);
-});
+}
 // textarea 自适应高度
 inputEl.addEventListener('input', () => {
   inputEl.style.height = 'auto';
@@ -1709,8 +1752,7 @@ function showRegisterResult(j) {
 // 也会因同 WiFi 多人共用而撞车（多人被认成一人）。设备标识稳定、一人一号。
 function deviceId() {
   const KEY = 'arkly_device_id';
-  let v = '';
-  try { v = localStorage.getItem(KEY) || ''; } catch (e) { v = ''; }
+  let v = credGet(KEY);
   if (!v) {
     try {
       const a = new Uint8Array(12);
@@ -1719,14 +1761,18 @@ function deviceId() {
     } catch (e) {
       v = 'd' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
     }
-    try { localStorage.setItem(KEY, v); } catch (e) {}
+    credSet(KEY, v);
   }
   return v;
 }
 
 // 静默"就位"：能自动注册/认领就返回 true（随后页面重载为已登录状态）
 async function tryAutoRegister(info) {
-  const invite = (new URLSearchParams(location.search).get('invite') || '').trim();
+  // 邀请码来源：URL 的 ?invite= 优先，其次用上次记住的（从主屏幕图标/书签打开时
+  // URL 常不带参数；此时若设备标识还在，服务端按 device_id 直接回位、根本不校验
+  // 邀请码；只有设备标识也没了才会用到它去重新注册，避免又弹遮罩）。
+  const invite = ((new URLSearchParams(location.search).get('invite') || '').trim())
+                 || credGet('arkly_invite');
   const canRegister = !!(info && info.allow_register);
   // 既没带邀请码、后端也没开放注册 → 不必尝试（直接走遮罩）
   if (!invite && !canRegister) return false;
@@ -1738,7 +1784,8 @@ async function tryAutoRegister(info) {
     });
     const j = await r.json();
     if (!j || !j.ok || !j.token) return false;
-    localStorage.setItem('arkly_api_token', j.token);
+    credSet('arkly_api_token', j.token);
+    if (invite) credSet('arkly_invite', invite);  // 记住邀请码，供以后无参数打开时回位
     if (j.created) {
       showRegisterResult(j);                     // 新注册：展示 uid+口令，8 秒后自动进
     } else {
@@ -1773,9 +1820,14 @@ function buildAuthOverlay(info) {
   const input = ov.querySelector('#auth-token-input');
   const err = ov.querySelector('#auth-err');
   const btn = ov.querySelector('#auth-submit');
+  // 以前输过邀请码的老用户：预填，点「解锁」即可 —— 不用再翻聊天记录找邀请码
+  if (canRegister && needInvite) {
+    const remembered = credGet('arkly_invite');
+    if (remembered) input.value = remembered;
+  }
   // 用已有口令验证（老用户换设备登录 / 管理端口令）
   function verifyToken(t) {
-    localStorage.setItem('arkly_api_token', t);
+    credSet('arkly_api_token', t);
     fetch('/api/auth/status', { headers: { 'X-API-Token': t } })
       .then(r => r.json())
       .then(d => {
@@ -1793,7 +1845,7 @@ function buildAuthOverlay(info) {
           }
           inputEl.focus();
         } else {
-          localStorage.removeItem('arkly_api_token');
+          credDel('arkly_api_token');
           err.textContent = (d && d.reason === 'paused') ? '服务暂未对测试用户开放' : '口令错误，请重试';
           err.style.display = 'block';
           input.focus();
@@ -1813,7 +1865,8 @@ function buildAuthOverlay(info) {
         body: JSON.stringify({ invite: v, device_id: deviceId() })
       }).then(r => r.json()).then(j => {
         if (j && j.ok && j.token) {
-          localStorage.setItem('arkly_api_token', j.token);
+          credSet('arkly_api_token', j.token);
+          if (v) credSet('arkly_invite', v);   // 记住邀请码，下次打开无需再输
           if (j.created) { showRegisterResult(j); return; }
           location.reload();
           return;
@@ -1833,9 +1886,11 @@ function buildAuthOverlay(info) {
 
 // 页面加载：探测认证状态，需要解锁时弹遮罩
 (async function initAuth() {
+  let _runMode = '';
   try {
     const r = await fetch('/api/auth/status', { headers: _apiHeaders() });
     const d = await r.json();
+    _runMode = (d && d.run_mode) || '';
     // 面板存储位置由后端运行模式决定：server=本地(服务器副本) / client=云端(浏览器本地缓存)
     if (d && d.panel_store) { ARKLY_PANEL_STORE = d.panel_store; }
     if (d && d.auth_required && !d.authenticated) {
@@ -1847,15 +1902,28 @@ function buildAuthOverlay(info) {
   } catch (e) {
     // 探测失败（网络/后端旧版无此接口）→ 不弹遮罩，保持原行为
   }
-  // 刷新页面自动重置会话
-  try {
-    await fetch('/api/clear?session_id=' + encodeURIComponent(_sessionId()), {
-      method: 'POST',
-      headers: _apiHeaders()
-    });
-    console.log('会话已重置');
-  } catch (e) {
-    console.warn('重置会话失败:', e);
+  // 会话重置（用户口径 2026-09-27）：本地模式（单机、刷新即重开）保持原行为
+  // 「每次页面加载都清」；**云端**改为只在**本标签页首次加载**时清 —— 移动端
+  // 「页面挂久了被系统回收后自动重载」时，用户算伤害填到一半回来发现记忆被清空，
+  // 又被要求重新输入。用 sessionStorage 打标：同一标签的重载（含系统回收恢复）
+  // 不再清，只有真正新开的标签/新会话才清。
+  let _doClear = true;
+  if (_runMode === 'cloud') {
+    try {
+      _doClear = !sessionStorage.getItem('arkly_session_boot');
+      sessionStorage.setItem('arkly_session_boot', '1');
+    } catch (e) { _doClear = true; }
+  }
+  if (_doClear) {
+    try {
+      await fetch('/api/clear?session_id=' + encodeURIComponent(_sessionId()), {
+        method: 'POST',
+        headers: _apiHeaders()
+      });
+      console.log('会话已重置');
+    } catch (e) {
+      console.warn('重置会话失败:', e);
+    }
   }
 })();
 
@@ -1924,31 +1992,37 @@ function bgPeriod() {
   setInterval(apply, 60 * 1000);
 })();
 
-// 节庆主题：给 body 挂 festival-<theme> 并按主题铺一层落物（用户口径 2026-09-25）。
-// 主题键由后端 /api/ui_assets 的 holiday.theme 下发（目前只有 midautumn）；
-// 非节庆日不会调用本函数，界面保持原样。落物是纯装饰层，pointer-events:none 不挡操作。
+// 节庆主题（数据驱动：2026-09-27 升级）。后端 /api/ui_assets 下发 holiday：
+// { theme, assets:{bubble, fall:[{file,size,speed,rotate}]}, palette:{cssVar:value} }。
+// 本函数零主题分支：挂 .festival-on、注入调色板变量、按 assets.fall 建飘落层。
+// 非节庆日不会调用（initUiAssets 仅在 data.holiday 存在时调用），界面保持原样。
 function applyFestivalTheme(hol) {
   const theme = (hol && hol.theme) || '';
   if (!theme) return;
-  document.body.classList.add('festival-' + theme);
-  // 各主题的落物素材（放在 web/icons/festival/，由 /icons/ 免鉴权 serve）
-  const FALL = {
-    midautumn: ['midautumn-moon.png', 'midautumn-osmanthus.png', 'midautumn-rabbit.png']
-  };
-  const files = FALL[theme];
-  if (!files || !files.length) return;
+  document.body.classList.add('festival-on', 'festival-' + theme);
+  // 注入调色板 CSS 变量（头像环 / 气泡皮肤 / 用户气泡描边）
+  const pal = (hol.palette) || {};
+  for (const k in pal) {
+    if (Object.prototype.hasOwnProperty.call(pal, k)) document.documentElement.style.setProperty(k, pal[k]);
+  }
+  // 飘落层：按 assets.fall 动态创建，每项用描述符里的 size/speed/rotate
+  const fall = ((hol.assets) && hol.assets.fall) || [];
+  if (!fall.length) return;
   const layer = document.createElement('div');
   layer.className = 'festival-fall';
   layer.setAttribute('aria-hidden', 'true');
-  for (let i = 0; i < 14; i++) {                     // 数量：够热闹又不干扰阅读
+  const rnd = (r) => r[0] + Math.random() * (r[1] - r[0]);
+  for (let i = 0; i < 16; i++) {                 // 数量：够热闹又不干扰阅读
+    const spec = fall[i % fall.length];
     const el = document.createElement('i');
-    const size = 12 + Math.random() * 16;            // 12~28px
-    el.style.backgroundImage = 'url("/icons/festival/' + files[i % files.length] + '")';
+    const sz = rnd(spec.size || [14, 26]);
+    el.style.backgroundImage = 'url("/icons/festival/' + spec.file + '")';
     el.style.left = (Math.random() * 100).toFixed(2) + 'vw';
-    el.style.width = size.toFixed(0) + 'px';
-    el.style.height = size.toFixed(0) + 'px';
-    el.style.animationDuration = (9 + Math.random() * 8).toFixed(1) + 's';  // 9~17s 落到底
-    el.style.animationDelay = (-Math.random() * 12).toFixed(1) + 's';       // 负延迟：一进页面就有
+    el.style.width = sz.toFixed(0) + 'px';
+    el.style.height = sz.toFixed(0) + 'px';
+    const dur = rnd(spec.speed || [9, 16]);
+    el.style.animationDuration = dur.toFixed(1) + 's';      // 落到底的时长
+    el.style.animationDelay = (-Math.random() * dur).toFixed(1) + 's';  // 负延迟：一进页面就有
     el.style.opacity = (0.55 + Math.random() * 0.4).toFixed(2);
     layer.appendChild(el);
   }
@@ -2117,8 +2191,9 @@ function initFeedbackButtons() {
       const last = messagesEl ? messagesEl.lastElementChild : null;
       target = (last && last.classList && last.classList.contains('secretary')) ? last : null;
     }
-    // 防重复注入：同一条消息只挂一个按钮（重渲染不会堆叠）
-    if (target && !target.querySelector('.feedback-btn')) {
+    // 只有「向量库 QA 检索类回复」（后端 from_kb 标记）才挂反馈按钮（用户口径 2026-09-25）：
+    // 固定话术/计算面板等回复没有可反馈的问答价值，反馈会污染收集数据。
+    if (target && data.from_kb && !target.querySelector('.feedback-btn')) {
       const msgEl2 = target;
       const msgId = 'msg-' + Date.now() + '-' + Math.random().toString(36).substr(2, 6);
       msgEl2.setAttribute('data-msg-id', msgId);
@@ -2141,7 +2216,8 @@ function initFeedbackButtons() {
             user_input: userText,
             assistant_reply: replyText,
             timestamp: new Date().toISOString(),
-            feedback_type: 'unsatisfied'
+            feedback_type: 'unsatisfied',
+            from_kb: !!data.from_kb
           };
           // 提交后把按钮改成绿勾（不再弹 alert 打断对话；失败则还原并提示一次）
           fetch('/api/feedback', {

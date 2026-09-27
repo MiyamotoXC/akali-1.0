@@ -38,6 +38,11 @@ def _register_core_alias(filename, alias):
 
 
 # 注册顺序即依赖顺序：formula_engine / constants / combat_data 必须先于 damage_formula
+# 装填→普攻CD缩减（与伤害引擎同源）。先注册 core.reload_cd，确保下游 damage_formula 等
+# 的绝对导入 `from core.reload_cd import ...` 在加载时即可解析（reload_cd.py 为纯函数，无依赖）。
+_reload_cd = _register_core_alias('reload_cd.py', 'reload_cd')
+reload_reduced_cd = _reload_cd.reload_reduced_cd
+
 _engine_formula = _register_core_alias('formula_engine.py', 'formula_engine')
 # `from core import formula_engine as engine` 需要父包上有该属性
 setattr(sys.modules['core'], 'formula_engine', _engine_formula)
@@ -230,7 +235,9 @@ def calc_total_damage_timeline(attacker, enemy, course, air, total_time,
     base_enemy = dict(enemy)
     windows = [w for w in _timeline_windows(attacker, raw_skills, user_windows)
                if w['duration'] > 0 and w['trigger'] != 'support' and w.get('target') != 'air']
-    normals = [(i, float(f.get('cd', 0) or 0)) for i, f in enumerate(attacker.normal_attacks or [])
+    _reload_val = float((getattr(attacker, 'attack_panel', {}) or {}).get('装填', 0) or 0)
+    normals = [(i, reload_reduced_cd(_reload_val, float(f.get('cd', 0) or 0)))
+               for i, f in enumerate(attacker.normal_attacks or [])
                if (f.get('cd', 0) or 0) > 0]
     skill_defs = [
         ('skill', '通常技', attacker.skill_attack, DamageCalculator.calculate_skill),

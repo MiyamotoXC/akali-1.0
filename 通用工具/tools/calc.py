@@ -12,6 +12,7 @@ from core.timeline import (
 )
 from core.damage_formula import DamageCalculator
 from core.output_handler import OutputHandler
+from core.reload_cd import reload_reduced_cd
 from .common import _load_combatants, _resolve_calc_context, _resolve_course_air, _validate_course_air, _normalize_buff_key
 
 # ======================================================================
@@ -301,7 +302,10 @@ def _calc_total_damage_timeline(app, attacker, enemy, non_burn_types, has_ignite
     # target='air'（仅对空中单位生效）排除——单人对决敌方为海上单位，不应用
     windows = [w for w in build_buff_windows(attacker, user_windows, _normalize_buff_key)
                if w['duration'] > 0 and w['trigger'] != 'support' and w.get('target') != 'air']
-    normals = [(i, float(f.get('cd', 0) or 0)) for i, f in enumerate(attacker.normal_attacks or [])
+    # 装填计入伤害链路：普攻 CD 按面板「装填」缩减（≤25%），影响时间轴触发频率
+    _reload_val = float((getattr(attacker, 'attack_panel', {}) or {}).get('装填', 0) or 0)
+    normals = [(i, reload_reduced_cd(_reload_val, float(f.get('cd', 0) or 0)))
+               for i, f in enumerate(attacker.normal_attacks or [])
                if (f.get('cd', 0) or 0) > 0]
     skill_defs = [
         ('skill', '通常技', attacker.skill_attack, DamageCalculator.calculate_skill),
@@ -416,6 +420,13 @@ def _calc_total_damage_timeline(app, attacker, enemy, non_burn_types, has_ignite
                              f"{desc} 持续{w['duration']:g}s → 触发{w['count']}次{order_mark}{target_mark}")
     lines.append("-" * 60)
     lines.append(f"  普攻总伤害: {totals['普攻']:.2f}（{counts['普攻']}次）")
+    # 装填→普攻CD缩减明细（已计入上方总伤与点燃频率）：装填越高、普攻触发越频繁
+    if _reload_val > 0 and normals:
+        lines.append("-" * 60)
+        lines.append("【装填→普攻CD缩减（已计入总伤/点燃）】")
+        for i, red_cd in normals:
+            _b = float((attacker.normal_attacks[i] or {}).get('cd', 0) or 0)
+            lines.append(f"  普攻段{i+1}: 基础CD {_b:g}s → 装填缩减后 {red_cd:.3f}s（面板装填 {_reload_val:g}）")
     for trig, label, cd, _fn, _has in skill_cds:
         if counts[label] > 0:
             lines.append(f"  {label}总伤害: {totals[label]:.2f}（CD={cd:g}s, 触发{counts[label]}次）")

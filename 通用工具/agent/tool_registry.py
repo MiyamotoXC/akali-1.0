@@ -15,39 +15,28 @@ LLM 每次只做一次判定：①调「数据工具」 ②调「检索工具」
 
 环境变量 AKALI_AGENT_TOOLS=core|full 控制绑定范围。
 """
-import os
+from .skill_pack import (SKILL_PACKS, KIND_DATA, KIND_RETRIEVAL,
+                         enabled_tool_names, tools_of)
+
+# =============================================================================
+# 工具集合改由 skill_pack 按「能力」声明（见该文件），这里**从技能包派生**，
+# 避免"改个工具要同时动两处"。派生结果与改造前手写的元组逐一一致：
+#   DATA_TOOLS=12（lookup 10 + calculation 2）、RETRIEVAL_TOOLS=1、TIER1=13。
+# =============================================================================
+_DEFAULT_PACKS = tuple(p for p in SKILL_PACKS if p.default)
 
 # 数据工具：确定性读/查，回复原文直出
-DATA_TOOLS = (
-    'query_ship_info',
-    'query_ships_by_skill',
-    'ship_filter',
-    'query_talent_ships',
-    'query_scout_sum',
-    'query_guide',
-    'ammo_mech_qa',
-    'query_activity',
-    'query_weather',
-    'calc_favor',
-    'calc_reload_cd',
-    # PVP 参考阵容统计（"pvp练谁/阵容推荐"的确定性固定输出，与 legacy 同源）
-    'pvp_role_recommend',
-)
+DATA_TOOLS = tools_of(p for p in _DEFAULT_PACKS if p.kind == KIND_DATA)
 
 # 检索工具：向量检索片段 → LLM 依据片段简答
 # kb_search 不绑：它是 legacy 攻略流程内部的兜底检索（输出原始摘录），
 # 不是面向用户的作答出口；知识问答统一走 guide_rag。
-RETRIEVAL_TOOLS = (
-    'guide_rag',
-)
+RETRIEVAL_TOOLS = tools_of(p for p in _DEFAULT_PACKS if p.kind == KIND_RETRIEVAL)
 
 TIER1 = DATA_TOOLS + RETRIEVAL_TOOLS
 
 # full 模式追加的只读工具（默认不绑，避免 prompt 膨胀）
-TIER1_FULL_EXTRA = (
-    'query_ship_copy',
-    'list_user_ships',
-)
+TIER1_FULL_EXTRA = tools_of(p for p in SKILL_PACKS if not p.default)
 
 # 有界工具循环白名单（增强②）：仅这些确定性、原文直出的**数据查询**工具可作为同轮第二个调用
 # （数据→数据）。禁止 guide_rag / query_guide / 闲聊进入循环，避免把检索/自由生成塞进串行链、
@@ -64,10 +53,15 @@ def is_retrieval(name: str) -> bool:
 
 
 def selected_names() -> tuple:
-    scope = os.environ.get('AKALI_AGENT_TOOLS', 'core').strip().lower()
-    if scope == 'full':
-        return TIER1 + TIER1_FULL_EXTRA
-    return TIER1
+    """当前要绑给 LLM 的工具名。
+
+    改由技能包展开（见 skill_pack.enabled_tool_names）：
+      · 默认展开 == TIER1（13 个），与改造前**完全一致**，零行为变化；
+      · AKALI_AGENT_SKILLS 可按能力增删（lookup,guide_qa / +x / -x）；
+      · -工具名 可作工具级逃生口单独摘除（如 -query_weather）；
+      · 旧开关 AKALI_AGENT_TOOLS=full 仍有效（全开，含默认不绑的 panel_manage）。
+    """
+    return tuple(enabled_tool_names())
 
 
 def select_tools(tools):

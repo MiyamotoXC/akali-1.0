@@ -143,6 +143,10 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 # 知识库目录（攻略/图片/数据表通过 /kb/ 静态开放，前端可点击打开查看）
 PROJECT_ROOT = os.path.dirname(BASE_DIR)  # 阿卡莉1.0 目录
 KB_STATIC_DIR = os.path.normpath(os.path.join(PROJECT_ROOT, "知识库"))
+# 把知识库目录注入给 server.markers（它要读 知识库/talent_pvp.json 的 PVP 默认点法）
+import server.markers as _markers
+_markers.configure(KB_STATIC_DIR)
+
 # 头像素材库 = 阿卡莉1.0/知识库/图片素材（含 头像/头像/ 与 头像（改）/ 两目录）
 # 相对路径基准需与 query.py 的 _KB_IMG_DIR 保持一致（头像标记 <<AVATAR>>头像/头像/xxx.png）
 AVATAR_STATIC_DIR = os.path.normpath(os.path.join(KB_STATIC_DIR, "图片素材"))
@@ -820,7 +824,7 @@ _API_TOKEN = _users.owner_token()   # 优先级 AKALI_OWNER_TOKEN → AKALI_INVI
 # 放行路径：页面 / 静态资源 / 认证状态探测（前端据此决定是否弹 token 输入框）
 _AUTH_PUBLIC_PREFIXES = ("/kb/", "/avatar/", "/icons/")
 _AUTH_PUBLIC_EXACT = ("/", "/admin", "/api/auth/status", "/api/register",
-                      "/manifest.webmanifest", "/sw.js")
+                      "/api/heartbeat", "/manifest.webmanifest", "/sw.js")
 
 # 回环地址：仅在**本地模式**下免口令。云端模式下 Host 为 127.0.0.1 只代表
 # 「容器网络内的调用方」（同网其他容器、SSH 进来的 shell 等），不代表可信用户，
@@ -1190,18 +1194,21 @@ async def index():
     # ① 邮件领取（每次会话固定出现，✉ 信封印记）
     # ② 限时远征（18:00–23:59 必出，⚔ 印记）
     # ③ 活动日历提醒（📅 日历印记，来自 reminder.collect_reminders：每周/公众号/月度礼包、游戏内活动截止）
+    # 整块由技能包 reminder 控制：提醒是后端确定性生成的、不经工具，所以开关只能在
+    # 消费方这里判断一次（AKALI_AGENT_SKILLS=-reminder 即完全不注入提醒横幅）。
     tip_items = []
-    for _affair in _affair_hints():
-        _badge = '✉ 邮件' if '邮件' in _affair else '⚔ 远征'
-        tip_items.append(f'<span class="tip-item"><span class="tip-badge">{_badge}</span>'
-                         f'{_esc_tip(_affair)}</span>')
-    try:
-        from core.reminder import collect_reminders
-        for _line in collect_reminders():
-            tip_items.append(f'<span class="tip-item"><span class="tip-badge">📅 日历</span>'
-                             f'{_esc_tip(_line)}</span>')
-    except Exception:
-        pass
+    if _skill_enabled('reminder'):
+        for _affair in _affair_hints():
+            _badge = '✉ 邮件' if '邮件' in _affair else '⚔ 远征'
+            tip_items.append(f'<span class="tip-item"><span class="tip-badge">{_badge}</span>'
+                             f'{_esc_tip(_affair)}</span>')
+        try:
+            from core.reminder import collect_reminders
+            for _line in collect_reminders():
+                tip_items.append(f'<span class="tip-item"><span class="tip-badge">📅 日历</span>'
+                                 f'{_esc_tip(_line)}</span>')
+        except Exception:
+            pass
     html = html.replace('<!--AFFAIR_TIP-->', ''.join(tip_items))
     # 替换静态初始问候为时间问候（问候文本为服务端固定文案，无 HTML 特殊字符，
     # 换行直接转 <br> 保证气泡内按语义换行显示；功能菜单按钮为静态节点不受替换影响）
@@ -1539,363 +1546,20 @@ h1{{font-size:18px;border-bottom:1px solid #e5e8ec;padding-bottom:8px;}}table{{w
     return HTMLResponse(html)
 
 
-# 工具名 → 按钮显示名映射
-TOOL_BTN_LABELS = {
-    'calc_normal_attack': '普攻',
-    'calc_skill_attack': '通常技',
-    'calc_burst_attack': '必杀技',
-    'calc_support_attack': '支援技',
-    'calc_burn_damage': '点燃',
-    'calc_total_damage': '总伤害',
-    'encounter_guide': '往期遭遇战攻略',
-    'encounter_simulator': '遭遇战模拟',
-    'end_round': '结束本轮计算',
-}
-
-# 标记正则：<<SUGGEST_CALC>>calc_normal_attack|calc_skill_attack|...
-import re as _re
-_SUGGEST_PATTERN = _re.compile(r'<<SUGGEST_CALC>>([\w|_]+)')
-# 填空表单标记：<<FILL_FORM>>attacker=火力|attacker_buff=|defender=|defender_buff=
-# 支持 key 或 key=value 两种形式，value 含等号后面的原始文本（可为空）
-_FILL_FORM_PATTERN = _re.compile(r'<<FILL_FORM>>([^<\n]+)')
-
-# 填空表单字段元信息
-FILL_FORM_FIELDS = {
-    'attacker': {'label': '攻击方', 'placeholder': '如 吹雪改', 'required': True},
-    'attacker_buff': {'label': '攻击方buff', 'placeholder': '如 全伤害+15%、暴击率+20%', 'required': False},
-    'attacker_talent': {'label': '攻击方天赋', 'placeholder': '不填则用默认 PVP 点法', 'required': False},
-    'defender': {'label': '防守方', 'placeholder': '如 南达科他', 'required': False},
-    'defender_buff': {'label': '防守方buff', 'placeholder': '如 全伤害减免+20%', 'required': False},
-    'defender_talent': {'label': '防守方天赋', 'placeholder': '不填则用默认 PVP 点法', 'required': False},
-    'course': {'label': '航向', 'placeholder': '同航 / 反航 / T优势 / T劣势（默认同航）', 'required': False},
-    'air': {'label': '制空', 'placeholder': '确保 / 优势 / 均势 / 劣势 / 丧失（默认均势）', 'required': False},
-}
-
-
-def _extract_fill_form(reply: str) -> list:
-    """从回复中解析 <<FILL_FORM>> 标记，返回 [{key, label, placeholder, required, value}, ...]。
-    支持 key 或 key=value 两种形式，value 为预填值（可为空字符串）。无标记返回空列表。"""
-    if not reply:
-        return []
-    m = _FILL_FORM_PATTERN.search(reply)
-    if not m:
-        return []
-    raw = m.group(1).strip()
-    parts = [p.strip() for p in raw.split('|') if p.strip()]
-    result = []
-    for p in parts:
-        if '=' in p:
-            k, v = p.split('=', 1)
-            k = k.strip()
-            v = v.strip()
-        else:
-            k, v = p, ''
-        meta = FILL_FORM_FIELDS.get(k, {'label': k, 'placeholder': '', 'required': False})
-        result.append({'key': k, 'label': meta['label'], 'placeholder': meta['placeholder'], 'required': meta['required'], 'value': v})
-    return result
-
-
-# PVP 默认编码缓存（talent_pvp.json：角色名 → 4 位推荐编码）
-_PVP_DEFAULT_CACHE = None
-
-
-def _load_pvp_defaults() -> dict:
-    """读取 知识库/talent_pvp.json（角色名 → PVP 推荐编码），带模块级缓存。"""
-    global _PVP_DEFAULT_CACHE
-    if _PVP_DEFAULT_CACHE is not None:
-        return _PVP_DEFAULT_CACHE
-    pvp_file = os.path.join(KB_STATIC_DIR, "talent_pvp.json")
-    if not os.path.exists(pvp_file):
-        _PVP_DEFAULT_CACHE = {}
-        return _PVP_DEFAULT_CACHE
-    try:
-        with open(pvp_file, encoding="utf-8") as f:
-            _PVP_DEFAULT_CACHE = json.load(f)
-    except Exception:
-        _PVP_DEFAULT_CACHE = {}
-    return _PVP_DEFAULT_CACHE
-
-
-def _fill_form_with_pvp_default(fill_form: list) -> list:
-    """把攻防双方天赋输入框的 placeholder 替换为「对应具体角色的 PVP 默认点法」。
-    角色名来自 session_overrides.calc_context（攻击方/敌方）；未确定角色时保持通用提示。"""
-    if not fill_form:
-        return fill_form
-    overrides = agent.session_overrides or {}
-    ctx = overrides.get("calc_context") or {}
-    attacker = ctx.get("attacker") or ""
-    enemy = ctx.get("enemy") or ""
-    pvp = _load_pvp_defaults()
-    # 通过 name_matcher 归一化角色名（昵称→正规名），取 PVP 编码
-    matcher = agent.raw_name_matcher if hasattr(agent, "raw_name_matcher") else None
-    def _resolve_pvp(name):
-        if not name:
-            return ""
-        if matcher is not None:
-            try:
-                matched = matcher.match(name)
-                if matched:
-                    name = matched
-            except Exception:
-                pass
-        return pvp.get(name, "")
-
-    atk_code = _resolve_pvp(attacker)
-    def_code = _resolve_pvp(enemy)
-    for f in fill_form:
-        if f["key"] == "attacker_talent" and atk_code:
-            f["placeholder"] = f"{attacker} 默认 PVP 点法 {atk_code}"
-        elif f["key"] == "defender_talent" and def_code:
-            f["placeholder"] = f"{enemy} 默认 PVP 点法 {def_code}"
-        elif f["key"] == "attacker_talent":
-            f["placeholder"] = "不填则用默认 PVP 点法"
-        elif f["key"] == "defender_talent":
-            f["placeholder"] = "不填则用默认 PVP 点法"
-    return fill_form
-
-
-def _auto_fill_form(reply: str) -> list:
-    """LLM 漏输出 <<FILL_FORM>> 标记时的兜底：根据回复引导语补对应表单。
-    返回 [{key,label,placeholder,required,value},...]；无法判断返回空列表。
-    仅当回复是「主动请求输入某字段」（请求词与该字段名同句相邻，如"请输入航向与制空"）
-    时才补表单；「已确认/请选择计算类型」等陈述/无关请求不补（避免误把确认语当输入请求）。"""
-    if not reply:
-        return []
-    # 请求词 + 字段名相邻匹配（请求词后 0~8 字内出现字段词才认定是请求输入该字段）
-    def _ask_field(*field_words):
-        for m in re.finditer(r'(请输入|请填写|请选择|请提供|麻烦填|需要填|请补充|请设置|请给出|请告诉我)', reply):
-            seg = reply[m.end():m.end() + 10]
-            if any(w in seg for w in field_words):
-                return True
-        # 兜底：字段词后紧跟"？/："且前面有"请"
-        for w in field_words:
-            for m in re.finditer(re.escape(w), reply):
-                pre = reply[max(0, m.start() - 10):m.start()]
-                if any(a in pre for a in ('请', '麻烦', '需要')):
-                    return True
-        return False
-
-    # 攻击方/防守方 buff 天赋：先看是否指名"攻击方/防守方"，再看通用 buff/天赋
-    # （"请输入攻击方buff与天赋"→攻击方；"请输入防守方buff"→防守方）
-    if _ask_field('攻击方') and _ask_field('buff'):
-        return _extract_fill_form('<<FILL_FORM>>attacker_buff=|attacker_talent=')
-    if _ask_field('防守方') and _ask_field('buff'):
-        return _extract_fill_form('<<FILL_FORM>>defender_buff=|defender_talent=')
-    # 未指名攻防的通用 buff/天赋请求：按当前会话阶段判断（有 enemy 则防守方，否则攻击方）
-    if _ask_field('buff'):
-        ctx = (agent.session_overrides or {}).get('calc_context') or {}
-        if ctx.get('enemy'):
-            return _extract_fill_form('<<FILL_FORM>>defender_buff=|defender_talent=')
-        return _extract_fill_form('<<FILL_FORM>>attacker_buff=|attacker_talent=')
-    # 角色选择引导（"请选择防守方""请输入攻击方"等，非 buff）：补对应角色填空表单
-    if _ask_field('防守方') and not _ask_field('buff'):
-        return _extract_fill_form('<<FILL_FORM>>defender=')
-    if _ask_field('攻击方') and not _ask_field('buff'):
-        return _extract_fill_form('<<FILL_FORM>>attacker=')
-    # 航向/制空 引导
-    if _ask_field('航向', '制空'):
-        return _extract_fill_form('<<FILL_FORM>>course=|air=')
-    return []
-
-
-def _strip_fill_form_marker(reply: str) -> str:
-    """从回复中清除 <<FILL_FORM>> 标记。"""
-    if not reply:
-        return reply
-    return _FILL_FORM_PATTERN.sub('', reply).strip()
-
-
-# 遭遇战表单标记：<<ENCOUNTER_FORM>>boss=|day_time=|front1=|front2=|front3=|back1=|back2=|back3=
-_ENCOUNTER_FORM_PATTERN = _re.compile(r'<<ENCOUNTER_FORM>>([^<\n]+)')
-
-# 遭遇战表单字段元信息（黑夜自动 = 150 - 白天，不要求用户输入）
-ENCOUNTER_FORM_FIELDS = {
-    'boss': {'label': 'boss名', 'placeholder': '嘉波/巴巴托斯/阿丝莫德/亚斯塔露/列拉金/沙克斯/夕茉莉/河豚王/拜蒙/雅蒙/布耶尔', 'required': True},
-    'day_time': {'label': '白天时间(秒)', 'placeholder': '如 80（黑夜自动=150-白天）', 'required': True},
-    'front1': {'label': '前排1', 'placeholder': '角色名', 'required': True},
-    'front2': {'label': '前排2', 'placeholder': '角色名', 'required': True},
-    'front3': {'label': '前排3', 'placeholder': '角色名', 'required': True},
-    'back1': {'label': '后排1', 'placeholder': '角色名', 'required': True},
-    'back2': {'label': '后排2', 'placeholder': '角色名', 'required': True},
-    'back3': {'label': '后排3', 'placeholder': '角色名', 'required': True},
-}
-
-
-def _extract_encounter_form(reply: str) -> list:
-    """从回复中解析 <<ENCOUNTER_FORM>> 标记，返回 [{key, label, placeholder, required, value}, ...]。
-    支持 key 或 key=value 两种形式，value 为预填值（可为空字符串）。无标记返回空列表。
-    boss 字段附带 options（拉古兹.json 的 boss 名单），前端渲染为按钮选择而非输入框。"""
-    if not reply:
-        return []
-    m = _ENCOUNTER_FORM_PATTERN.search(reply)
-    if not m:
-        return []
-    raw = m.group(1).strip()
-    parts = [p.strip() for p in raw.split('|') if p.strip()]
-    result = []
-    for p in parts:
-        if '=' in p:
-            k, v = p.split('=', 1)
-            k = k.strip()
-            v = v.strip()
-        else:
-            k, v = p, ''
-        meta = ENCOUNTER_FORM_FIELDS.get(k, {'label': k, 'placeholder': '', 'required': False})
-        result.append({'key': k, 'label': meta['label'], 'placeholder': meta['placeholder'], 'required': meta['required'], 'value': v})
-    # boss 字段注入按钮选项（boss 名单 = 拉古兹.json enemies[].name）
-    for item in result:
-        if item['key'] == 'boss':
-            try:
-                item['options'] = list(load_encounter_bosses().keys())
-            except (OSError, ValueError):
-                item['options'] = []
-    return result
-
-
-def _strip_encounter_form_marker(reply: str) -> str:
-    """从回复中清除 <<ENCOUNTER_FORM>> 标记。"""
-    if not reply:
-        return reply
-    return _ENCOUNTER_FORM_PATTERN.sub('', reply).strip()
-
-
-def _extract_suggestions(reply: str) -> list:
-    """从回复文本中解析 <<SUGGEST_CALC>> 标记，返回 [{tool_key, label}, ...] 列表。
-    无标记时返回空列表。"""
-    if not reply:
-        return []
-    m = _SUGGEST_PATTERN.search(reply)
-    if not m:
-        return []
-    keys = [k.strip() for k in m.group(1).split('|') if k.strip()]
-    result = []
-    for k in keys:
-        label = TOOL_BTN_LABELS.get(k, k)
-        result.append({'tool': k, 'label': label})
-    return result
-
-
-def _strip_suggestion_marker(reply: str) -> str:
-    """从回复文本中清除 <<SUGGEST_CALC>> 标记及其内容。"""
-    if not reply:
-        return reply
-    return _SUGGEST_PATTERN.sub('', reply).strip()
-
-
-# 攻略打开标记：<<GUIDE_FILE>>相对路径|标题（每篇一行）
-_GUIDE_FILE_PATTERN = _re.compile(r'<<GUIDE_FILE>>([^<\n]+?)\|([^<\n]+)')
-
-
-def _extract_guide_files(reply: str) -> list:
-    """从回复中解析 <<GUIDE_FILE>> 标记，返回 [{path, title}, ...]。"""
-    if not reply:
-        return []
-    out = []
-    for m in _GUIDE_FILE_PATTERN.finditer(reply):
-        path = m.group(1).strip()
-        title = m.group(2).strip()
-        if path:
-            out.append({"path": path, "title": title})
-    return out
-
-
-def _strip_guide_file_marker(reply: str) -> str:
-    """从回复中清除 <<GUIDE_FILE>> 标记及其内容。"""
-    if not reply:
-        return reply
-    return _GUIDE_FILE_PATTERN.sub('', reply).strip()
-
-
-# 攻略库触发标记：<<GUIDE_LIB>>（可带聚焦关键词，如 <<GUIDE_LIB>>遭遇战）
-_GUIDE_LIB_PATTERN = _re.compile(r'<<GUIDE_LIB>>([^<\n]*)')
-
-# 头像标记：<<AVATAR>>相对路径|角色名（query_ship_info 查询角色时由后端追加，找到才加）
-_AVATAR_PATTERN = _re.compile(r'<<AVATAR>>([^<\n]+?)\|([^<\n]+)')
-
-
-def _extract_avatar(texts) -> dict:
-    """从回复或工具输出中提取 <<AVATAR>> 标记 → {path, title}；无标记返回 None。"""
-    if not texts:
-        return None
-    for text in texts:
-        if not text:
-            continue
-        m = _AVATAR_PATTERN.search(text)
-        if m:
-            path = m.group(1).strip()
-            if path:
-                # 路径分隔符统一为正斜杠（Windows 素材库扫描出反斜杠，URL 需 /）
-                path = path.replace('\\', '/')
-                return {'path': path, 'title': m.group(2).strip() or '头像'}
-    return None
-
-
-def _strip_avatar_marker(text: str) -> str:
-    if not text:
-        return text
-    return _AVATAR_PATTERN.sub('', text).strip()
-
-
-def _extract_raw_skills(tool_outputs) -> str:
-    """从工具输出中提取「技能描述」原文段（query_ship_info 返回的角色技能原始描述）。
-
-    用于后端强制：技能描述必须是知识库原文（含■①②③【】与完整倍率），
-    不允许 LLM 自行概括/改写。提取到则原样追加到回复末尾。
-    返回技能段原文（从 [旗舰技] 起），无则空串。
-    """
-    if not tool_outputs:
-        return ""
-    for out in tool_outputs:
-        if not out or '技能描述' not in out:
-            continue
-        start = out.find('技能描述')
-        section = out[start:]
-        end = section.find('---------------------')
-        if end != -1:
-            section = section[:end]
-        # 去掉行首缩进（工具输出用 2 空格缩进，还原为原文）
-        lines = [ln.strip() if ln.strip() else '' for ln in section.splitlines()]
-        # 去掉首行标题（"技能描述 ---"）
-        while lines and (not lines[0] or '技能描述' in lines[0]):
-            lines.pop(0)
-        text = '\n'.join(lines).strip()
-        # 还原 raw 技能文本里的字面 \n 为真实换行（数据源将换行存为 \\n）
-        text = text.replace('\\n', '\n')
-        return text
-    return ""
-
-
-def _reply_has_raw_skills(reply: str, raw_skills: str) -> bool:
-    """判断回复中是否已包含技能原文的关键行（含■的原文行），避免重复粘贴。"""
-    if not reply or not raw_skills:
-        return False
-    key_lines = [ln for ln in raw_skills.splitlines() if '■' in ln or '【' in ln]
-    if not key_lines:
-        return False
-    # 任一关键原文行出现在回复中即视为已含原文
-    return any(ln in reply for ln in key_lines)
-
-
-def _extract_guide_lib(texts) -> str:
-    """从回复或工具输出中提取 <<GUIDE_LIB>> 标记的聚焦关键词（无则空串）。
-    空标记 <<GUIDE_LIB>> 返回占位符 '*'，前端视为打开全部攻略面板。"""
-    if not texts:
-        return ""
-    for text in texts:
-        if not text:
-            continue
-        m = _GUIDE_LIB_PATTERN.search(text)
-        if m:
-            kw = m.group(1).strip()
-            return kw if kw else "*"
-    return ""
-
-
-def _strip_guide_lib_marker(text: str) -> str:
-    if not text:
-        return text
-    return _GUIDE_LIB_PATTERN.sub('', text).strip()
-
+# 回复标记（<<FILL_FORM>> / <<AVATAR>> / <<GUIDE_FILE>> / <<SUGGEST_CALC>> /
+# <<ENCOUNTER_FORM>> / <<GUIDE_LIB>> …）的提取与剥离，已拆到 server/markers.py
+# （约 360 行纯文本处理）。这里再导出，保证 web_app 内所有调用点名字不变。
+from server.markers import (
+    TOOL_BTN_LABELS,
+    _extract_fill_form, _strip_fill_form_marker, _auto_fill_form,
+    _fill_form_with_pvp_default, _load_pvp_defaults,
+    _extract_encounter_form, _strip_encounter_form_marker,
+    _extract_suggestions, _strip_suggestion_marker,
+    _extract_guide_files, _strip_guide_file_marker,
+    _extract_avatar, _strip_avatar_marker,
+    _extract_raw_skills, _reply_has_raw_skills,
+    _extract_guide_lib, _strip_guide_lib_marker,
+)
 
 # ===== 顶层输入路由：时间问好 / 会话状态注入 / 再见退出 =====
 
@@ -2061,6 +1725,22 @@ def _affair_hints() -> list:
         items.append(_AFFAIR_HINT_EXPEDITION)
     items.append(_AFFAIR_HINT_MAIL)
     return items
+
+
+def _skill_enabled(name: str) -> bool:
+    """某项「能力（技能包）」当前是否启用 —— **零工具能力**的消费方接线入口。
+
+    提醒、闲聊这类能力是后端确定性生成的、**不经过工具**，技能包层的工具开关管不到
+    它们，只能在消费方（拼装提醒横幅 / 闲聊入口）这里判断一次。
+
+    加载失败一律返回 True：宁可多提醒，也不能因为技能包模块异常把提醒整块弄丢。
+    用法：AKALI_AGENT_SKILLS=-reminder 即关闭日程提醒。
+    """
+    try:
+        from agent.skill_pack import is_enabled
+        return is_enabled(name)
+    except Exception:
+        return True
 
 
 # ==================== 其他游戏硬拦截 ====================
@@ -2657,20 +2337,20 @@ def _chat_impl(req: ChatRequest):
         # 解析回复中的 <<SUGGEST_CALC>> / <<FILL_FORM>> / <<ENCOUNTER_FORM>> / <<GUIDE_FILE>> 标记
         suggestions = _extract_suggestions(reply)
         fill_form = _extract_fill_form(reply)
-        fill_form = _fill_form_with_pvp_default(fill_form)
+        fill_form = _fill_form_with_pvp_default(fill_form, sover, getattr(agent, 'raw_name_matcher', None))
         encounter_form = _extract_encounter_form(reply)
         # 兜底：LLM 说了引导语但漏输出 <<FILL_FORM>> 标记时，按引导语自动补表单，
         # 避免前端无表单可填导致流程卡住
         if not fill_form:
-            fill_form = _auto_fill_form(reply)
-            fill_form = _fill_form_with_pvp_default(fill_form)
+            fill_form = _auto_fill_form(reply, sover)
+            fill_form = _fill_form_with_pvp_default(fill_form, sover, getattr(agent, 'raw_name_matcher', None))
         # 兜底：伤害计算类型按钮——calc_context 已固化（active=True）且回复没有 SUGGEST_CALC
         # 且没有正在填的表单时，自动补全伤害类型按钮（普攻/通常/必杀/支援/点燃/总伤害/对比/结束）
         # 例外：LLM 正在询问时间跨度（总伤害/点燃需要秒数）时，不补按钮，等用户先给时间
         if not suggestions and not fill_form and not encounter_form:
             asking_time = bool(re.search(r'(多少秒|几秒|时间跨度|需要.*秒|持续.*秒|多少时间|要.*秒)', reply))
             ctx = (sover or {}).get('calc_context') or {}
-            if ctx.get('active') and not _auto_fill_form(reply) and not asking_time:
+            if ctx.get('active') and not _auto_fill_form(reply, sover) and not asking_time:
                 suggestions = _extract_suggestions(
                     '<<SUGGEST_CALC>>calc_normal_attack|calc_skill_attack|calc_burst_attack|'
                     'calc_support_attack|calc_burn_damage|calc_total_damage|end_round')
@@ -3220,28 +2900,29 @@ def api_admin_kb_sync(force: bool = True):
         return {'ok': False, 'error': '知识库同步失败', 'detail': _d}
 
 
-# 节庆主题映射（用户口径 2026-09-25）：节日名 → 前端主题键。以后加节日在此登记即可，
+# 节庆主题（用户口径 2026-09-25 → 2026-09-27 升级为数据驱动注册表）：
+# 节日名 → 主题描述符（头像环色 / 气泡皮肤 / 飘落物 / 调色板）统一在
+# tools/festival_themes._FESTIVAL_REGISTRY 登记；加节日只改那一处。
 # 素材放 用户端特用/web/icons/festival/（该目录由 /icons/ 路由免鉴权 serve）。
-_FESTIVAL_THEMES = (
-    ('中秋', 'midautumn'),
-)
-
-
 def _festival_of_today():
-    """今天若在法定节假日区间内，返回 {'name','greeting','summary','theme'}；否则 None。
+    """今天若在法定节假日区间内，返回完整主题描述符；否则 None。
 
-    theme 为空表示该节日暂无前端特效（祝福照常下发，只是不换皮肤）。
-    节假日判定与祝福文案统一走 core.calc_flow._today_holiday（联网日历 + 知识库兜底）。
+    节日判定与祝福文案走 core.calc_flow._today_holiday（联网日历 + 知识库兜底），
+    主题外观（bubble/fall/palette）由 tools.festival_themes.resolve_festival 给出。
     """
     try:
+        from tools.festival_themes import resolve_festival
         from core.calc_flow import _today_holiday
         h = _today_holiday() or {}
         name = str(h.get('name') or '').strip()
         if not name:
             return None
-        theme = next((k for w, k in _FESTIVAL_THEMES if w in name), '')
+        fest = resolve_festival(name)
+        if not fest:
+            return None
         return {'name': name, 'greeting': str(h.get('greeting') or ''),
-                'summary': str(h.get('summary') or ''), 'theme': theme}
+                'summary': str(h.get('summary') or ''), 'theme': fest['theme'],
+                'assets': fest['assets'], 'palette': fest['palette']}
     except Exception:
         return None
 
@@ -3397,11 +3078,22 @@ _shutdown_event = _threading.Event()
 
 @app.get("/api/heartbeat")
 def heartbeat():
-    """前端定期调用，维持服务存活。返回当前服务器时间。"""
+    """前端定期调用，维持服务存活。返回当前服务器时间。
+
+    免鉴权（见 _AUTH_PUBLIC_EXACT）：未解锁的登录页也会打心跳，带口令反而会被
+    中间件判 401 —— 线上表现为每 30 秒一条 401 刷屏；心跳只回时间戳、无敏感数据，
+    放行无越权风险。
+
+    boot 只在**本地模式**下发（用户口径 2026-09-27）：它的用途是「服务重启后让上一轮
+    遗留的页面自动失效」。本地单机重启＝用户自己重开，关掉旧页面合理；但云端重启是
+    运维动作（改配置/发版），不该把正在用的测试用户踢下线（前端判 `data.boot &&` 后再
+    自毁，空串即跳过），故云端返回空串。
+    """
     global _last_heartbeat
     with _heartbeat_lock:
         _last_heartbeat = time.time()
-    return {"ok": True, "server_time": time.time(), "boot": _BOOT_ID}
+    return {"ok": True, "server_time": time.time(),
+            "boot": "" if runtime.is_cloud() else _BOOT_ID}
 
 
 @app.post("/api/shutdown")

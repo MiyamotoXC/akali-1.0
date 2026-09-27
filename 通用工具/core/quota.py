@@ -58,6 +58,10 @@ except Exception:
 _QUOTA_DIR = os.getenv('FX_QUOTA_DIR', '').strip()
 _BACKEND = os.getenv('FX_QUOTA_BACKEND', '').strip().lower()
 
+# 测试阶段：所有用户暂时无 token 上限（用户口径 2026-09-27）。
+# 置 FX_QUOTA_TEST_UNLIMITED=1（或 true/yes/on）即全员不限量；清掉该变量并重建容器即恢复套餐档限额。
+_TEST_UNLIMITED = os.getenv('FX_QUOTA_TEST_UNLIMITED', '').strip().lower() in ('1', 'true', 'yes', 'on')
+
 _lock = threading.Lock()
 
 
@@ -374,9 +378,12 @@ def _lookup_plan_from_db(key: str) -> str:
 def get_user_plan(key: str) -> str:
     """返回额度档：'unlimited' / 'free' / 'month'。
 
-    顺序：数据库（账号体系，含开发者不限量）→ FX_USER_PLAN_MAP（键为 IP/session）
-    → FX_USER_PLAN → free。签名（key → 套餐）保持不变，故调用方无需随升级而改动。
+    顺序：测试期全员不限量（FX_QUOTA_TEST_UNLIMITED）→ 数据库（账号体系，含开发者不限量）
+    → FX_USER_PLAN_MAP（键为 IP/session）→ FX_USER_PLAN → free。
+    签名（key → 套餐）保持不变，故调用方无需随升级而改动。
     """
+    if _TEST_UNLIMITED:
+        return 'unlimited'
     plan = _lookup_plan_from_db(key)
     if plan in ('unlimited', 'free', 'month'):
         return plan

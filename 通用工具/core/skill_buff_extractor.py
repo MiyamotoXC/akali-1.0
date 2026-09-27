@@ -72,6 +72,8 @@ _DMG_INC = {
     "炮击": "炮击伤害增加", "雷击": "雷击伤害增加", "航空": "航空伤害增加",
     "轰炸": "轰炸伤害增加", "鱼雷": "鱼雷伤害增加", "近战": "近战伤害增加",
     "对空": "对空伤害增加", "高平炮": "高平炮伤害增加",
+    # 普攻专属伤害加成：仅对普攻类生效（引擎侧 is_normal 配合），技能描述「普攻/普通攻击 伤害加成+X%」归一到此键
+    "普通攻击": "普通攻击伤害加成", "普攻": "普通攻击伤害加成",
 }
 _DMG_RED = {
     "炮击": "炮击伤害减免", "雷击": "雷击伤害减免", "航空": "航空伤害减免",
@@ -244,10 +246,11 @@ def _map_buff(desc: str, is_percent: bool) -> Optional[str]:
     # 否则该类描述因无 加成/伤害增加 等触发词而被静默丢弃
     trig = desc.replace("额外", "")
     for attr, key in _DMG_INC.items():
-        if f"{attr}伤害" in d and (
+        if (f"{attr}伤害" in d or f"{attr}增伤" in d) and (
             "加成" in trig or "伤害增加" in trig or "伤害提高" in trig or "伤害提升" in trig
-            # 以"<attr>伤害"结尾的裸形式（如「鱼雷机的鱼雷伤害+35%」）也算增伤触发
-            or trig.endswith(f"{attr}伤害")
+            or "增伤" in trig
+            # 裸形式（如「鱼雷机的鱼雷伤害+35%」「普攻增伤+50%」）也算增伤触发
+            or trig.endswith(f"{attr}伤害") or trig.endswith(f"{attr}增伤")
         ):
             return key
     for attr, key in _DMG_RED.items():

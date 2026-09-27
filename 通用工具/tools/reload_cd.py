@@ -7,31 +7,29 @@
 - 缩减后普攻CD = 普攻基础CD × (1 - 缩减% / 100)
 
 口径约定：
-- 仅作普攻节奏参考；伤害计算链路（calc.py / damage_formula / formula_engine）
-  一律不接入该缩减，工具输出固定附带"通常对普攻输出影响不大"提示
+- 公式本体见 core/reload_cd（共享纯函数），本工具仅作「节奏参考」出口并复用之；
+- 该缩减现已计入实际伤害：总时间总伤时间轴（tools/calc.py）与点燃频率
+  （core/damage_formula.py）均用缩减后 CD 折算触发段数，故装填越高、普攻总伤越高。
+- 不改变「单次释放伤害」金额（单次伤害数学与装填无关）。
 """
 from qwen_agent.tools.base import BaseTool
+from core.reload_cd import reload_cd_reduction, RELOAD_CD_CAP as _RELOAD_CD_CAP
 
-# 缩减上限（%）
-_RELOAD_CD_CAP = 25.0
-
-
-def calc_reload_cd(reload_value: float, base_cd: float):
-    """按公式计算普攻 CD 缩减，返回 (缩减%, 缩减后CD秒)。"""
-    cap = min(reload_value * base_cd / 60.0, _RELOAD_CD_CAP)
-    return cap, base_cd * (1 - cap / 100.0)
+# 复用共享公式（core.reload_cd.reload_cd_reduction），签名一致：(缩减%, 缩减后CD秒)
+calc_reload_cd = reload_cd_reduction
 
 
 class CalcReloadCd(BaseTool):
     """【装填-普攻CD计算】按公式 普攻CD缩减=装填值×普攻基础CD/60%（上限25%），
     计算装填属性对普攻 CD 的缩减。提供角色名时自动读取该角色装填值与普攻段 CD；
-    也可直接手动给装填值与普攻 CD 计算。仅作节奏参考，伤害计算不考虑该缩减。"""
+    也可直接手动给装填值与普攻 CD 计算。该缩减已计入总时间总伤与点燃伤害
+    （影响普攻触发频率），不改变单次释放伤害金额。"""
     name = 'calc_reload_cd'
     description = ('【装填-普攻CD计算】计算装填属性对普攻 CD 的缩减：'
                    '普攻CD缩减 = 装填值 × 普攻基础CD / 60（%），缩减上限 25%。'
                    '给角色名（ship_name）则自动读其装填值与普攻段 CD；'
                    '也可手动给 reload_value（装填值）与 normal_cd（普攻基础CD，秒）直接算。'
-                   '注意：该缩减仅影响普攻节奏，伤害计算不考虑，通常对普攻输出影响不大。')
+                   '注意：该缩减已计入总时间总伤与点燃伤害（影响普攻触发频率），不改变单次释放伤害金额。')
     parameters = {
         'type': 'object',
         'properties': {
@@ -98,7 +96,7 @@ class CalcReloadCd(BaseTool):
 
         # ---- 逐段计算输出 ----
         head = "装填对普攻CD影响" + (f"（{ship.name}）" if ship is not None else "")
-        lines = [head, f"装填值：{reload_value:g}{reload_note}（实战影响不大）", ""]
+        lines = [head, f"装填值：{reload_value:g}{reload_note}（已计入总伤/点燃频率）", ""]
         for cd in sorted(cds):
             cap, new_cd = calc_reload_cd(reload_value, cd)
             cap_note = "（已达 25% 上限）" if cap >= _RELOAD_CD_CAP - 1e-9 else ""

@@ -334,6 +334,7 @@ def compute_damage_increase(
     enemy_ship_type: str = "",
     ship_type_bonus: Dict = None,
     ammo_type: str = "",
+    is_normal: bool = False,
 ) -> float:
     """伤害增益计算"""
     buff_damage_type = damage_type
@@ -365,6 +366,11 @@ def compute_damage_increase(
     else:
         type_increase = float(buffs.get(f"{buff_damage_type}伤害增加", 0) or 0)
     base_increase += type_increase
+
+    # 普攻专属伤害加成：仅对普攻类生效（is_normal），技能/必杀/支援不享受
+    if is_normal:
+        base_increase += float(buffs.get("普通攻击伤害加成", 0) or 0)
+        base_increase += float(buffs.get("普通攻击伤害增加", 0) or 0)
 
     # 弹种增减伤：按攻击方弹种生效（高爆弹/穿甲弹/通常弹）
     if ammo_type in ("高爆", "穿甲", "通常"):
@@ -527,6 +533,7 @@ def compute_single_type_factors(
     ship_type_reduction: Dict = None,
     fallback_ammo: str = "",
     fallback_weapon: str = "",
+    is_normal: bool = False,
 ) -> Dict[str, Any]:
     """单类型伤害因子计算（核心函数）
 
@@ -558,7 +565,7 @@ def compute_single_type_factors(
     dmg_increase = compute_damage_increase(
         attack_buffs, damage_type, course, air_status, ship_type,
         enemy_ship_type=enemy.get("ship_type", ""),
-        ship_type_bonus=ship_type_bonus
+        ship_type_bonus=ship_type_bonus, is_normal=is_normal
     )
 
     # 减伤

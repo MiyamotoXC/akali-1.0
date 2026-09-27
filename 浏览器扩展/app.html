@@ -71,7 +71,7 @@
   .avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
   /* 悬浮球：默认挂在标题栏（高 72px）内右侧居中，可拖动换位；点击展开工具菜单（位置由 JS 控制） */
   .fab-wrap { position: fixed; left: calc(100vw - 64px); top: 8px; z-index: 60; }
-  .fab-ball { width: 56px; height: 56px; border-radius: 50%; overflow: hidden; cursor: grab;
+  .fab-ball { width: 72px; height: 72px; border-radius: 50%; overflow: hidden; cursor: grab;
     border: 2px solid var(--line); box-shadow: 0 4px 12px rgba(30, 40, 50, 0.18);
     background: var(--panel); padding: 0; transition: box-shadow .15s;
     touch-action: none; user-select: none; -webkit-user-select: none; }
@@ -85,6 +85,10 @@
     padding: 8px; box-shadow: 0 8px 20px rgba(30, 40, 50, 0.22); }
   .fab-wrap.open .fab-menu { display: flex; }
   .fab-menu .sug-btn { width: 100%; margin: 0; background: var(--accent-soft); }
+  /* 悬浮球「退出」：与功能项分隔并加警示色，提示这是会重置对话的休眠操作 */
+  .fab-menu .sug-btn.fab-exit { margin-top: 4px; padding-top: 10px; border-top: 1px solid var(--line);
+    color: #fff; background: #c0392b; font-weight: 600; }
+  .fab-menu .sug-btn.fab-exit:hover { background: #a93226; }
   .title-wrap { flex: 1; }
   .title { font-size: 17px; font-weight: 600; }
   .subtitle { font-size: 13px; color: var(--ink-soft); }
@@ -162,24 +166,24 @@
   .msg.secretary .bubble { background: #f8f1de; }   /* 阿卡莉气泡米黄（用户口径 2026-09-09） */
   .msg.user .bubble { background: var(--user); border-color: #2b2f36; }   /* 黑描边（--ink 同款黑） */
   .bubble .role-tag { font-size: 12px; color: var(--ink-soft); margin-bottom: 4px; }
-  /* ===== 节庆主题：中秋（用户口径 2026-09-25）=====
-     由 /api/ui_assets 下发 holiday.theme=midautumn 后，JS 给 body 挂 .festival-midautumn：
-     ① 头像（页头 + 消息）套月桂金环；② 阿卡莉气泡换米金云纹皮肤；
-     ③ 夜空落月 / 桂花 / 玉兔（纯 CSS 动画，pointer-events:none 不挡任何操作）。
-     非节庆日 body 上没有这个 class，以下规则全不生效，界面与平时完全一致。 */
-  body.festival-midautumn .avatar,
-  body.festival-midautumn .msg .ava {
+  /* ===== 节庆主题（数据驱动：2026-09-27 升级）=====
+     后端 /api/ui_assets 下发 holiday.theme + holiday.palette（CSS 变量）；
+     JS 给 body 挂 .festival-on 并注入 --fest-ring / --fest-bubble-img /
+     --fest-bubble-bg / --fest-user-border。各节日零前端分支，仅改注册表。
+     非节庆日 body 无 .festival-on，以下规则全不生效，界面与平时一致。 */
+  body.festival-on .avatar,
+  body.festival-on .msg .ava {
     border-radius: 50%;
-    box-shadow: 0 0 0 2px rgba(245,196,81,.95), 0 0 14px rgba(245,196,81,.5);
+    box-shadow: 0 0 0 2px var(--fest-ring, transparent), 0 0 14px var(--fest-ring, transparent);
   }
-  body.festival-midautumn .msg.secretary .bubble {
-    background-color: #fff9eb;
-    background-image: url('/icons/festival/midautumn-bubble.png');
+  body.festival-on .msg.secretary .bubble {
+    background-color: var(--fest-bubble-bg, #f8f1de);
+    background-image: var(--fest-bubble-img, none);
     background-size: 100% 100%; background-repeat: no-repeat;
-    border-color: rgba(214,158,46,.55);
-    box-shadow: 0 2px 10px rgba(214,158,46,.18);
+    border-color: var(--fest-user-border, rgba(0,0,0,.1));
+    box-shadow: 0 2px 10px var(--fest-user-border, rgba(0,0,0,.06));
   }
-  body.festival-midautumn .msg.user .bubble { border-color: rgba(214,158,46,.7); }
+  body.festival-on .msg.user .bubble { border-color: var(--fest-user-border, rgba(0,0,0,.1)); }
   /* 落物层：固定覆盖视口，仅节庆时由 JS 创建 */
   .festival-fall { position: fixed; inset: 0; pointer-events: none; z-index: 5; overflow: hidden; }
   .festival-fall i {
@@ -611,17 +615,22 @@
     header { padding: 8px 12px; }
     .avatar { width: 46px; height: 46px; }
     .msg .ava { width: 44px; height: 44px; }
-    .fab-ball { width: 40px; height: 40px; }
+    .fab-ball { width: 46px; height: 46px; }
     .title { font-size: 15px; }
     .subtitle { font-size: 12px; }
-    .warm-tip { top: 10px; font-size: 13px; padding: 5px 12px;
-      max-width: calc(100% - 130px); white-space: normal; }
+    /* 手机端：顶端注意事项原先固定悬浮在标题栏中央，窄屏下会遮住左侧「阿卡莉」名字。
+       改为在标题栏下方整行展示（退出 fixed、回到文档流），居中收窄，不遮挡名字与消息。
+       用 relative（而非 static）保留定位以设置 z-index：聊天背景 main::before 是
+       fixed + z-index:0，static 元素会被画到背景层下方而被盖住 */
+    .warm-tip { position: relative; top: auto; left: auto; transform: none; z-index: 2;
+      margin: 8px 12px 0; max-width: none;
+      font-size: 13px; padding: 6px 12px; border-radius: 12px; white-space: normal; }
     .msg { max-width: 88%; gap: 8px; }
     .msg .ava { width: 58px; height: 58px; }
     .bubble { font-size: 15px; padding: 10px 12px; overflow-wrap: anywhere; }
     .bubble table, .bubble pre.code { max-width: 100%; }
     .sug-btn { padding: 6px 12px; font-size: 14px; }
-    .fab-ball { width: 54px; height: 54px; }
+    .fab-ball { width: 46px; height: 46px; }
     .fab-menu { min-width: 124px; }
     .story-modal-box { width: 94%; max-height: 86vh; }
     .input-row { gap: 6px; }
@@ -662,9 +671,9 @@
   @media (max-width: 640px) {
     .feedback-btn { right: -4px; bottom: -10px; width: 38px; height: 38px; font-size: 26px; }
   }
-  /* 节庆主题下换成金环配色，与中秋皮肤呼应 */
-  body.festival-midautumn .feedback-btn {
-    background: #fff; border-color: rgba(214, 158, 46, .6);
+  /* 节庆主题下按钮描边呼应主题环色（数据驱动，2026-09-27） */
+  body.festival-on .feedback-btn {
+    background: #fff; border-color: var(--fest-user-border, rgba(0, 0, 0, .1));
   }
 </style>
 </head>
@@ -689,6 +698,7 @@
       <button class="sug-btn" data-cmd="计算工具">计算工具</button>
       <button class="sug-btn" data-cmd="活动">活动</button>
       <button class="sug-btn" data-cmd="遭遇战模拟">遭遇战模拟</button>
+      <button class="sug-btn fab-exit" data-cmd="退出" title="关闭网页">退出</button>
     </div>
   </div>
 
@@ -732,7 +742,7 @@
   </main>
 
   <!-- 输入区：输入框（Enter 发送/Shift+Enter 换行）+ 中断（endTaskBtn，终止当前计算/攻略任务）
-       + 关闭（exitBtn）+ 发送（sendBtn）；事件绑定见 JS「发送消息到 /api/chat」区块 -->
+       + 发送（sendBtn）；「退出」已移入悬浮球菜单（见 #fabMenu）；事件绑定见 JS「发送消息到 /api/chat」区块 -->
   <footer>
     <!-- 算力提醒：只在剩余不足 10% 时自动出现（用户口径 2026-09-25：用户不需要
          常驻查看用量，到阈值提醒即可）。由 checkQuotaAlert() 填充。 -->
@@ -743,7 +753,6 @@
     <div class="input-row">
       <textarea id="input" rows="1" placeholder="聊天或者输入需求，如：查询吹雪改 / 计算南达科他打赤城/查找攻略等"></textarea>
       <button class="exit" id="endTaskBtn" title="中断当前任务（计算/查攻略等），返回主对话流程">中断</button>
-      <button class="exit" id="exitBtn" title="关闭网页">关闭</button>
       <button class="send" id="sendBtn">发送</button>
     </div>
   </footer>
