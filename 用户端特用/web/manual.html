@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>使用说明 · 拂晓智能小秘书</title>
+<style>
+  :root {
+    --bg: #f4f6f8;
+    --panel: #ffffff;
+    --ink: #1f2933;
+    --ink-soft: #6b7280;
+    --line: #e5e8ec;
+    --accent: #6b8caa;
+    --accent-soft: #eef3f7;
+    --func: #c0392b;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 20px 16px 40px;
+    background: var(--bg); color: var(--ink);
+    font-family: "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+    font-size: 14px; line-height: 1.7;
+  }
+  .wrap { max-width: 760px; margin: 0 auto; background: var(--panel);
+    border: 1px solid var(--line); border-radius: 14px; padding: 24px 22px; }
+  h1 { font-size: 20px; font-weight: 600; margin: 0 0 4px; }
+  .lead { color: var(--ink-soft); font-size: 13px; margin: 0 0 18px; }
+  h2 { font-size: 18px; font-weight: 600; margin: 26px 0 10px;
+    padding-left: 9px; border-left: 3px solid var(--accent); }
+  h3 { font-size: 15px; font-weight: 600; margin: 16px 0 6px; }
+  p { margin: 8px 0; }
+  img { max-width: 100%; height: auto; border: 1px solid rgba(0,0,0,0.08);
+    border-radius: 10px; background: #fff; display: block; margin: 10px 0; }
+  table { width: 100%; border-collapse: collapse; margin: 10px 0; font-size: 13px; }
+  th, td { border: 1px solid var(--line); padding: 8px 10px; text-align: left; vertical-align: top; }
+  th { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+  code { background: #f1f3f5; border-radius: 5px; padding: 1px 6px; font-family: Consolas, monospace; font-size: 12.5px; }
+  .tip { background: var(--accent-soft); border: 1px solid rgba(107,140,170,0.3);
+    border-radius: 10px; padding: 10px 12px; color: var(--ink); font-size: 13px; }
+  ul { margin: 8px 0; padding-left: 20px; }
+  li { margin: 4px 0; }
+  .foot { margin-top: 28px; padding-top: 12px; border-top: 1px dashed var(--line);
+    color: var(--ink-soft); font-size: 12px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>拂晓智能小秘书 · 使用说明</h1>
+  <p class="lead">阿卡莉——你的拂晓（拂晓胜利之刻）专用小秘书。本说明讲解进入主界面之后的常用操作。</p>
+
+  <h2>一、主界面导览</h2>
+  <p>打开服务网址进入主界面后，就是和阿卡莉的对话界面：上方是标题栏与温馨提示，中间是聊天区，底部是输入框。</p>
+  <img src="/manual-imgs/02-greeting.webp" alt="主界面" loading="lazy" onerror="this.style.display='none'">
+
+  <table>
+    <tr><th>位置</th><th>作用</th></tr>
+    <tr><td>顶部横幅</td><td>滚动显示温馨提示 / 活动事务提醒</td></tr>
+    <tr><td>右上角悬浮球</td><td>打开工具菜单（查角色 / 查攻略 / 计算工具 等）</td></tr>
+    <tr><td>左上角「⚓ 我的舰船 · 装备面板」</td><td>展开本地装备面板副本</td></tr>
+    <tr><td>底部输入框</td><td>输入问题或指令，回车或点「发送」</td></tr>
+    <tr><td>底部「中断」按钮</td><td>中止正在进行的计算/查询任务，回到普通对话</td></tr>
+  </table>
+
+  <h2>二、对话与连续多轮问答</h2>
+  <p>直接像聊天一样说出你的需求即可，支持自然语言。例如：</p>
+  <ul>
+    <li><code>查询吹雪改</code> —— 查某位舰灵的资料</li>
+    <li><code>计算南达科他打赤城</code> —— 做一次伤害/遭遇战计算</li>
+    <li><code>查找攻略</code> / <code>新人怎么练级</code> —— 找攻略、问思路</li>
+    <li>也可以直接大白话提问，阿卡莉会尽量帮你找到答案</li>
+  </ul>
+  <p class="tip">小技巧：涉及数据、攻略的问题尽量说清楚<strong>舰名、场景</strong>，回复会更精准。</p>
+  <img src="/manual-imgs/03-conversation-q1.webp" alt="对话提问" loading="lazy" onerror="this.style.display='none'">
+
+  <p>阿卡莉会<strong>记住同一段对话里的上下文</strong>，你可以像和真人聊天一样连续追问，不必每次都把前提重复一遍。</p>
+  <img src="/manual-imgs/04-conversation-multiturn.webp" alt="连续多轮问答" loading="lazy" onerror="this.style.display='none'">
+
+  <h3>闲聊与表情差分</h3>
+  <p>和阿卡莉纯聊天（比如日常问好、吐槽、聊喜好）时，她会随对话氛围切换<strong>表情差分</strong>——头像神态会跟着变化（如傲娇关心、微笑、嫌弃等），用画面而非文字括号来表达情绪。这是闲聊时的正常呈现方式，让陪伴更自然，并非异常；涉及数据、攻略的工作类请求则不会触发表情差分。</p>
+
+  <h2>三、界面按钮与功能入口</h2>
+
+  <h3>1. 底部输入与中断</h3>
+  <p>在底部输入框写问题，回车或点「发送」即可；若阿卡莉正在跑计算/查询，点「中断」可随时中止，回到普通对话。</p>
+
+  <h3>2. 左上角 · 我的舰船装备面板（本地副本）</h3>
+  <p>点左上角的 <strong>「⚓ 我的舰船 · 装备面板（本地副本）」</strong>，即可摊开你自己的装备面板：</p>
+  <ul>
+    <li>在输入框填入舰名（如 <code>吹雪改</code>），点「载入面板」；</li>
+    <li>可直接修改面板数值，再「保存（设为输入值）」或「保存增量（相对当前值）」；</li>
+    <li>之后的<strong>计算</strong>会以你保存的副本面板为基础（<strong>查询</strong>仍显示底层数据）；</li>
+    <li>「删除该角色（恢复底层）」可随时还原。</li>
+  </ul>
+  <img src="/manual-imgs/07-equipment-panel.webp" alt="装备面板" loading="lazy" onerror="this.style.display='none'">
+
+  <h3>3. 右上角悬浮球 · 工具菜单</h3>
+  <p>点击右上角悬浮球，弹出常用工具菜单：</p>
+  <img src="/manual-imgs/09-tools-menu.webp" alt="工具菜单" loading="lazy" onerror="this.style.display='none'">
+  <table>
+    <tr><th>菜单项</th><th>用途</th></tr>
+    <tr><td>查角色</td><td>打开舰灵查询面板，按名字搜索资料</td></tr>
+    <tr><td>查攻略</td><td>打开攻略库，浏览/搜索攻略文档</td></tr>
+    <tr><td>计算工具</td><td>进入伤害、配装等计算流程</td></tr>
+    <tr><td>活动</td><td>查看当前活动信息</td></tr>
+    <tr><td>遭遇战模拟</td><td>模拟遭遇战、推演时间轴</td></tr>
+    <tr><td>退出</td><td>关闭本次网页对话</td></tr>
+  </table>
+
+  <h3>4. 💡 反馈按钮</h3>
+  <p>每条<strong>知识库问答类</strong>回复的右下角都有 <strong>💡 反馈按钮</strong>：回答不满意时点一下，即可把这段问答反馈给开发者，帮助阿卡莉改进。</p>
+  <img src="/manual-imgs/05-feedback-button.webp" alt="反馈按钮" loading="lazy" onerror="this.style.display='none'">
+
+  <h2>四、常见问题</h2>
+  <table>
+    <tr><th>问题</th><th>处理</th></tr>
+    <tr><td>输入框发不出去</td><td>先点「中断」结束当前任务，或刷新页面重试</td></tr>
+    <tr><td>图片/表情加载不出来</td><td>检查网络；必要时刷新页面</td></tr>
+    <tr><td>想反馈但没看到 💡</td><td>只有知识库问答类回复带反馈按钮，换一个问答式提问即可</td></tr>
+    <tr><td>计算用了错误面板</td><td>去左上角「我的舰船 · 装备面板」载入/修正你的副本面板</td></tr>
+  </table>
+
+  <div class="foot">本说明为使用者简明指引；如需部署、运维与接口细节，请参见项目内其他文档。</div>
+</div>
+</body>
+</html>

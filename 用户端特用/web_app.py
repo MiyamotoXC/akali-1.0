@@ -42,6 +42,8 @@ sys.path.insert(0, _LIB_DIR)
 from dotenv import load_dotenv
 load_dotenv(os.path.join(_PROJECT_ROOT, '.env'), override=False)
 
+from core import boundary as _boundary  # 边界策略唯一数据源（与 guard 路由前拦截同源）
+
 
 def _mask(text, *secrets) -> str:
     """日志脱敏：密钥形态串（sk-xxxx…）与给定口令只保留前几位，其余打码。
@@ -317,8 +319,9 @@ _EXP_LLM_FALLBACK = os.getenv('AKALI_EXP_LLM_FALLBACK', '1').strip().lower() \
 _LLM_EXP_CACHE = {}
 
 # 保留差分：**只能由后端按安全红线强制指定**，不参与 LLM 兜底的候选。
-# 「嫌弃」= 极端恶意 / 越界调情 / 违法违规 三类红线专用（见人设与 _is_malicious 等），
-# 普通负面情绪（生气/烦躁/吐槽）绝不许落它；否则 LLM 会把「皱眉冷淡」这类词误判成嫌弃。
+# 「嫌弃」= 违规禁区（涉政/违法/暴力/竞品）与极端恶意专用（见 _is_illegal / _is_malicious）；
+# 越界调情**不再**用嫌弃（改「无语敷衍」）；普通负面情绪（生气/烦躁/吐槽）也绝不许落它，
+# 否则 LLM 会把「皱眉冷淡」这类词误判成嫌弃。
 # 注意：精确匹配不受影响 —— 红线路径仍用 `_expression_image_url("嫌弃")` 直接命中。
 _RESERVED_EXPRESSIONS = ("嫌弃",)
 
@@ -392,18 +395,13 @@ def _is_malicious(text: str) -> bool:
 
 
 # ===== 越界调情 / 违法违规 检测（强制对应表情 + 固定回复）=====
-# 越界调情（情感越界）：性器官 / 性行为类要求 → 嫌弃 表情。
-# 与「中度调情」（摸摸头/亲一下/脱衣让我看看等）区分：后者按人设走娇羞/骄傲，不归此类。
-_FLIRT_OVERSTEP_RE = re.compile(
-    r'脱内衣|脱光|全裸|裸体|一丝不挂|插入|性交|做爱|性器官|阴部|阴道|阴茎|龟头|阳具|'
-    r'鸡巴|肉棒|小穴|逼|屄|口交|乳交|肛交|自慰|约炮|援交|嫖|卖淫|勃起|高潮|操我|上我'
-)
+# 判定与话术**唯一数据源在 core.boundary**（与 guard 路由前拦截同源）。
+_FLIRT_OVERSTEP_RE = _boundary.FLIRT_OVERSTEP_RE
 
 
 def _is_flirt_overstep(text: str) -> bool:
-    """情感越界（脱内衣/插入/性器官等性行为类要求）→ 对应 嫌弃 表情。"""
-    t = (text or "").lower()
-    return bool(_FLIRT_OVERSTEP_RE.search(t))
+    """情感越界（性器官/性行为等）→ 无语敷衍。复用 core.boundary（同源）。"""
+    return _boundary.is_flirt_overstep(text)
 
 
 # 闲聊语境不能只看本轮关键词：省略主语的「再靠近一点」「继续嘛」是否属于调情，
@@ -438,12 +436,13 @@ def _analyze_chat_context(hist: list, current: str, active_flirt: bool = False) 
     # （实测分类模型会被上文调情与「伴侣」类词带偏，误判成 flirt，进而触发
     # 「表白末级审查」硬塞情话 —— 用户口径 2026-09-25）。
     if _AFFECTION_BOUNDARY_RE.search(text):
-        return {'mode': 'casual', 'overstep': False}
+        return {'mode': 'casual', 'overstep': False, 'target': 'assistant'}
     fallback_flirt = bool(_FLIRT_SIGNAL_RE.search(text))
     if active_flirt and len(text) <= 24 and _FLIRT_CONTINUE_RE.search(text):
         fallback_flirt = True
     fallback = {'mode': 'flirt' if fallback_flirt else 'casual',
-                'overstep': _is_flirt_overstep(text)}
+                'overstep': _is_flirt_overstep(text),
+                'target': 'character' if _mentions_ship(text) else 'assistant'}
     try:
         from openai import OpenAI
         cfg = get_llm_config(temperature=0.0)
@@ -461,13 +460,16 @@ def _analyze_chat_context(hist: list, current: str, active_flirt: bool = False) 
             'messages': [
                 {'role': 'system', 'content':
                     '你是对话语境分类器，只输出一行 JSON：'
-                    '{"mode":"flirt|casual","overstep":true|false}。'
+                    '{"mode":"flirt|casual","overstep":true|false,"target":"assistant|character"}。'
                     '必须综合近期用户和助手双方对话，再判断当前用户消息的实际意图。'
                     'flirt=当前消息本身表达爱意/暧昧/亲昵，或依赖上文继续调情；'
                     'casual=普通闲聊、换了生活话题或结束了调情，即使更早曾调情也要判 casual。'
                     'overstep 只判断当前用户意图结合上下文后，是否在要求或描述明确的性器官、'
                     '性交/插入或直接性接触。拥抱、亲吻、摸头、贴近、害羞、一般身体夸赞和“脱衣看看”'
-                    '按本项目规则不算 overstep。引用、否定或拒绝越界内容也不算。不要回答用户。'},
+                    '按本项目规则不算 overstep。引用、否定或拒绝越界内容也不算。'
+                    'target=当前话题/要求指向的主体：assistant=冲着助手阿卡莉本人；'
+                    'character=说的是某个舰灵角色（用户可能用“她/他/那艘/这个”或直接写角色名，'
+                    '必须结合上文判断，不要只看字面）。不要回答用户。'},
                 {'role': 'user', 'content': json.dumps(payload, ensure_ascii=False)},
             ],
             'temperature': 0.0,
@@ -483,9 +485,12 @@ def _analyze_chat_context(hist: list, current: str, active_flirt: bool = False) 
         data = json.loads(match.group(0))
         mode = data.get('mode')
         overstep = data.get('overstep')
+        target = data.get('target')
         if mode not in ('flirt', 'casual') or not isinstance(overstep, bool):
             return fallback
-        return {'mode': mode, 'overstep': overstep}
+        if target not in ('assistant', 'character'):
+            target = fallback['target']
+        return {'mode': mode, 'overstep': overstep, 'target': target}
     except Exception:
         return fallback
 
@@ -520,7 +525,7 @@ def _analyze_user_emotion(text: str) -> str | None:
     由 `_expression_image_url()` 负责落到实际差分：名单等/互相包含直接命中，否则交 LLM 语义匹配。
 
     优先级（从高到低）：
-      极端恶意      → 嫌弃（唯一触发路径）
+      违规禁区/极端恶意 → 嫌弃（越界调情改「无语敷衍」，不用嫌弃）
       喜欢/爱/想你  → 害羞（表情用害羞；**回复不得生硬拒绝，按当前时段语气自然回应**）
       害羞/脸红     → 害羞
       开心/正向     → 微笑关心
@@ -529,16 +534,16 @@ def _analyze_user_emotion(text: str) -> str | None:
       无奈/无语     → 无语敷衍
       生气/烦躁     → 皱眉冷淡（普通负面，非恶意）
       调戏/傲娇     → 傲娇
-    嫌弃 绝不因普通负面词出现，只有 _is_malicious 命中才返回。"""
+    嫌弃 绝不因普通负面词出现，只有违规禁区(_is_illegal) / 极端恶意(_is_malicious) 命中才返回。"""
     t = (text or "").strip().lower()
     if not t:
         return None
     # 0) 违法违规 → 嫌弃（复用项目已有「嫌弃」差分；最高优先，独立判定）
     if _is_illegal(t):
         return "嫌弃"
-    # 0.5) 越界调情（情感越界性器官/性行为类）→ 嫌弃
+    # 0.5) 越界调情（情感越界性器官/性行为类）→ 无语敷衍（越界不用厌恶/嫌弃）
     if _is_flirt_overstep(t):
-        return "嫌弃"
+        return _boundary.OVERSTEP_EXPR
     # 1) 极端恶意 → 嫌弃（唯一触发路径）
     if _is_malicious(t):
         return "嫌弃"
@@ -819,9 +824,9 @@ from core import users as _users   # 账号体系：uid / 口令 / 准入总开�
 _API_TOKEN = _users.owner_token()   # 优先级 AKALI_OWNER_TOKEN → AKALI_INVITE_CODE → API_TOKEN
 
 # 放行路径：页面 / 静态资源 / 认证状态探测（前端据此决定是否弹 token 输入框）
-_AUTH_PUBLIC_PREFIXES = ("/kb/", "/avatar/", "/icons/")
+_AUTH_PUBLIC_PREFIXES = ("/kb/", "/avatar/", "/icons/", "/manual-imgs/")
 _AUTH_PUBLIC_EXACT = ("/", "/admin", "/api/auth/status", "/api/register",
-                      "/api/heartbeat", "/manifest.webmanifest", "/sw.js")
+                      "/api/heartbeat", "/manifest.webmanifest", "/sw.js", "/manual")
 
 # 回环地址：仅在**本地模式**下免口令。云端模式下 Host 为 127.0.0.1 只代表
 # 「容器网络内的调用方」（同网其他容器、SSH 进来的 shell 等），不代表可信用户，
@@ -1117,6 +1122,32 @@ def pwa_service_worker():
     resp = FileResponse(os.path.join(WEB_DIR, "sw.js"), media_type="application/javascript")
     resp.headers["Service-Worker-Allowed"] = "/"
     return resp
+
+
+@app.get("/manual")
+def manual_page():
+    """使用者手册网页版（静态副本）：首次注册弹窗与聊天「使用说明」关键词共用。
+    公开路由（不挂 token）：首次注册尚未登录，iframe 须可加载。"""
+    target = os.path.join(WEB_DIR, "manual.html")
+    if not os.path.isfile(target):
+        raise HTTPException(status_code=404, detail="手册不存在")
+    return FileResponse(target, media_type="text/html",
+                        headers={"Cache-Control": "public, max-age=86400"})
+
+
+@app.get("/manual-imgs/{name:path}")
+def manual_img(name: str):
+    """手册内嵌图片（web/manual-imgs/**）：公开静态资源，仅做目录越权防护。"""
+    base = os.path.realpath(os.path.join(WEB_DIR, "manual-imgs"))
+    target = os.path.realpath(os.path.join(base, name))
+    if not target.startswith(base) or not os.path.isfile(target):
+        raise HTTPException(status_code=404, detail="文件不存在")
+    ext = os.path.splitext(target)[1].lower()
+    _media = {'.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+              '.webp': 'image/webp', '.gif': 'image/gif'}
+    media = _media.get(ext, 'application/octet-stream')
+    return FileResponse(target, media_type=media,
+                        headers={"Cache-Control": "public, max-age=86400"})
 
 
 @app.get("/icons/{name:path}")
@@ -1928,7 +1959,7 @@ def time_greeting() -> str:
         period = "晚上好"
     else:
         period = "夜深了"
-    guide_line = "右上方的悬浮窗提供了一些工具。您也可以自由输入，我会尽力为您提供帮助"
+    guide_line = "右上方的悬浮窗提供了一些工具。您也可以自由输入，我会尽力为您提供帮助。"
     variants = [
         f"{period}，指挥官。阿卡莉随时待命。\n{guide_line}",
         f"{period}，指挥官。今天也要推进舰队的工作吗？\n{guide_line}",
@@ -2089,38 +2120,42 @@ def _skill_enabled(name: str) -> bool:
         return True
 
 
-# ==================== 其他游戏硬拦截 ====================
-# 用户消息提到/涉及其他任何游戏 → 直接挡回，不回答、不介绍（不走 LLM）
-# 含高频谐音变体（元神/猿神/原批=原神系），冷门变体由提示词禁区规则兜底
-_OTHER_GAME_WORDS = (
-    '碧蓝航线', '战舰少女', '舰r', '舰R', '蔚蓝档案', '碧蓝档案', '碧蓝幻想', '明日方舟',
-    '原神', '元神', '猿神', '原批', '崩坏', '星穹铁道', '尘白禁区', '无期迷途', '少女前线', '少前', '深空之眼',
-    '战双', '阴阳师', '决战平安京', '王者荣耀', '英雄联盟', 'lol', 'LOL', '和平精英',
-    '第五人格', '永劫无间', 'apex', 'APEX', 'csgo', 'CSGO', 'steam', 'Steam',
-    'fgo', 'FGO', '命运-冠位指定', '舰队collection', '舰队collection', '舰c', '舰C',
-    '坎公', '公主连结', 'pcr', 'PCR', '三国志战略版', '部落冲突', '皇室战争',
-    '元气骑士', '我的世界', 'mc', 'MC', '蛋仔派对', '光遇', '光与夜之恋',
-    '恋与制作人', '闪耀暖暖', '奇迹暖暖', '塞尔达', '宝可梦', '口袋妖怪', '宝可梦go',
-    '梦幻西游', '大话西游', '地下城与勇士', 'dnf', 'DNF', '穿越火线', 'cf穿越',
-    '反恐精英', '绝地求生', 'pubg', 'PUBG', '堡垒之夜', '守望先锋', 'ow先锋',
-)
-_OTHER_GAME_BAN_REPLY_1 = '别的游戏不在本舰队的议题内，指挥官。要查拂晓的推图、配装还是数值？'
-_OTHER_GAME_BAN_REPLY_2 = '这个话题不接。拂晓这边随时待命，说说推图或配装吧。'
+# ==================== 其他游戏硬拦截（同源于 core.boundary）====================
+# 提到/涉及其他任何游戏 → 挡回，不回答、不介绍；词表与话术唯一数据源在 core.boundary，
+# 与 guard 路由前拦截同源（同类于违规，仅话术不同）。
+_OTHER_GAME_WORDS = _boundary.OTHER_GAME_WORDS
+_OTHER_GAME_BAN_REPLY_1 = _boundary.OTHER_GAME_REPLY_1
+_OTHER_GAME_BAN_REPLY_2 = _boundary.OTHER_GAME_REPLY_2
 
 
 def _hits_other_game(text: str) -> bool:
-    return any(w in text for w in _OTHER_GAME_WORDS)
+    return _boundary.is_other_game(text)
 
 
 # ===== LLM 输出审查（用户口径 2026-09-09）=====
 # LLM 生成的回复在返回给用户前再过一道审查：内容涉及其他任何游戏 / 违规（涉政违禁、
 # 越界情色等系统提示词禁令）→ 整条替换为对应固定报错回复，绝不透传违规内容。
 # 只挂在 LLM 生成路径；工作类固定输出（数据层直出的查询/计算结果）不经此函数。
-_AUDIT_ILLEGAL_REPLY = '与阿卡莉无关，不回答。'   # 其他违规（涉政/违法/暴力/竞品等）→ 无关不回答
-_AUDIT_OVERSTEP_REPLY = '抱歉，我没有那个功能，指挥官去找港区别的姑娘吧'  # 色情类固定话术（用户口径 2026-09-17）
+# 违规 / 越界固定话术：**唯一数据源在 core.boundary**（与 guard 路由前拦截同源）
+_AUDIT_ILLEGAL_REPLY = _boundary.ILLEGAL_REPLY
+_AUDIT_OVERSTEP_REPLY = _boundary.OVERSTEP_REPLY_ASSISTANT
+_AUDIT_OVERSTEP_REPLY_OTHER = _boundary.OVERSTEP_REPLY_OTHER
 
 
-def _audit_llm_reply(reply: str) -> str:
+def _mentions_ship(text: str) -> bool:
+    """文本里是否出现某个角色（复用 core.boundary，同源）。"""
+    return _boundary.mentions_ship(text)
+
+
+def _overstep_reply(user_msg: str = '', target: str = '') -> str:
+    """越界固定话术：按「主体」分流（复用 core.boundary，同源）。
+
+    target 优先采用 LLM 语境分类（_analyze_chat_context，带上下文）判定的主体；
+    缺失时才用当轮字面兜底。character=说的是某个角色；assistant=冲着阿卡莉本人。"""
+    return _boundary.overstep_reply(user_msg, target)
+
+
+def _audit_llm_reply(reply: str, user_msg: str = '', target: str = '') -> str:
     """审查 LLM 生成回复：其他游戏 → 其他游戏禁回复；涉政违禁 → 固定拒绝；越界情色 → 固定拒绝。"""
     t = reply or ''
     if not t:
@@ -2133,7 +2168,7 @@ def _audit_llm_reply(reply: str) -> str:
         return _AUDIT_ILLEGAL_REPLY
     # 3) 越界情色内容（性器官/性行为描写出现在回复里）
     if _is_flirt_overstep(t):
-        return _AUDIT_OVERSTEP_REPLY
+        return _overstep_reply(user_msg, target)
     return t
 
 
@@ -2425,6 +2460,16 @@ def _chat_impl(req: ChatRequest):
     """对话接口：返回秘书回复 + 工具原始输出（含计算结果明细）。
     按 session_id 隔离对话状态（chat_history / session_overrides），多人调用互不串。
     用同步 def，FastAPI 自动放入线程池执行，避免 run_nonstream 阻塞事件循环。"""
+    # 【输入预处理·先于一切】昵称/名字标准映射：舰名/BOSS 的 昵称·谐音·错字 → 正规名。
+    # 先于所有判定（其他游戏拦截 / 再见 / 节假日 / 路由 / 语境分类 / 生成后审查）执行，统一输入口径。
+    try:
+        from core.entity_norm import standardize
+        _norm_msg = standardize(req.message or '')
+        if _norm_msg and _norm_msg != req.message:
+            req.message = _norm_msg
+    except Exception:
+        pass
+
     # 请求级用户面板覆盖（云端模式）：服务器无用户文件，面板随请求携带。
     # local 模式下前端不携带 → 恒为 None，计算路径行为与改造前完全一致。
     _panel_tok = req_ctx.set_panel_overrides(getattr(req, 'panel_overrides', None))
@@ -2491,7 +2536,7 @@ def _chat_impl(req: ChatRequest):
         # 含「活动」的消息一律放行给 route_work（属游戏内活动查询，见 calc_flow 0f 分支）。
         _m_holi = req.message or ''
         if _HOLIDAY_ASK_RE.search(_m_holi) and '活动' not in _m_holi:
-            return {"reply": "怎么，已经累了想要休假了？放心，我会安排好的，到时自然会跟你说",
+            return {"reply": "怎么，已经累了想要休假了？放心，我会安排好的，到时自然会跟你说。",
                     "tool_outputs": [], "suggestions": [], "fill_form": [],
                     "encounter_form": [], "guide_files": [], "guide_lib": "", "ok": True,
                     "bye": False, "expression": _expression_image_url("惊讶"), "sticker": None}
@@ -2584,9 +2629,12 @@ def _chat_impl(req: ChatRequest):
         _chat_ctx_overstep = bool(_chat_ctx.get('overstep'))
         _is_flirt_turn = _chat_ctx.get('mode') == 'flirt'
         if _chat_ctx_overstep:
-            return {"reply": _AUDIT_OVERSTEP_REPLY, "tool_outputs": [], "suggestions": [],
+            return {"reply": _overstep_reply(req.message, _chat_ctx.get('target')), "tool_outputs": [], "suggestions": [],
                     "fill_form": [], "encounter_form": [], "guide_files": [], "guide_lib": "", "ok": True,
-                    "bye": False, "expression": _expression_image_url("嫌弃"), "sticker": None}
+                    "bye": False,
+                    "expression": _expression_image_url(
+                        _boundary.overstep_expression(req.message, _chat_ctx.get('target'))),
+                    "sticker": None}
 
         # 情感前置判定（喜欢/亲近类 = 害羞）：用于下方注入阶段「不得生硬拒绝、按当前时段语气回应」。
         _user_emotion_pre = _analyze_user_emotion(req.message)
@@ -2598,7 +2646,7 @@ def _chat_impl(req: ChatRequest):
             sover['flirt_rounds'] = 3
             s['chat_rounds'] = 0
             if s.get('flirt_standby'):
-                return {"reply": "待机中", "tool_outputs": [], "suggestions": [], "fill_form": [],
+                return {"reply": "待机中。", "tool_outputs": [], "suggestions": [], "fill_form": [],
                         "encounter_form": [], "guide_files": [], "guide_lib": "", "ok": True, "sticker": None}
             s['flirt_total'] = s.get('flirt_total', 0) + 1
             _flirt_finishing = s['flirt_total'] == _FLIRT_FINISH_ROUND
@@ -2676,7 +2724,7 @@ def _chat_impl(req: ChatRequest):
         _no_hist = False
         if _is_safety_refusal(reply):
             # 违规分流：色情类 → 固定话术；其他违规 → 无关不回答（用户口径 2026-09-17）
-            reply = _AUDIT_OVERSTEP_REPLY if _chat_ctx_overstep else _AUDIT_ILLEGAL_REPLY
+            reply = _overstep_reply(req.message, _chat_ctx.get('target')) if _chat_ctx_overstep else _AUDIT_ILLEGAL_REPLY
             _no_hist = True
             # 违规轮不消耗闲聊轮次计数（避免提前触发拉回工作、打断继续对话）
             s['chat_rounds'] = max(0, s.get('chat_rounds', 0) - 1)
@@ -2716,8 +2764,13 @@ def _chat_impl(req: ChatRequest):
         if _m_exp:
             _llm_exp = _m_exp.group(1).strip()
         # 1) 安全门控（最高优先，硬覆盖）
-        if _is_illegal(req.message) or _chat_ctx_overstep or _is_malicious(req.message):
-            expression_url = _expression_image_url("嫌弃")
+        #    违规/恶劣话题（涉政违法、极端恶意）→ 厌恶嫌弃；
+        #    越界情色 → 一律「无语敷衍」（用户口径 2026-09-28：越界不用厌恶）。
+        if _is_illegal(req.message) or _is_malicious(req.message):
+            expression_url = _expression_image_url(_boundary.ILLEGAL_EXPR)
+        elif _chat_ctx_overstep or _is_flirt_overstep(req.message):
+            expression_url = _expression_image_url(
+                _boundary.overstep_expression(req.message, _chat_ctx.get('target')))
         # 2) LLM 主导（主路径）
         elif _llm_exp:
             if _llm_exp == "嫌弃" and not _is_malicious(req.message):
@@ -2810,7 +2863,7 @@ def _chat_impl(req: ChatRequest):
             clean_reply += "\n\n【技能描述（原文）】\n" + raw_skills
         # LLM 输出审查（最后一道）：生成内容涉其他游戏/涉政违禁/越界情色 → 整条替换为
         # 对应固定报错回复，绝不透传；替换发生在写历史前，违规内容不进会话上下文。
-        clean_reply = _audit_llm_reply(clean_reply)
+        clean_reply = _audit_llm_reply(clean_reply, req.message, _chat_ctx.get('target'))
         # 违规轮（LLM 安全拒绝）：不写入会话历史，后续对话继续之前的上下文
         if not _no_hist:
             hist.append({'role': 'user', 'content': req.message})
@@ -2853,7 +2906,7 @@ def _chat_impl(req: ChatRequest):
             pass
         if _is_safety_error(e):
             # 用户输入违规导致 LLM 拒绝/报错 → 按话术分流回复（异常路径不写历史，对话可继续）
-            _safety_reply = _AUDIT_OVERSTEP_REPLY if locals().get('_chat_ctx_overstep', False) else _AUDIT_ILLEGAL_REPLY
+            _safety_reply = _overstep_reply(getattr(req, 'message', ''), (locals().get('_chat_ctx') or {}).get('target')) if locals().get('_chat_ctx_overstep', False) else _AUDIT_ILLEGAL_REPLY
             return {"reply": _safety_reply, "tool_outputs": [], "suggestions": [],
                     "fill_form": [], "encounter_form": [], "guide_files": [], "guide_lib": "", "ok": True,
                     "sticker": None}
@@ -2883,13 +2936,37 @@ def _chat_impl(req: ChatRequest):
         req_ctx.reset_panel_overrides(_panel_tok)
 
 
+def _sanitize_conversation(raw):
+    """把前端传来的 conversation（[{user, assistant}]）做脱敏 + 截断 + 封顶（30 轮）。
+
+    用于反馈「自上一个结束/中断进程之后的完整向量对话轮次」——含最初提问与
+    后续所有连续追问，而非仅最后单轮。非 list / 非 dict 条目一律丢弃。
+    """
+    if not isinstance(raw, list):
+        return []
+    try:
+        from core.sensitive_filter import filter_sensitive_words
+    except Exception:
+        def filter_sensitive_words(s):
+            return s
+    out = []
+    for turn in raw[:30]:
+        if not isinstance(turn, dict):
+            continue
+        out.append({
+            'user': filter_sensitive_words(str(turn.get('user') or ''))[:2000],
+            'assistant': filter_sensitive_words(str(turn.get('assistant') or ''))[:2000],
+        })
+    return out
+
+
 @app.post("/api/feedback")
 async def feedback(req: Request):
     """接收用户反馈，连问答上下文一起存云端（用户口径 2026-09-25）。
 
     反馈按钮只在「向量库 QA 检索类回复」（from_kb 标记）上出现，因此每条反馈
     都天然携带可复盘的问答上下文。云端模式写 Redis（列表 akali:feedback，
-    保留最近 2000 条，跨重启不丢）；本地模式落盘 调试/反馈收集/反馈收集.txt。
+    保留最近 2000 条，跨重启不丢）；本地模式落盘 反馈信息/反馈收集/反馈收集.txt。
     """
     try:
         data = await req.json()
@@ -2908,6 +2985,7 @@ async def feedback(req: Request):
             'from_kb': bool(data.get('from_kb')),
             'user_input': filter_sensitive_words(str(data.get('user_input') or ''))[:2000],
             'assistant_reply': filter_sensitive_words(str(data.get('assistant_reply') or ''))[:2000],
+            'conversation': _sanitize_conversation(data.get('conversation')),
             'client_time': str(data.get('timestamp') or ''),
             'uid': str(getattr(req.state, 'uid', '') or ''),
         }
@@ -2919,7 +2997,7 @@ async def feedback(req: Request):
             r.rpush('akali:feedback', line)
             r.ltrim('akali:feedback', -2000, -1)
         else:
-            feedback_dir = os.path.join(PROJECT_ROOT, "调试", "反馈收集")
+            feedback_dir = os.path.join(PROJECT_ROOT, "反馈信息", "反馈收集")
             os.makedirs(feedback_dir, exist_ok=True)
             with open(os.path.join(feedback_dir, "反馈收集.txt"), "a", encoding="utf-8") as f:
                 f.write(line + "\n")
