@@ -4146,11 +4146,124 @@ def _dispatch_intent(tools, overrides, msg, agent, decision):
     return handler(tools, msg, agent=agent, overrides=overrides, decision=decision)
 
 
+def _favor_dispatch(tools, overrides, msg):
+    """好感度计算分支：固定公式输出，不走 LLM（防编数字）。返回含 favor_form 标记的 dict 或 None。
+
+    显式入口（工具箱菜单「好感度」发送的「好感度计算」）与 favor_pending 追问上下文都走这里。
+    仅当消息确实属于好感度计算（含显式「好感度计算」或 favor_pending 追问且非解释类）才返回非空结果。
+    """
+    _favor_explain = re.search(r'有什么用|什么意思|什么效果|怎么(?:回事|来的?|运作)|机制|介绍', msg)
+    # 工具箱「好感度」菜单发送「好感度计算」为显式计算入口：即便 LLM 将"计算"误判为 calc/公式
+    # 意图，也强制进入好感分支并弹出网页表单（用户 2026-10-01 反馈：点了只回文字不弹窗）。
+    # 仅当同时含「好感」+「计算」才强制，避免「查询好感度」等查询被误拦截进计算。
+    _favor_force = ('好感' in msg and '计算' in msg)
+    if not (('好感' in msg or overrides.get('favor_pending')) and not _favor_explain
+            and (_li_is('favor') or _favor_force)):
+        return None
+    # 追问上下文中出现其它明确工作意图 → 放弃好感追问，放行后续路由
+    if overrides.get('favor_pending') and '好感' not in msg \
+            and re.search(r'查|攻略|伤害|遭遇战|模拟|pvp|boss|装备|天气|活动|保存|组队|面板|技能|天赋', msg):
+        overrides['favor_pending'] = None
+        return None
+    tool = _tool(tools, 'calc_favor')
+    if not tool:
+        return {'reply': '好感度计算工具当前不可用。', 'tool_outputs': [], 'suggestions': [],
+                'fill_form': [], 'encounter_form': [], 'guide_files': [], 'guide_lib': '', 'ok': True}
+    p = {}
+    msg_f = msg.replace('熟悉', '相识')   # 口语同义词归一化（"熟悉55%到永恒"）
+    # 长词优先（"至爱"须先于"爱"匹配，否则级别名被截断）
+    _STAGE_ALT = '陌生|相识|亲近|喜欢|誓约|依偎|守护|至爱|铭心|永恒|爱'
+    # 目标级别（"到誓约"/"刷到铭心"），可带目标进度（"到誓约50%"）→ 提取后从句中移除，避免混入当前百分比
+    # 进度数字没带百分号也视为百分比（"到誓约50"= 到誓约50%）
+    mtt = (re.search(rf'(?:到|刷到|冲到|直至|直到)\s*({_STAGE_ALT})\s*(\d+(?:\.\d+)?)\s*(?:%|％|百分之)?', msg_f)
+           or re.search(rf'(?:到|刷到|冲到|直至|直到)\s*({_STAGE_ALT})\s*百分之\s*(\d+(?:\.\d+)?)', msg_f))
+    if mtt:
+        p['target_stage'] = mtt.group(1)
+        p['target_percent'] = float(mtt.group(2))
+        msg_f = msg_f.replace(mtt.group(0), ' ')
+    else:
+        mt = re.search(rf'(?:到|刷到|冲到|直至|直到)\s*({_STAGE_ALT})', msg_f)
+        if mt:
+            p['target_stage'] = mt.group(1)
+    # 当前级别："现在/目前/当前 是/在 X"、"喜欢30%" 相邻形态、句尾 "现在喜欢"
+    ms = (re.search(rf'(?:现在|目前|当前)(?:是|在)?\s*({_STAGE_ALT})', msg_f)
+          or re.search(rf'({_STAGE_ALT})\s*[^\d%]{{0,4}}\d+(?:\.\d+)?\s*%', msg_f)
+          or re.search(rf'({_STAGE_ALT})(?:阶段)?(?:了|啦|之间|左右)?$', msg_f))
+    if ms and ms.group(1) != p.get('target_stage'):
+        p['current_stage'] = ms.group(1)
+    # 该级别内进度百分比（"进度30%" / "好感50%" / "百分之30"；无%号也视为百分比：
+    # "进度30"、"好感50"；"好感50点" 是礼物点数不是进度——捕获后校验尾部非"点"，
+    # 防止正则回溯把 50 吞成 5；"喜欢0" 按级别名后数字识别）
+    _mp_candidates = [
+        re.search(r'(?:进度|好感)[^\d%]{0,4}(\d+(?:\.\d+)?)\s*(?:%|％)?', msg_f),
+        re.search(r'(\d+(?:\.\d+)?)\s*%', msg_f),
+        re.search(r'百分之\s*(\d+(?:\.\d+)?)', msg_f),
+    ]
+    mp = next((m for m in _mp_candidates
+               if m and msg_f[m.end():m.end() + 1] != '点'), None)
+    if not mp:
+        mn = re.search(rf'({_STAGE_ALT})\s*[^\d%]{{0,2}}(\d+(?:\.\d+)?)', msg_f)
+        if mn and mn.group(1) == p.get('current_stage'):
+            mp = mn
+    if mp:
+        p['current_percent'] = float(mp.group(2) if mp.lastindex and mp.lastindex >= 2 else mp.group(1))
+    # 百分比缺省按 0% 算（"现在喜欢，到誓约"=喜欢 0% 起）
+    p.setdefault('current_percent', 0.0)
+    # 礼物：品质（白/绿/蓝/紫/金，"金色礼物"）、每件点数（"礼物加3点"）
+    # 或仅说"算礼物/要多少礼物"——礼物按阶段固定品质输出，品质词只是触发标记
+    mc = re.search(r'(白|绿|蓝|紫|金)色?(?:的)?礼物', msg)
+    if mc:
+        p['gift_color'] = mc.group(1)
+    # 礼物模式：全用金色礼物（gift_mode=gold）或低级礼物梯度计算（按阶段固定品质，默认）。
+    # 「全用金色礼物」同时会命中上面的品质正则（金色礼物）触发礼物段输出
+    if re.search(r'全用?金|全金', msg):
+        p['gift_mode'] = 'gold'
+    elif re.search(r'低级礼物|梯度', msg):
+        p['gift_points'] = -1   # 触发礼物段输出（按阶段梯度品质）
+    mg = (re.search(r'礼物[^\d]{0,6}(\d+(?:\.\d+)?)\s*点', msg)
+          or re.search(r'(\d+(?:\.\d+)?)\s*点[^，。]{0,4}礼物', msg))
+    if mg:
+        p['gift_points'] = float(mg.group(1))
+    if 'gift_color' not in p and 'gift_points' not in p and re.search(r'(算|需要多少|要多少|用多少)[^，。]{0,4}礼物|礼物.{0,6}(需要|要|用)多少', msg):
+        p['gift_points'] = -1   # 仅触发礼物段输出（按阶段固定品质），非真实点数
+    # 出击位置与星级
+    if re.search(r'非旗舰|僚舰|不带旗舰', msg):
+        p['position'] = 'non_flagship'
+    mstar = re.search(r'([123])\s*星', msg)
+    if mstar:
+        p['stars'] = int(mstar.group(1))
+    # 必须说清当前好感度级别（百分比可省略），缺级别才引导补全（不算、不编）。
+    # 引导不走文本多轮：返回 favor_form 标记，前端自动弹出「好感度计算器」网页表单
+    #（用户 2026-09-10 指示「这里不在回复中回答，而是调用网页工具」）；
+    # 文本补参路径（favor_pending + "现在喜欢，进度30%"）保留兼容，关掉表单仍可打字
+    if 'current_stage' not in p:
+        overrides['favor_pending'] = True   # 记住追问上下文，下一轮短句可直接补参
+        return {'reply': '请填写当前好感度级别（进度不填按 0% 算）——已为你打开好感度计算器。',
+                'tool_outputs': [], 'suggestions': [], 'fill_form': [],
+                'encounter_form': [], 'guide_lib': '', 'guide_files': [], 'ok': True,
+                'favor_form': True}
+    overrides['favor_pending'] = None       # 参数齐全，清除追问标记
+    try:
+        out = tool.call(p)
+        text = out if isinstance(out, str) else str(out)
+        return {'reply': text, 'tool_outputs': [text], 'suggestions': [], 'fill_form': [],
+                'encounter_form': [], 'guide_files': [], 'guide_lib': '', 'ok': True}
+    except Exception:
+        return {'reply': '好感度计算暂时出错，稍后再试。', 'tool_outputs': [], 'suggestions': [],
+                'fill_form': [], 'encounter_form': [], 'guide_files': [], 'guide_lib': '', 'ok': True}
+
+
 def route_work(tools, overrides, msg: str, agent=None, allow_intent_llm=True, update_recent=True):
     """工作类意图路由。返回固定回复 dict 或 None（交回 LLM 闲聊）。
     agent 用于天气定位等。"""
     msg = (msg or '').strip()
     msg = _resolve_pronoun(msg, overrides)
+    # 显式「好感度计算」入口（工具箱菜单「好感度」）：先于一切意图分发与早期 return，直接进好感分支，
+    # 避免被 _dispatch_intent 误判为 calc 而走伤害计算（用户 2026-10-01 反馈：点了只回文字不弹窗）。
+    if '好感' in msg and '计算' in msg:
+        _r = _favor_dispatch(tools, overrides, msg)
+        if _r is not None:
+            return _r
     # 上下文继承记忆：滚动保存最近几轮用户输入（供意图分类/指代/追问判断）
     _recent_prev = list((overrides or {}).get('_recent') or [])
     if update_recent and msg and overrides is not None:
@@ -4725,102 +4838,10 @@ def route_work(tools, overrides, msg: str, agent=None, allow_intent_llm=True, up
     # 必须先于 is_calc_ask 判定：「帮我算好感度」含"算"，否则会被截进伤害计算流程。
     # 机制解释类问法（有什么用/怎么算的）不拦截，交回 LLM。
     # favor_pending：上一轮已引导补参，追问短句（"现在喜欢，进度30%，到誓约"）不含"好感"也能接上。
-    _favor_explain = re.search(r'有什么用|什么意思|什么效果|怎么(?:回事|来的?|运作)|机制|介绍', msg)
-    # 工具箱「好感度」菜单发送「好感度计算」为显式计算入口：即便 LLM 将"计算"误判为 calc/公式
-    # 意图，也强制进入好感分支并弹出网页表单（用户 2026-10-01 反馈：点了只回文字不弹窗）。
-    # 仅当同时含「好感」+「计算」才强制，避免「查询好感度」等查询被误拦截进计算。
-    _favor_force = ('好感' in msg and '计算' in msg)
-    if (('好感' in msg or overrides.get('favor_pending')) and not _favor_explain
-            and (_li_is('favor') or _favor_force)):
-        # 追问上下文中出现其它明确工作意图 → 放弃好感追问，放行后续路由
-        if overrides.get('favor_pending') and '好感' not in msg \
-                and re.search(r'查|攻略|伤害|遭遇战|模拟|pvp|boss|装备|天气|活动|保存|组队|面板|技能|天赋', msg):
-            overrides['favor_pending'] = None
-        else:
-            tool = _tool(tools, 'calc_favor')
-            if tool:
-                p = {}
-                msg_f = msg.replace('熟悉', '相识')   # 口语同义词归一化（"熟悉55%到永恒"）
-                # 长词优先（"至爱"须先于"爱"匹配，否则级别名被截断）
-                _STAGE_ALT = '陌生|相识|亲近|喜欢|誓约|依偎|守护|至爱|铭心|永恒|爱'
-                # 目标级别（"到誓约"/"刷到铭心"），可带目标进度（"到誓约50%"）→ 提取后从句中移除，避免混入当前百分比
-                # 进度数字没带百分号也视为百分比（"到誓约50"= 到誓约50%）
-                mtt = (re.search(rf'(?:到|刷到|冲到|直至|直到)\s*({_STAGE_ALT})\s*(\d+(?:\.\d+)?)\s*(?:%|％|百分之)?', msg_f)
-                       or re.search(rf'(?:到|刷到|冲到|直至|直到)\s*({_STAGE_ALT})\s*百分之\s*(\d+(?:\.\d+)?)', msg_f))
-                if mtt:
-                    p['target_stage'] = mtt.group(1)
-                    p['target_percent'] = float(mtt.group(2))
-                    msg_f = msg_f.replace(mtt.group(0), ' ')
-                else:
-                    mt = re.search(rf'(?:到|刷到|冲到|直至|直到)\s*({_STAGE_ALT})', msg_f)
-                    if mt:
-                        p['target_stage'] = mt.group(1)
-                # 当前级别："现在/目前/当前 是/在 X"、"喜欢30%" 相邻形态、句尾 "现在喜欢"
-                ms = (re.search(rf'(?:现在|目前|当前)(?:是|在)?\s*({_STAGE_ALT})', msg_f)
-                      or re.search(rf'({_STAGE_ALT})\s*[^\d%]{{0,4}}\d+(?:\.\d+)?\s*%', msg_f)
-                      or re.search(rf'({_STAGE_ALT})(?:阶段)?(?:了|啦|之间|左右)?$', msg_f))
-                if ms and ms.group(1) != p.get('target_stage'):
-                    p['current_stage'] = ms.group(1)
-                # 该级别内进度百分比（"进度30%" / "好感50%" / "百分之30"；无%号也视为百分比：
-                # "进度30"、"好感50"；"好感50点" 是礼物点数不是进度——捕获后校验尾部非"点"，
-                # 防止正则回溯把 50 吞成 5；"喜欢0" 按级别名后数字识别）
-                _mp_candidates = [
-                    re.search(r'(?:进度|好感)[^\d%]{0,4}(\d+(?:\.\d+)?)\s*(?:%|％)?', msg_f),
-                    re.search(r'(\d+(?:\.\d+)?)\s*%', msg_f),
-                    re.search(r'百分之\s*(\d+(?:\.\d+)?)', msg_f),
-                ]
-                mp = next((m for m in _mp_candidates
-                           if m and msg_f[m.end():m.end() + 1] != '点'), None)
-                if not mp:
-                    mn = re.search(rf'({_STAGE_ALT})\s*[^\d%]{{0,2}}(\d+(?:\.\d+)?)', msg_f)
-                    if mn and mn.group(1) == p.get('current_stage'):
-                        mp = mn
-                if mp:
-                    p['current_percent'] = float(mp.group(2) if mp.lastindex and mp.lastindex >= 2 else mp.group(1))
-                # 百分比缺省按 0% 算（"现在喜欢，到誓约"=喜欢 0% 起）
-                p.setdefault('current_percent', 0.0)
-                # 礼物：品质（白/绿/蓝/紫/金，"金色礼物"）、每件点数（"礼物加3点"）
-                # 或仅说"算礼物/要多少礼物"——礼物按阶段固定品质输出，品质词只是触发标记
-                mc = re.search(r'(白|绿|蓝|紫|金)色?(?:的)?礼物', msg)
-                if mc:
-                    p['gift_color'] = mc.group(1)
-                # 礼物模式：全用金色礼物（gift_mode=gold）或低级礼物梯度计算（按阶段固定品质，默认）。
-                # 「全用金色礼物」同时会命中上面的品质正则（金色礼物）触发礼物段输出
-                if re.search(r'全用?金|全金', msg):
-                    p['gift_mode'] = 'gold'
-                elif re.search(r'低级礼物|梯度', msg):
-                    p['gift_points'] = -1   # 触发礼物段输出（按阶段梯度品质）
-                mg = (re.search(r'礼物[^\d]{0,6}(\d+(?:\.\d+)?)\s*点', msg)
-                      or re.search(r'(\d+(?:\.\d+)?)\s*点[^，。]{0,4}礼物', msg))
-                if mg:
-                    p['gift_points'] = float(mg.group(1))
-                if 'gift_color' not in p and 'gift_points' not in p and re.search(r'(算|需要多少|要多少|用多少)[^，。]{0,4}礼物|礼物.{0,6}(需要|要|用)多少', msg):
-                    p['gift_points'] = -1   # 仅触发礼物段输出（按阶段固定品质），非真实点数
-                # 出击位置与星级
-                if re.search(r'非旗舰|僚舰|不带旗舰', msg):
-                    p['position'] = 'non_flagship'
-                mstar = re.search(r'([123])\s*星', msg)
-                if mstar:
-                    p['stars'] = int(mstar.group(1))
-                # 必须说清当前好感度级别（百分比可省略），缺级别才引导补全（不算、不编）。
-                # 引导不走文本多轮：返回 favor_form 标记，前端自动弹出「好感度计算器」网页表单
-                #（用户 2026-09-10 指示「这里不在回复中回答，而是调用网页工具」）；
-                # 文本补参路径（favor_pending + "现在喜欢，进度30%"）保留兼容，关掉表单仍可打字
-                if 'current_stage' not in p:
-                    overrides['favor_pending'] = True   # 记住追问上下文，下一轮短句可直接补参
-                    return {'reply': '请填写当前好感度级别（进度不填按 0% 算）——已为你打开好感度计算器。',
-                            'tool_outputs': [], 'suggestions': [], 'fill_form': [],
-                            'encounter_form': [], 'guide_lib': '', 'guide_files': [], 'ok': True,
-                            'favor_form': True}
-                overrides['favor_pending'] = None       # 参数齐全，清除追问标记
-                try:
-                    out = tool.call(p)
-                    text = out if isinstance(out, str) else str(out)
-                    return {'reply': text, 'tool_outputs': [text], 'suggestions': [], 'fill_form': [],
-                            'encounter_form': [], 'guide_files': [], 'guide_lib': '', 'ok': True}
-                except Exception:
-                    return {'reply': '好感度计算暂时出错，稍后再试。', 'tool_outputs': [], 'suggestions': [],
-                            'fill_form': [], 'encounter_form': [], 'guide_files': [], 'guide_lib': '', 'ok': True}
+    # —— 统一交给定点函数 _favor_dispatch 处理（显式「好感度计算」入口已在 route_work 顶部优先拦截）。
+    _r = _favor_dispatch(tools, overrides, msg)
+    if _r is not None:
+        return _r
 
     # 机制问句（克制/甲弹/弹种）不触发伤害计算："高爆打什么甲" 等应走攻略/问答
     _mech_q = re.search(r'什么甲|什么弹|克制|甲弹|弹种|打什么', msg)
