@@ -2544,7 +2544,18 @@ def _chat_impl(req: ChatRequest):
 
         from core.route_dispatch import route_work_dispatch as route_work
         work_tools = build_tools(agent.app, sover, location_ref=agent)
-        work_result = route_work(work_tools, sover, req.message, agent=agent, history=hist)
+        # 显式「好感度计算」入口（工具箱菜单「好感度」发出的指令）：直接走 calc_flow 的 favor_form
+        # 分支，返回 favor_form=True 让前端弹出计算器。否则 agent 模式下 LLM 会直接调 CalcFavor 工具，
+        # 缺参数只回澄清文字、不带 favor_form，导致点了不弹窗（用户 2026-10-01 反馈）。
+        # 仅当同时含「好感」+「计算」才强制；解释类问法（有什么用/怎么算）不命中，仍走正常路由。
+        _favor_req = req.message or ''
+        if '好感' in _favor_req and '计算' in _favor_req:
+            from core.calc_flow import route_work as _cf_route
+            _fav = _cf_route(work_tools, sover, _favor_req, agent=agent, history=hist)
+            work_result = _fav if (_fav and _fav.get('favor_form')) else \
+                route_work(work_tools, sover, req.message, agent=agent, history=hist)
+        else:
+            work_result = route_work(work_tools, sover, req.message, agent=agent, history=hist)
         if work_result is not None:
             if work_result.get('no_history'):
                 # 违规/禁区轮：强制 嫌弃 表情（复用项目已有差分）+ 固定话术（不写历史）。
