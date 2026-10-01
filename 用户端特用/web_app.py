@@ -803,7 +803,7 @@ def _strip_upsell_question(text: str) -> str:
 
 
 INDEX_HTML_PATH = os.path.join(BASE_DIR, "web", "index.html")
-WEB_DIR = os.path.join(BASE_DIR, "web")  # 前端静态资源目录（PWA manifest / service worker 等）
+WEB_DIR = os.path.join(BASE_DIR, "web")  # 前端静态资源目录
 
 # 本次启动标识：注入页面并由心跳回报。页面持有的 ID 与服务当前 ID 不一致，
 # 即判定为上次运行遗留的旧页面，前端自动停止响应并尝试关闭
@@ -826,7 +826,7 @@ _API_TOKEN = _users.owner_token()   # 优先级 AKALI_OWNER_TOKEN → AKALI_INVI
 # 放行路径：页面 / 静态资源 / 认证状态探测（前端据此决定是否弹 token 输入框）
 _AUTH_PUBLIC_PREFIXES = ("/kb/", "/avatar/", "/icons/", "/manual-imgs/")
 _AUTH_PUBLIC_EXACT = ("/", "/admin", "/api/auth/status", "/api/register",
-                      "/api/heartbeat", "/manifest.webmanifest", "/sw.js", "/manual")
+                      "/api/heartbeat", "/manual")
 
 # 回环地址：仅在**本地模式**下免口令。云端模式下 Host 为 127.0.0.1 只代表
 # 「容器网络内的调用方」（同网其他容器、SSH 进来的 shell 等），不代表可信用户，
@@ -839,7 +839,8 @@ def _token_ok(provided) -> bool:
 
     走 users.safe_eq 而非直接 hmac.compare_digest（用户口径 2026-09-25）：
     后者只接受**纯 ASCII** str，口令含中文（如 AKALI_INVITE_CODE=我是小猪）时会抛
-    TypeError，被 except 静默吞成「口令错误」—— 表现为中文口令永远登不进去。
+    TypeError，被 except 静默吞成「口令错误」（此为直传 compare_digest 时的历史坑）。
+    当前 safe_eq 已 encode 成 bytes 比较，中文口令可正常登录。
     """
     try:
         from core import users as _u
@@ -1109,19 +1110,7 @@ async def set_location(req: LocationRequest):
     return {"ok": True, "location": agent.user_location}
 
 
-@app.get("/manifest.webmanifest")
-def pwa_manifest():
-    """PWA 清单（手机「添加到主屏幕」/可安装）。"""
-    return FileResponse(os.path.join(WEB_DIR, "manifest.webmanifest"),
-                        media_type="application/manifest+json")
 
-
-@app.get("/sw.js")
-def pwa_service_worker():
-    """Service Worker：离线壳（须置于根作用域，故单独路由 + Service-Worker-Allowed）。"""
-    resp = FileResponse(os.path.join(WEB_DIR, "sw.js"), media_type="application/javascript")
-    resp.headers["Service-Worker-Allowed"] = "/"
-    return resp
 
 
 @app.get("/manual")
@@ -2665,7 +2654,16 @@ def _chat_impl(req: ChatRequest):
                     del hist[:-16]
                 return {"reply": pull, "tool_outputs": [], "suggestions": [], "fill_form": [],
                         "encounter_form": [], "guide_files": [], "guide_lib": "", "ok": True, "sticker": None}
+        _incapable_req = _boundary.is_incapable(req.message)
         user_msg = _build_user_message(req.message, hist, overrides=sover)
+        # 能力不可执行：真实世界操作/创作类（排日程/画画/写代码）无此能力 →
+        # LLM 自由生成「代聊式」回复，但原则：糊弄而不真正操作（不假装完成/交付）。
+        # 表情不强制，交 LLM 按人设自然选（与改之前一致）。
+        if _incapable_req:
+            user_msg = ('[这个请求你实际上做不到（例如写代码、画画、排日程等真实世界操作），'
+                        '阿卡莉没有这个能力。请用你的人设语气自然接住、调侃糊弄过去；'
+                        '绝不要假装去执行或声称已完成操作（不要说"我帮你写好了/放你邮箱了/已经排好了"），'
+                        '也不要给出可运行结果；把它当成闲聊逗趣接住即可。不调用工具、不检索。]') + user_msg
         # 夜间闲聊（非调情语境）：不追问工作/游戏正事；但**不要每条消息都劝睡**——
         # 仅在用户显疲态（累/困/睡/乏/疲/想休息/熬）或极晚（00:00–04:59）时才温和带一句休息提示，
         # 互动良好、聊得正起劲时不打断、不反复推休息。独立 if（不再 elif）：
@@ -2926,7 +2924,7 @@ def _chat_impl(req: ChatRequest):
         traceback.print_exc()
         reply = _friendly_error_reply(e)
         _error_detail = ''
-        if os.environ.get('AKALI_RUN_MODE', 'local').strip().lower() != 'cloud':
+        if not runtime.is_cloud():
             _error_detail = f'{type(e).__name__}: {str(e)}'[:1000]
         return {"reply": reply, "tool_outputs": [], "suggestions": [],
                 "fill_form": [], "encounter_form": [], "guide_files": [], "guide_lib": "", "ok": False,

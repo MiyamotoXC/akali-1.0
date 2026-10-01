@@ -666,7 +666,7 @@ class QueryTalentShips(BaseTool):
         items = sorted(matched.items(), key=lambda kv: (-len(kv[1]['ships']), kv[0]))
         if len(items) == 1:
             tname, info = items[0]
-            return "拥有天赋「%s」（%s）的角色（%d 位）：\n%s" % (
+            return "拥有天赋「%s」（%s）的角色（%d 位）：\n%s。" % (
                 tname, info['effect'] or '未知效果', len(info['ships']), '、'.join(info['ships']))
         total = sum(len(v['ships']) for _, v in items)
         lines = ['按「%s」找到 %d 个相关天赋、共 %d 位角色：' % (kw, len(items), total)]

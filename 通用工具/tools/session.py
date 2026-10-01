@@ -35,12 +35,12 @@ class SetSessionBuff(BaseTool):
         session_overrides = self.cfg['session_overrides']
         buff_str = params['buff_str']
         if not buff_str.strip():
-            return "buff_str 不能为空"
+            return "buff_str 不能为空。"
         # 「持续N秒」：提取持续窗口（buff 仅在该时间窗口内生效，供总伤害时间轴模拟消费）
         clean_str, duration = _extract_buff_duration(buff_str)
         buff_str = clean_str.strip()
         if not buff_str:
-            return "buff_str 不能为空（仅识别到「持续N秒」，请同时输入 buff 字段）"
+            return "buff_str 不能为空（仅识别到「持续N秒」，请同时输入 buff 字段）。"
         successes, errors = _parse_buff_str(buff_str)
         # 只要存在无法识别的字段 → 不记忆任何 buff、清空已记 buff，重复上一步骤（用户重新填空）
         if errors:
@@ -80,7 +80,7 @@ class SetSessionBuff(BaseTool):
                 cur = session_overrides["ship_type_damage_reduction"].get(field, 0.0)
                 session_overrides["ship_type_damage_reduction"][field] = cur + value
                 msgs.append(f"对{field}伤害减免={value}")
-        return f"已记忆临时 buff: {', '.join(msgs)}"
+        return f"已记忆临时 buff: {', '.join(msgs)}。"
 
 
 class SetCalcContext(BaseTool):
@@ -106,13 +106,13 @@ class SetCalcContext(BaseTool):
         # 验证攻击方角色是否存在
         attacker = app.get_ship_from_all(params['attacker_name'])
         if attacker is None:
-            return f"未找到攻击方角色: {params['attacker_name']}"
+            return f"未找到攻击方角色: {params['attacker_name']}。"
         # enemy_name 可空：不填则后续计算输出原始伤害
         enemy_name = params.get('enemy_name', '')
         if enemy_name:
             enemy_data = app.get_ship_from_all(enemy_name)
             if enemy_data is None:
-                return f"未找到敌方角色: {enemy_name}"
+                return f"未找到敌方角色: {enemy_name}。"
 
         # 写入 calc_context（含航向/制空，默认同航/均势）
         from .common import _normalize_course

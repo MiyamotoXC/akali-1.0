@@ -330,11 +330,71 @@ def _execute(tool_calls, tools, overrides=None):
     return _work_dict('\n\n'.join(texts), texts)
 
 
+def _ships_in_text(text: str):
+    """文本里出现的角色（别名/谐音/错字/正规名都能识别；去重保序）。"""
+    try:
+        from core.entity_norm import scan, build_matcher
+        std, hits = scan(text or '')
+        names = [c for _, c in hits]
+        ships = getattr(build_matcher(), 'ships', []) or []
+        for n in sorted(set(ships), key=len, reverse=True):
+            if n and n in std and n not in names:
+                names.append(n)
+        return names
+    except Exception:
+        return []
+
+
+def _last_ship_in_history(history):
+    """从最近历史里找最近提到的角色（指代继承的兜底）。"""
+    for item in reversed(list(history or [])):
+        if str((item or {}).get('role') or '') not in ('user', 'assistant'):
+            continue
+        names = _ships_in_text(str((item or {}).get('content') or ''))
+        if names:
+            return names[-1]
+    return ''
+
+
+def _context_resolve(msg, overrides, history=None):
+    """上下文解析：把指代词（她/他/它/这艘/那艘/该角色…）继承为最近提及的角色。
+
+    优先 `overrides['last_role']`（上一步明确查过的角色）；没有则从最近历史兜底。
+    —— 供 guard 与后续所有判定使用，使其"随时结合上下文"。
+    """
+    last = str((overrides or {}).get('last_role') or '').strip()
+    if not last:
+        last = _last_ship_in_history(history)
+    if not last:
+        return msg
+    return _resolve_pronoun(msg, {'last_role': last})
+
+
 def route_work_agent(tools, overrides, msg, agent=None, history=None):
     """返回固定回复 dict，或 None（交回 web_app 闲聊链路）。异常由 route_dispatch 兜底回落。"""
-    handled, res = guard(tools, overrides, msg, agent=agent, history=history)
+    # 【输入预处理·先于一切】昵称/名字标准映射：舰名·BOSS 的 昵称/谐音/错字 → 正规名。
+    # 先于 guard 与所有判定（剧情/按钮/前置闸/LLM 元路由/工具参数）执行；幂等，可安全重复调用。
+    try:
+        from core.entity_norm import standardize
+        _norm = standardize(msg or '')
+        if _norm:
+            msg = _norm
+    except Exception:
+        pass
+    # 【上下文解析·随时结合上下文】指代继承：优先上一步明确查过的角色，兜底最近历史里的角色。
+    # guard 与后续所有判定都用 context_msg；仅"状态机续接"用原始 msg（明确工具流不需要继承）。
+    context_msg = _context_resolve(msg, overrides, history)
+    handled, res = guard(tools, overrides, msg, agent=agent, history=history,
+                         context_msg=context_msg)
     if handled:
         return res
+
+    # 能力不可执行：真实世界操作/创作类（排日程/画画/写代码等）无此能力 →
+    # 强制走闲聊自由生成（dispatcher 短路，web_app 闲聊链路注入「代聊式 + 惊讶」），
+    # 绝不调工具 / 不检索，避免被误判成 knowledge_qa 触发向量检索而答非所问。
+    from core import boundary as _b
+    if _b.is_incapable(context_msg):
+        return None
 
     # 剧情类问法：确定性拦截（用户口径 2026-09-24 —— 问角色给【剧情榜】，主线/活动建议
     # 指挥官自行体验）。必须早于 LLM 判意图与 RAG 检索，否则会把剧情相关正文搜出来剧透。
@@ -354,7 +414,7 @@ def route_work_agent(tools, overrides, msg, agent=None, history=None):
     try:
         if re.search(r'计算工具|计算菜单', msg or ''):
             return _legacy_route_work(tools, overrides, msg, agent=agent,
-                                      allow_intent_llm=False, update_recent=False)
+                                      allow_intent_llm=True, update_recent=False)
     except Exception:
         pass
 
@@ -367,9 +427,8 @@ def route_work_agent(tools, overrides, msg, agent=None, history=None):
     if route_history is None:
         route_history = [{'role': 'user', 'content': text} for text in recent_prev]
 
-    # 确定性补全明确的角色代词，再让路由器分析完整意图。只替换“她/该舰/这艘”等
-    # 真正回指词，不继承上一轮路由，因而新话题仍会逐轮重新判定。
-    context_msg = _resolve_pronoun(msg, overrides)
+    # 确定性补全明确的角色代词（context_msg 已在上方统一解析）：
+    # 只替换“她/该舰/这艘”等真正回指词，不继承上一轮路由，因而新话题仍会逐轮重新判定。
 
     # 索敌计算确定性前置闸（用户口径 2026-09-26）：悬浮球「计算工具 → 索敌计算」发的命令就是
     # 「索敌线」；此外「索敌 <数值>」「索敌队伍/最高索敌 <6舰>」等明确索敌计算，都必须早于下方
@@ -387,7 +446,7 @@ def route_work_agent(tools, overrides, msg, agent=None, history=None):
 
     sel = select_tools(tools)
     if not sel:
-        return _legacy_route_work(tools, overrides, context_msg, agent=agent, allow_intent_llm=False,
+        return _legacy_route_work(tools, overrides, context_msg, agent=agent, allow_intent_llm=True,
                                   update_recent=False)
 
     # 【当期活动攻略】统一话术（用户口径 2026-09-23）：当期活动名/指代 + 攻略类问法
@@ -410,12 +469,12 @@ def route_work_agent(tools, overrides, msg, agent=None, history=None):
                     return r
         except Exception:
             pass
-        return _legacy_route_work(tools, overrides, context_msg, agent=agent, allow_intent_llm=False,
+        return _legacy_route_work(tools, overrides, context_msg, agent=agent, allow_intent_llm=True,
                                   update_recent=False)
 
     name = decision.get('name') or 'no_tool'
     intent = decision.get('intent') or ''
-    # 把 LLM 的意图结论留给 legacy 兼容层：回落时 allow_intent_llm=False 会让 _li=None、
+    # 把 LLM 的意图结论留给 legacy 兼容层：回落时若不再跑意图分类，会让 _li=None、
     # 所有正则分支同时放行，于是「含『伤害』二字」就能把用户拉进伤害计算流程。
     # 记录在此，供 calc_flow 否决这类误判（用户口径 2026-09-24；那边消费后即清除）。
     if overrides is not None:
@@ -438,7 +497,7 @@ def route_work_agent(tools, overrides, msg, agent=None, history=None):
             r = _handle_guide_qa(tools, context_msg, search_query=(args.get('query') or ''))
             if r is not None:
                 return r
-            return _legacy_route_work(tools, overrides, context_msg, agent=agent, allow_intent_llm=False,
+            return _legacy_route_work(tools, overrides, context_msg, agent=agent, allow_intent_llm=True,
                                       update_recent=False)
         # ①数据分支：逐字执行、原文直出
         res = _execute(calls, tools, overrides=overrides)
@@ -456,5 +515,5 @@ def route_work_agent(tools, overrides, msg, agent=None, history=None):
         return None
 
     # backend_flow / 工具未命中：仅运行确定性兼容处理器。
-    return _legacy_route_work(tools, overrides, context_msg, agent=agent, allow_intent_llm=False,
+    return _legacy_route_work(tools, overrides, context_msg, agent=agent, allow_intent_llm=True,
                               update_recent=False)

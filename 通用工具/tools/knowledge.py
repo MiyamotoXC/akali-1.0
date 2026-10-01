@@ -45,7 +45,7 @@ class QueryEquipment(BaseTool):
 
         db = _load_equipment_db()
         if not db:
-            return f"未找到装备数据文件: {EQUIPMENT_FILE}"
+            return f"未找到装备数据文件: {EQUIPMENT_FILE}。"
 
         matched = []
         for eq in db:
@@ -259,7 +259,7 @@ class QueryGuide(BaseTool):
 
         kb = _load_guide_kb()
         if not kb:
-            return f"未找到攻略知识库: {GUIDE_KB_FILE}（请用 FX数据管理工具 生成）"
+            return f"未找到攻略知识库: {GUIDE_KB_FILE}（请用 FX数据管理工具 生成）。"
 
         docs = kb.get('documents', [])
         topic_routing = kb.get('topic_routing', {})
@@ -1849,7 +1849,7 @@ class GuideRAG(BaseTool):
         if reason.startswith('embed:'):
             from llm.llm_client import API_KEY_VAR
             return (f"查询向量化失败（请检查 {API_KEY_VAR} / EMBEDDING_MODEL 配置）："
-                    f"{reason[6:]}")
+                    f"{reason[6:]}。")
         # 最高分都够不到输出线 → 不贴弱相关片段，直接提示自行查阅
         top = reason[4:] if reason.startswith('low:') else ''
         tail = f"（最高相似度 {top}）" if top else ""

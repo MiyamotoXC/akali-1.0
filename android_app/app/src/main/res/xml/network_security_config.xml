@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 允许明文 http（API 28+ 默认禁止）。仅用于自用直连云服务器，不上架。
+     如需收紧，可把 cleartextTrafficPermitted 改为只对特定 IP 放行（domain-config）。 -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>

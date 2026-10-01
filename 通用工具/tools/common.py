@@ -382,9 +382,9 @@ def _validate_course_air(course: str, air: str) -> Optional[str]:
     内部先归一化航向简写（T优→T优势），用户点前端按钮"T优"不应被判无效。"""
     course = _normalize_course(course)
     if course not in VALID_COURSES:
-        return f"无效航向: {course}，可选：{'/'.join(sorted(VALID_COURSES))}"
+        return f"无效航向: {course}，可选：{'/'.join(sorted(VALID_COURSES))}。"
     if air not in VALID_AIRS:
-        return f"无效制空状态: {air}，可选：{'/'.join(sorted(VALID_AIRS))}"
+        return f"无效制空状态: {air}，可选：{'/'.join(sorted(VALID_AIRS))}。"
     return None
 
 

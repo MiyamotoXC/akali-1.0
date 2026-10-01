@@ -1,0 +1,7 @@
+<resources>
+    <string name="app_name">阿卡莉</string>
+
+    <!-- 唯一需要修改的地方：改成你云服务器的公网地址。
+         必须 http:// 开头（APK 已放行明文流量）；端口按后端实际监听填写（默认 8000）。 -->
+    <string name="server_url">http://43.142.42.138:8000/</string>
+</resources>

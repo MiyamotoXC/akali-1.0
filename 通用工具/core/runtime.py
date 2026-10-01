@@ -6,7 +6,7 @@
 用一个环境变量在「本地单机」与「云端多用户」两种运行方式间切换，
 **其余模块不再各自散读环境变量**，统一调用本模块的访问器 —— 便于收口与回滚。
 
-    AKALI_RUN_MODE = local   ← 默认；行为与改造前完全一致
+    AKALI_RUN_MODE = cloud  ← 默认（2026-09-30 起由 local 改为 cloud，全程云端）
                    = cloud   ← 云端多用户模式
 
 兼容别名：FX_CLOUD_MODE=1/true/on/yes 等价于 AKALI_RUN_MODE=cloud
@@ -14,7 +14,7 @@
 
 两模式的差异一览（详见 §1 方案表）：
 
-| 维度       | local（默认）              | cloud                          | 本模块访问器            |
+| 维度       | local                     | cloud（默认）                  | 本模块访问器            |
 |-----------|---------------------------|--------------------------------|------------------------|
 | 面板存储   | 服务器 user_data.json      | 客户端本地 + 请求携带           | panel_store()          |
 | LLM 限额   | 不限（仅统计）             | 按 IP 日 token 总量限额         | quota_enabled()/quota_key()/quota_daily_tok() |
@@ -25,7 +25,7 @@
 | 心跳自动关机| 可选开                     | 保持关闭                        | auto_shutdown()        |
 
 设计约束：
-- 缺省不设任何新变量 → 一切照旧（本地个人模式，零行为变化）。
+- 缺省不设任何变量 → 云端多用户模式（0.0.0.0 监听、按 IP 限额、邀请口令必填）；显式设 local 即回滚到本地个人模式。
 - 切回 local 即完全恢复现状 —— **本模块即回滚开关**。
 - 面板存储与限额维度在 cloud 下必须联动（面板到客户端 → 服务器无用户文件
   → 只能按 IP 识别），故两者都由 run_mode 统一推导默认值，避免半开状态。
@@ -71,7 +71,7 @@ def run_mode() -> str:
     raw = _env('AKALI_RUN_MODE')
     if not raw:
         # 兼容别名：老的 FX_CLOUD_MODE=1 等价 cloud
-        raw = 'cloud' if _flag(_env('FX_CLOUD_MODE')) else 'local'
+        raw = 'cloud' if _flag(_env('FX_CLOUD_MODE')) else 'cloud'
     raw = raw.strip().lower()
     return 'cloud' if raw in ('cloud', 'server', 'remote') else 'local'
 

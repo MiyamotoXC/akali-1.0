@@ -1521,7 +1521,13 @@ def _llm_is_calc_request(msg: str) -> bool:
 # 识别到即走确定性对比处理器——防止「对比780和太太」被末级「昵称取最长」捞成单舰面板。
 _LLM_INTENTS = ('calc', 'formula', 'favor', 'equip', 'guide', 'theme_intro',
                 'encounter', 'pvp', 'query', 'chat', 'capability', 'scout', 'exp',
-                'compare', 'evaluate')
+                'compare', 'evaluate', 'subjective')
+
+# 主观"比较"兜底词（用户口径 2026-09-28：主观比较以 LLM 意图 subjective 为准；
+# 仅在 **LLM 分类不可用**（_li is None）时用这张小表兜底，防闲聊链路幻觉编造角色名）。
+_SUBJ_FALLBACK_RE = re.compile(
+    r'颜值|胸|欧派|美貌|最好看|最漂亮|最美|最可爱|最帅|漂亮|好看|'
+    r'人气|投票|最强|最厉害|最猛|最棒|最喜欢|最好用|最好')
 
 
 def _llm_intent_classify(msg: str, recent=None):
@@ -1567,6 +1573,8 @@ def _llm_intent_classify(msg: str, recent=None):
                     '看看某舰灵/按舰种或阵营或稀有度筛选角色/活动/天气/时间）；\n'
                     'compare=两个及以上舰灵横向比较（对比A和B/比较A与B/A和B哪个好/A还是B/谁更强/两个哪个值得）\n'
                     'evaluate=培养优先级或值不值得练（值得培养吗/先练哪个/哪些值得优先练/改造优先级/推荐练谁）\n'
+                    'subjective=主观评价/比较，无客观数据可量化（颜值/好看/漂亮/最美/最帅/最可爱/人气/'
+                    '投票/最强/最厉害/最棒这类"谁更好看/谁最强"，且未引用攻略榜单/数据表/具体数值）；\n'
                     '注意：compare/evaluate 的**舰灵名由系统映射层提取**，你只判意图；'
                     '若句中明确要求「算伤害/算数值/dps」，那是 calc 而不是 compare/evaluate\n'
                     'capability=询问助手阿卡莉本身的功能与用法（能做什么/能输入什么/我能输入啥/有哪些功能/能干啥/怎么用/帮助），问的是助手能力而不是游戏内容\n'
@@ -2126,6 +2134,32 @@ def _resolve_pronoun(msg: str, overrides: dict) -> str:
     return _PRONOUN_RE.sub(last, msg)
 
 
+# 时装/皮肤固定话术 + 触发词（用户口径 2026-09-28）
+_SKIN_KW_RE = re.compile(r'皮肤|时装|换装|外观')
+_SKIN_FIXED_REPLY = '指挥官，想挑新衣服的话，自行去游戏内商店和兑换商店看看吧。'
+
+
+def _handle_skin_query(tools, msg):
+    """时装/皮肤询问：信息库未收录。
+    · 含「券」（皮肤券/时装券/兑换券…）→ 走向量库检索（攻略 RAG）；
+    · 其余皮肤/时装类 → 固定引导（游戏内商店 + 兑换商店），表情用「微笑关心」差分。
+    未命中返回 None。
+    """
+    if not _SKIN_KW_RE.search(msg or ''):
+        return None
+    if re.search(r'券', msg or ''):
+        try:
+            g = _handle_guide_qa(tools, msg)
+            if g is not None:
+                return g
+        except Exception:
+            pass
+    return {'reply': _SKIN_FIXED_REPLY,
+            'tool_outputs': [], 'suggestions': [], 'fill_form': [],
+            'encounter_form': [], 'guide_files': [], 'guide_lib': '', 'ok': True,
+            'expression_hint': '微笑关心'}
+
+
 # 主题介绍映射：主题词 → (检索词, 判定性引导问题)
 # 生活话题词（真实生活诉求：吃饭/累/心情/身体等）：命中即强制闲聊，不进任何工作/攻略路由。
 # 作 LLM 意图分类的兜底矫正——防止 LLM 偶发把「能帮我做饭吗」这类请求语气误判为攻略建议。
@@ -2443,7 +2477,7 @@ def _handle_user_ship(tools, msg):
     if bare:
         return {'reply': '本地副本只接受增量写法（在基础面板上 +值），不支持绝对赋值：'
                          + '、'.join(bare) + '。\n请改为带 +/- 的写法，如「更新面板：' + name + ' 炮击+200」。'
-                         '（面板赋值请到计算模块内使用，如「攻击方：名字 炮击2000」）',
+                         '（面板赋值请到计算模块内使用，如「攻击方：名字 炮击2000」）。',
                 'tool_outputs': [], 'suggestions': [], 'fill_form': [], 'encounter_form': [],
                 'guide_files': [], 'guide_lib': '', 'ok': True}
     if not d_atk and not d_def:
@@ -2914,6 +2948,14 @@ def _common_equip_table_reply():
             'guide_lib': '', 'ok': True}
 
 
+_REFIT_ASK_RE = re.compile(
+    r'改造|改如何|改后|改了|改完|改满|能不能改|能改吗|可以改|可改造|可以改造|'
+    r'值得改造|有没有改造|能改造吗|改强吗|改造强|改造厉害|改造怎么样|改造好不好|改造后强|改造后')
+def _is_refit_ask(msg: str) -> bool:
+    """消息是否在问某角色的改造（仅在已点名具体角色名的上下文中调用；泛化攻略问法不含角色名）。"""
+    return bool(_REFIT_ASK_RE.search(msg or ''))
+
+
 def _is_ship_list_cmd(msg: str) -> bool:
     """是否「查角色/角色列表/所有角色/有哪些舰灵」类角色名录裸查询。"""
     return bool(_SHIP_LIST_RE.match(re.sub(r'[\s。.!！?？~～,，]', '', msg or '')))
@@ -2995,7 +3037,7 @@ def _current_event_name() -> str:
 # ② 消息用「当期/本期/本次/这次/当前/最新… ＋ 活动」明确指代当期活动。
 # 两者都还要带攻略类问法词。**不得凭「活动/复刻」字样匹配**——「宾果活动」
 # 「七日登录活动（白枫糖果）」这两个活动本名就含「活动」二字，按字样匹配会误伤。
-_ACTIVITY_GUIDE_REPLY = '关注拂晓qq频道凤栖攻略组，会有详细攻略'
+_ACTIVITY_GUIDE_REPLY = '关注拂晓qq频道凤栖攻略组，会有详细攻略。'
 _ACTIVITY_GUIDE_WORD_RE = re.compile(r'攻略|打法|怎么打|如何打|怎么过|怎么玩|怎么推|推图|通关|配队|阵容|带路')
 # 当期活动的明确指代：限定词必须紧邻「活动」二字，裸「活动」不触发
 _ACTIVITY_CURRENT_RE = re.compile(r'(?:当期|本期|本次|这次|此次|当前|最新|最近|近期|这期|新)的?活动')
@@ -3238,11 +3280,19 @@ def _scout_char_breakdown(name, arith_str, mult, agent):
 def _handle_scout_mode1(v: float) -> dict:
     """Mode1：输入我方索敌基准值 V（始终视为我方，用户口径 2026-09-27），给出两类 T 优/T 劣 线
     （不列具体航向 buff）。
-    ① 我方进攻/敌方防守：算敌方索敌阈值（我方 T优⟺敌方<我方÷1.25，我方 T劣⟺敌方>我方÷0.75）。
-    ② 敌方进攻/我方防守：同一比较从敌方视角表述（敌方 T优⟺敌方>我方÷0.75，敌方 T劣⟺敌方<我方÷1.25）。"""
+
+    判定口径（用户口径 2026-09-29）：**±25% 一律判在「防守方」的索敌上**——
+      攻击方 T优 ⟺ 攻击方索敌 > 防守方索敌×1.25；攻击方 T劣 ⟺ 攻击方索敌 < 防守方索敌×0.75。
+    ① 我方进攻/敌方防守（防守方=敌方，未知）→ 解出敌方阈值：
+       我方 T优 ⟺ 敌方 < 我方÷1.25；我方 T劣 ⟺ 敌方 > 我方÷0.75。
+    ② 敌方进攻/我方防守（防守方=**我方**，已知）→ 阈值直接取我方×0.25 带宽：
+       敌方 T优 ⟺ 敌方 > 我方×1.25；敌方 T劣 ⟺ 敌方 < 我方×0.75。
+    （修正前 ② 误复用 ① 的 ÷1.25/÷0.75，把 25% 判在了错的基准上。）"""
     v = max(0.0, min(20000.0, float(v)))   # 用户输入钳制：不得为负、≤20000（用户口径 2026-09-17）
-    t_you_e = v / 1.25         # 我方 T优（敌方 T劣）：敌方索敌需 < 此值
-    t_li_e = v / 0.75          # 我方 T劣（敌方 T优）：敌方索敌需 > 此值
+    t_you_e = v / 1.25         # ① 我方 T优：敌方索敌需 < 此值（防守方=敌方，反解）
+    t_li_e = v / 0.75          # ① 我方 T劣：敌方索敌需 > 此值
+    t_you_a = v * 1.25         # ② 敌方 T优：敌方索敌需 > 此值（防守方=我方）
+    t_li_a = v * 0.75          # ② 敌方 T劣：敌方索敌需 < 此值
     lines = []
     lines.append('《索敌线计算》')
     lines.append('基准索敌（我方）：%s' % _fmt_num(v))
@@ -3252,8 +3302,8 @@ def _handle_scout_mode1(v: float) -> dict:
     lines.append('  T劣（我方）：敌方索敌 > %s（即 我方 < 敌方×0.75）' % _fmt_num(t_li_e))
     lines.append('')
     lines.append('· 敌方进攻 / 我方防守')
-    lines.append('  T优（敌方）：敌方索敌 > %s（即 我方 < 敌方×0.75）' % _fmt_num(t_li_e))
-    lines.append('  T劣（敌方）：敌方索敌 < %s（即 我方 > 敌方×1.25）' % _fmt_num(t_you_e))
+    lines.append('  T优（敌方）：敌方索敌 > %s（即 敌方 > 我方×1.25）' % _fmt_num(t_you_a))
+    lines.append('  T劣（敌方）：敌方索敌 < %s（即 敌方 < 我方×0.75）' % _fmt_num(t_li_a))
     return {'reply': chr(10).join(lines), 'tool_outputs': [], 'suggestions': [], 'fill_form': [],
             'encounter_form': [], 'guide_files': [], 'guide_lib': '', 'ok': True}
 
@@ -3883,10 +3933,10 @@ def _cmp_llm_analogy(ents):
     return out
 
 
-_NOT_SUPPORTED = '暂时不支持该角色'
+_NOT_SUPPORTED = '暂时不支持该角色。'
 # 「憋住」追问：返回「暂时不支持该角色」时，提示用户可直接报舰灵名重试（不保证准确）。
 # 用户口径 2026-09-17 追问分支：只做轻量内联提示，不落地「支持哪些角色」清单（Option A）。
-_NOT_SUPPORTED_HINT = '你可以直接报舰灵名让我帮类比，但我不保证能得出准确结果'
+_NOT_SUPPORTED_HINT = '你可以直接报舰灵名让我帮类比，但我不保证能得出准确结果。'
 
 
 def _handle_ship_compare(tools, msg, agent=None, overrides=None, intent='compare'):
@@ -4199,8 +4249,8 @@ def route_work(tools, overrides, msg: str, agent=None, allow_intent_llm=True, up
         _li = _llm_intent_classify(msg, recent=_recent_prev)
         _li_gate = _li is None
     else:
-        # agent 层已做过唯一一次意图分析；这里只跑确定性兼容规则，
-        # 禁止再调用第二个 LLM 分类器。
+        # 调用方显式关闭意图分类（如"明确工具流程"的续接）→ 只跑确定性兼容规则。
+        # 注意（用户口径 2026-09-28）：默认**允许多次 LLM 意图分析**，不再限制为一次。
         _li = None
         _li_gate = True
 
@@ -4400,6 +4450,11 @@ def route_work(tools, overrides, msg: str, agent=None, allow_intent_llm=True, up
             return {'reply': _agr, 'tool_outputs': [], 'suggestions': [], 'fill_form': [],
                     'encounter_form': [], 'guide_files': [], 'guide_lib': '', 'ok': True}
 
+    # ---- 时装/皮肤（用户口径 2026-09-28）：信息库未收录；含券走向量库，其余固定引导 ----
+    _skin_r = _handle_skin_query(tools, msg)
+    if _skin_r is not None:
+        return _skin_r
+
     # ---- 攻略检索「结构化优先」：小技巧键命中 → 原文直出（不调 LLM、不走向量）----
     # 紧接 boss 咨询管线（同为结构化层），但**早于**下方所有模糊分支（kb_search 泛化、
     # 配装目录话术、向量召回）：实测「甲弹克制关系」「舰灵退役」「多倍经验」此前会被
@@ -4458,20 +4513,18 @@ def route_work(tools, overrides, msg: str, agent=None, allow_intent_llm=True, up
         overrides['flirt_rounds'] = 3  # 进入调情语境，后续短句继续放行
         return None
 
-    # ---- 主观评价类问题：统一固定回答，杜绝 LLM 编造角色名 ----
-    # 钦定（用户指定）：**仅「身材」→ 萨拉托加**（信息库存在）；其余所有主观
-    # （颜值/好看/漂亮/皮肤/时装/人气/投票/最强等）→ 数据无法量化，建议自行感受。
+    # ---- 主观评价/比较（用户口径 2026-09-28：改由 LLM 意图 subjective 判定，不再靠正则枚举）----
+    # 钦定（用户指定）：**仅「身材」→ 萨拉托加**（信息库存在）；其余主观"比较"→ 固定"数据无法量化"。
     # 排除"怎么/攻略/配"等引导词（如"最强阵容怎么配"仍走攻略）。
-    if _li_is('chat') and not re.search(r'怎么|如何|攻略|配|搭配|阵容|算|伤害|推荐练', msg):
-        _subj_fixed = re.search(r'身材', msg)
-        _subj_any = re.search(r'颜值|胸|欧派|美貌|最好看|最漂亮|最美|最可爱|最帅|漂亮|好看|'
-                              r'人气|投票|最强|最厉害|最猛|最棒|最喜欢|最好用|最好|'
-                              r'皮肤|时装|立绘|外观|模型', msg)
-        if _subj_fixed:
+    if not re.search(r'怎么|如何|攻略|配|搭配|阵容|算|伤害|推荐练', msg):
+        if re.search(r'身材', msg) and _li_is('chat', 'subjective'):
             return {'reply': '不用问也知道——萨拉托加。',
                     'tool_outputs': [], 'suggestions': [], 'fill_form': [],
                     'encounter_form': [], 'guide_files': [], 'guide_lib': '', 'ok': True}
-        if _subj_any:
+        # 主观"比较"：以 LLM 意图(subjective)为准；分类器不可用(_li is None)时才退化为极小兜底词表
+        # （防闲聊链路幻觉编造角色名）。皮肤/时装 已由 _handle_skin_query 单独处理，不在此列。
+        if (_li or {}).get('intent') == 'subjective' \
+                or (_li is None and _SUBJ_FALLBACK_RE.search(msg)):
             return {'reply': '这种主观问题……数据无法量化，建议指挥官自行感受。',
                     'tool_outputs': [], 'suggestions': [], 'fill_form': [],
                     'encounter_form': [], 'guide_files': [], 'guide_lib': '', 'ok': True}
@@ -4673,7 +4726,12 @@ def route_work(tools, overrides, msg: str, agent=None, allow_intent_llm=True, up
     # 机制解释类问法（有什么用/怎么算的）不拦截，交回 LLM。
     # favor_pending：上一轮已引导补参，追问短句（"现在喜欢，进度30%，到誓约"）不含"好感"也能接上。
     _favor_explain = re.search(r'有什么用|什么意思|什么效果|怎么(?:回事|来的?|运作)|机制|介绍', msg)
-    if _li_is('favor') and ('好感' in msg or overrides.get('favor_pending')) and not _favor_explain:
+    # 工具箱「好感度」菜单发送「好感度计算」为显式计算入口：即便 LLM 将"计算"误判为 calc/公式
+    # 意图，也强制进入好感分支并弹出网页表单（用户 2026-10-01 反馈：点了只回文字不弹窗）。
+    # 仅当同时含「好感」+「计算」才强制，避免「查询好感度」等查询被误拦截进计算。
+    _favor_force = ('好感' in msg and '计算' in msg)
+    if (('好感' in msg or overrides.get('favor_pending')) and not _favor_explain
+            and (_li_is('favor') or _favor_force)):
         # 追问上下文中出现其它明确工作意图 → 放弃好感追问，放行后续路由
         if overrides.get('favor_pending') and '好感' not in msg \
                 and re.search(r'查|攻略|伤害|遭遇战|模拟|pvp|boss|装备|天气|活动|保存|组队|面板|技能|天赋', msg):
@@ -4979,6 +5037,23 @@ def route_work(tools, overrides, msg: str, agent=None, allow_intent_llm=True, up
                 # 放行到后面的攻略/弹种检索分支，不发「未找到角色: …」
                 if names:
                     overrides['last_role'] = names[0]  # 记录最近提及角色（支持后续代词指代）
+                    # 改造意图拦截：点名具体角色问改造，但该角色没有改造形态 → 直接提示不能改造；
+                    # 若角色可改造，则导向改造优先级攻略检索（确保单舰改造点评命中知识库）。
+                    if _is_refit_ask(msg):
+                        _bases = set()
+                        try:
+                            from tools.knowledge import _refittable_base_set
+                            if app is not None:
+                                _bases = _refittable_base_set(app)
+                        except Exception:
+                            _bases = set()
+                        if names[0] not in _bases:
+                            return {'reply': '《%s》目前没有开放改造，不能改造。\n（如需查看它的面板资料，直接和我说「查%s」即可。）' % (names[0], names[0]),
+                                    'tool_outputs': [], 'suggestions': [], 'fill_form': [],
+                                    'encounter_form': [], 'guide_files': [], 'guide_lib': '', 'ok': True}
+                        _g = _handle_guide_qa(tools, names[0] + ' 改造优先级')
+                        if _g is not None:
+                            return _g
                     # 单角色 → 前端角色面板（详情在面板展开）；多角色 → 保留逐个文本输出（多角色对照）
                     if len(names) == 1:
                         _r = _ship_panel_reply(names[0], tools)

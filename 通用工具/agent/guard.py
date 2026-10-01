@@ -14,6 +14,7 @@ from core.calc_flow import (
     _resolve_pronoun,
     route_work as _legacy_route_work,
 )
+from core import boundary as _boundary
 
 import re
 
@@ -126,13 +127,33 @@ def _work_dict(reply, **extra):
     return d
 
 
-def guard(tools, overrides, msg, agent=None, history=None):
-    """返回 (handled, result)。handled=True 时 result 即最终路由结果（dict 或 None）。"""
-    m = (msg or '').strip()
+def guard(tools, overrides, msg, agent=None, history=None, context_msg=None):
+    """返回 (handled, result)。handled=True 时 result 即最终路由结果（dict 或 None）。
 
-    # 1) 违规/禁区：固定话术，且不写入会话历史（no_history）
-    if _BANNED_RE.search(m):
-        return True, _work_dict('与阿卡莉无关，不回答。', no_history=True)
+    context_msg：结合上下文解析后的输入（指代已继承）。除"状态机续接"与依赖指代词形的
+    追问检测（_FOLLOWUP_RE）外，其余判定一律用 context_msg —— 保证 guard 随时结合上下文。
+    """
+    m = (msg or '').strip()
+    cm = (context_msg or msg or '').strip()
+
+    # 1) 其他游戏（同类于违规，属守卫范围）：回复与违规完全一致（ILLEGAL_REPLY + 嫌弃）。
+    #    仍保留独立判定点（不并入 _BANNED_RE），便于将来单独调话术/表情。
+    if _boundary.is_other_game(cm):
+        return True, _work_dict(_boundary.other_game_reply(), no_history=True,
+                                expression_hint=_boundary.ILLEGAL_EXPR)
+
+    # 2) 违规/禁区：固定话术，且不写入会话历史（no_history）
+    if _BANNED_RE.search(m) or _boundary.is_banned(cm):
+        return True, _work_dict(_boundary.ILLEGAL_REPLY, no_history=True,
+                                expression_hint=_boundary.ILLEGAL_EXPR)
+
+    # 3) 越界情色（用户口径 2026-09-28）：**路由前**拦截，避免漏进工具/攻略路由
+    #     （此前在 web_app 路由之后才判，越界消息会先被 guide_rag 接走）。话术按主体分流。
+    #     话术与神态按主体分流：冲着阿卡莉本人 → 无语敷衍（淡淡敷衍过去）；
+    #     说的是某个角色 → 厌恶嫌弃。
+    if _boundary.is_flirt_overstep(cm):
+        return True, _work_dict(_boundary.overstep_reply(cm),
+                                expression_hint=_boundary.overstep_expression(cm))
 
     unanswered = _guard_unanswered_topic(overrides, m)
     if unanswered is not None:
@@ -142,7 +163,7 @@ def guard(tools, overrides, msg, agent=None, history=None):
     # 前置闸门止住 —— **拦截行为保留**（安全阀：删掉拦截＝放开幻觉，不能退），
     # 但不再给专属解释话术（用户口径 2026-09-22），统一用 _NO_DATA_REPLY；
     # 附带动作 expression_hint='惊讶' 按要求保留。
-    guarded_reason = guarded_backend_reason(m, history)
+    guarded_reason = guarded_backend_reason(cm, history)
     if guarded_reason == 'unsupported_archive':
         return True, _work_dict(_NO_DATA_REPLY, expression_hint='惊讶')
 
@@ -158,7 +179,7 @@ def guard(tools, overrides, msg, agent=None, history=None):
         if previous_question and previous_question != m:
             replay = _resolve_pronoun(previous_question, overrides)
             checked = _legacy_route_work(
-                tools, overrides, replay, agent=agent, allow_intent_llm=False,
+                tools, overrides, replay, agent=agent, allow_intent_llm=True,
                 update_recent=False)
         if checked is not None:
             checked = dict(checked)
@@ -172,7 +193,8 @@ def guard(tools, overrides, msg, agent=None, history=None):
             '目前没有可靠内容可以支持那项说法。',
             expression_hint='惊讶')
 
-    # 4) 状态机续接：整段交回 legacy（确定性、结构化解参），禁止 LLM 介入
+    # 4) 状态机续接（用户口径 2026-09-28 的"明确工具流程"豁免）：整段交回 legacy
+    #    （确定性、结构化解参），不跑 LLM 意图分类——此时输入是向导的一步参数，不是新意图。
     if overrides.get('calc_state') or overrides.get('favor_pending'):
         return True, _legacy_route_work(tools, overrides, m, agent=agent, allow_intent_llm=False)
 

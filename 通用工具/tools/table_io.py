@@ -114,7 +114,7 @@ class ExcelAnalyzer(BaseTool):
         params = self._verify_json_format_args(params)
         path = str(params.get('file_path') or '').strip()
         if not path or not os.path.isfile(path):
-            return f'文件不存在：{path}'
+            return f'文件不存在：{path}。'
         ext = os.path.splitext(path)[1].lower()
         if ext == '.csv':
             sheets = _read_csv(path)

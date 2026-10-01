@@ -103,6 +103,15 @@ def users_file() -> str:
     return os.path.join(root, 'users.json')
 
 
+def _is_test_users_file() -> bool:
+    """当前用户表是否 AI 自测专用（users.test.json）。
+
+    是则新注册账号默认名标记为「ai自测」，以便和正式发放的「测试用户」区分，
+    避免两者混淆（用户口径 2026-09-30）。判定只看文件名，不碰正式 users.json。
+    """
+    return os.path.basename(users_file()) == 'users.test.json'
+
+
 def _norm_entry(uid, raw):
     """把 JSON 里的一项规范化成账号记录；字段不全就丢弃（不让一条写错影响整体）。"""
     if not isinstance(raw, dict):
@@ -117,6 +126,7 @@ def _norm_entry(uid, raw):
         'note': str(raw.get('name') or raw.get('note') or '').strip(),
         'enabled': bool(raw.get('enabled', True)),
         'created': str(raw.get('created') or '').strip(),
+        'plan': str(raw.get('plan') or '').strip(),   # 套餐档：unlimited/free/month；留空则走默认档
     }
 
 
@@ -212,7 +222,8 @@ def list_accounts() -> list:
         accs.append({'uid': owner_uid(), 'name': '开发者（本人）', 'token': ot,
                      'note': '内置账号（.env）', 'enabled': True, 'role': 'owner'})
     for u in parse_users():
-        accs.append({'uid': u['uid'], 'name': u['note'] or ('测试用户 %s' % u['uid']),
+        fallback = ('ai自测 %s' % u['uid']) if _is_test_users_file() else ('测试用户 %s' % u['uid'])
+        accs.append({'uid': u['uid'], 'name': u['note'] or fallback,
                      'token': u['token'], 'note': u['note'],
                      'enabled': u.get('enabled', True), 'role': 'user'})
     return accs
@@ -250,7 +261,9 @@ def auth(token) -> dict:
                     return {'ok': False, 'uid': u['uid'], 'user': u, 'reason': 'paused'}
                 return {'ok': True, 'uid': u['uid'],
                         'user': {'uid': u['uid'],
-                                 'name': u['note'] or ('测试用户 %s' % u['uid']),
+                                 'name': u['note'] or (('ai自测 %s' % u['uid'])
+                                                       if _is_test_users_file()
+                                                       else ('测试用户 %s' % u['uid'])),
                                  'role': 'user'},
                         'reason': ''}
         except Exception:
@@ -287,9 +300,9 @@ def safe_eq(provided, expected) -> bool:
     为什么要单独包一层（用户口径 2026-09-25）：`hmac.compare_digest` 只接受
     **纯 ASCII** 的 str，传入中文会抛 `TypeError: comparing strings with non-ASCII
     characters is not supported`；而调用处普遍写成 `except: return False`，
-    于是**中文口令/邀请码一律被静默判为"无效"**（现场实测：AKALI_INVITE_CODE=我是小猪
+    于是【修复前】**中文口令/邀请码会被静默判为"无效"**（历史实测：AKALI_INVITE_CODE=我是小猪
     时 invite_ok('我是小猪') 返回 False，逐字符 codepoint 却完全一致）。
-    统一 encode 成 bytes 再比较即可 —— 比较语义不变，仍防时序侧信道。
+    下面统一 encode 成 bytes 再比较即修复此问题 —— 当前 safe_eq 已支持中文，比较语义不变，仍防时序侧信道。
     """
     return hmac.compare_digest(str(provided or '').encode('utf-8'),
                                str(expected or '').encode('utf-8'))
@@ -435,8 +448,9 @@ def register(device_id: str = '', ip: str = '', name: str = '') -> dict:
             return {'ok': False, 'created': False, 'uid': '', 'token': '',
                     'user': None, 'reason': 'uid_exhausted'}
         token = new_token()
+        default_name = ('ai自测 %s' % uid) if _is_test_users_file() else ('测试用户 %s' % uid)
         rec = {
-            'name': (name or '').strip() or ('测试用户 %s' % uid),
+            'name': (name or '').strip() or default_name,
             'token': token,
             'enabled': True,
             'device_id': did,

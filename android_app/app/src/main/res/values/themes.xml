@@ -1,0 +1,7 @@
+<resources>
+    <!-- 无标题栏主题：让 WebView 占满，网页自带顶部栏 -->
+    <style name="Theme.Akali" parent="Theme.AppCompat.NoActionBar">
+        <item name="android:windowBackground">@color/akali_bg</item>
+        <item name="android:statusBarColor">@color/akali_statusbar</item>
+    </style>
+</resources>

@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>阿卡莉 · 移动端预览（静态模拟）</title>
+<style>
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    font-family: -apple-system, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+    background: #e9eef3; display: flex; justify-content: center;
+  }
+  /* 手机外框，仅预览用 */
+  .phone {
+    width: 100%; max-width: 420px; height: 100vh; position: relative;
+    display: flex; flex-direction: column; overflow: hidden;
+    background: linear-gradient(180deg, #cfe0ec 0%, #e7eef4 40%, #dfe7ee 100%);
+    box-shadow: 0 0 40px rgba(0,0,0,.15);
+  }
+  /* 标题栏 */
+  header { position: relative; z-index: 2; background: rgba(255,255,255,.78);
+    backdrop-filter: blur(10px); border-bottom: 1px solid #e3e8ee; padding: 10px 14px;
+    display: flex; align-items: center; gap: 10px; }
+  .avatar { width: 46px; height: 46px; border-radius: 65%; overflow: hidden;
+    background: linear-gradient(135deg,#8fa6b8,#5d7a91); flex: none; }
+  .avatar img { width: 100%; height: 100%; object-fit: cover; }
+  .title { font-size: 15px; font-weight: 600; }
+  .subtitle { font-size: 12px; color: #6b7785; }
+  /* 今日算力 */
+  .quota { margin-left: auto; text-align: right; line-height: 1.15; }
+  .quota .lbl { font-size: 11px; color: #6b7785; }
+  .quota .val { font-size: 14px; font-weight: 700; color: #1F3A54; }
+  .quota .val b { color: #8b5cf6; }
+  /* 提示条 */
+  .warm-tip { position: relative; z-index: 2; margin: 8px 12px 0; padding: 6px 14px;
+    font-size: 13px; font-weight: 600; color: #e6c493; text-align: center;
+    background: rgba(20,24,30,.82); border: 1px solid rgba(230,196,147,.35);
+    border-radius: 999px; }
+  /* 舰船面板 */
+  .user-panel-toggle { margin: 8px 12px 0; font-size: 13px; color: #5b6b7a;
+    background: #fff; border: 1px solid #e1e7ee; border-radius: 10px; padding: 8px 12px; cursor: pointer; }
+  /* 消息区 */
+  main { flex: 1; overflow-y: auto; padding: 14px; display: flex; flex-direction: column; gap: 12px; }
+  .msg { display: flex; gap: 8px; max-width: 90%; }
+  .msg .ava { width: 40px; height: 40px; border-radius: 50%; overflow: hidden; flex: none;
+    background: linear-gradient(135deg,#8fa6b8,#5d7a91); }
+  .msg .ava img { width: 100%; height: 100%; object-fit: cover; }
+  .bubble { background: #fff; border-radius: 14px; padding: 10px 12px; font-size: 15px; line-height: 1.5;
+    overflow-wrap: anywhere; box-shadow: 0 1px 3px rgba(0,0,0,.06); }
+  .role-tag { font-size: 12px; color: #8b5cf6; font-weight: 600; margin-bottom: 3px; }
+  .msg.user { align-self: flex-end; flex-direction: row-reverse; }
+  .msg.user .bubble { background: #8b5cf6; color: #fff; }
+  .msg.user .role-tag { display: none; }
+  /* 输入区 */
+  footer { padding: 8px 10px; background: rgba(255,255,255,.9); border-top: 1px solid #e3e8ee;
+    display: flex; gap: 6px; align-items: flex-end; }
+  textarea { flex: 1; resize: none; font-size: 16px; font-family: inherit; border: 1px solid #d6dde6;
+    border-radius: 12px; padding: 9px 11px; max-height: 96px; }
+  .send { background: #8b5cf6; color: #fff; border: none; border-radius: 12px; padding: 10px 14px; font-size: 14px; }
+  /* 工具箱悬浮球：顶部右侧浮动，点开向下拉出菜单 */
+  .fab-wrap { position: absolute; top: 72px; right: 12px; z-index: 60; }
+  .fab-ball { width: 56px; height: 56px; border-radius: 50%; border: 2px solid #fff;
+    /* 环形进度底色：--p=剩余百分比，--ring=正常绿/不足红 */
+    background: conic-gradient(var(--ring, #2bb673) calc(var(--p, 0) * 1%), #e9eef3 0);
+    box-shadow: 0 4px 14px rgba(30,40,50,.25); position: relative;
+    display: flex; align-items: center; justify-content: center; overflow: hidden; cursor: pointer; }
+  /* 不足时红色光晕，醒目 */
+  .fab-ball.low { box-shadow: 0 0 0 3px rgba(231,76,60,.35), 0 4px 14px rgba(30,40,50,.25); }
+  /* 内圈白底，做出环形进度 */
+  .fab-ball::after { content: ''; position: absolute; inset: 5px; border-radius: 50%; background: #fff; }
+  .fab-ball-inner { position: relative; z-index: 1; text-align: center; line-height: 1.05; }
+  .fab-ball-inner .pct { font-size: 16px; font-weight: 800; color: var(--ring, #1F3A54); }
+  .fab-ball-inner .lbl { font-size: 10px; font-weight: 700; color: #1F3A54; margin-top: 1px; }
+  /* 下拉菜单：点「工具箱」向下展开 */
+  .fab-menu { display: none; position: absolute; top: calc(100% + 10px); right: 0;
+    flex-direction: column; gap: 5px; min-width: 118px;
+    background: #fff; border: 1px solid #e3e8ee; border-radius: 12px; padding: 7px;
+    box-shadow: 0 8px 20px rgba(30,40,50,.2); }
+  .fab-menu::before { content: ''; position: absolute; top: -6px; right: 20px;
+    border-left: 6px solid transparent; border-right: 6px solid transparent;
+    border-bottom: 6px solid #fff; }
+  .fab-wrap.open .fab-menu { display: flex; }
+  .fab-menu-title { font-size: 12px; font-weight: 600; letter-spacing: 2px; color: #fff;
+    background: #1F3A54; border-radius: 8px; padding: 5px 8px; text-align: center; }
+  .fab-menu .sug-btn { width: 100%; border: none; background: #f1ecfb; color: #4a3b8c;
+    border-radius: 9px; padding: 9px 10px; font-size: 14px; text-align: center; }
+  .fab-menu .sug-btn.fab-help { background: #e6f4ea; color: #1f7a4d; }
+  .fab-menu .sug-btn.fab-exit { margin-top: 2px; border-top: 1px solid #e3e8ee;
+    background: #c0392b; color: #fff; font-weight: 600; }
+</style>
+</head>
+<body>
+<div class="phone">
+  <header>
+    <div class="avatar"><img src="https://placehold.co/90x90/5d7a91/ffffff?text=AK" alt="阿卡莉"></div>
+    <div>
+      <div class="title">阿卡莉</div>
+      <div class="subtitle">秘书 · 拂晓智能体</div>
+    </div>
+    <div class="quota">
+      <div class="val"><b>12</b> / 20</div>
+    </div>
+  </header>
+
+  <div class="warm-tip">提示：指挥官可对不满意的答复反馈，帮助阿卡莉进步</div>
+
+  <div class="user-panel-toggle" onclick="this.nextElementSibling.style.display = (this.nextElementSibling.style.display==='none'?'block':'none')">
+    ⚓ 我的舰船 · 装备面板（本地副本）
+  </div>
+  <div style="display:none; margin:6px 12px 0; background:#fff; border:1px solid #e1e7ee; border-radius:10px; padding:10px; font-size:13px; color:#6b7785;">
+    输入舰名后点「载入面板」，可改成你自己的本地副本。计算（遭遇战/PVP/单体）以此副本面板为基础。
+  </div>
+
+  <main id="messages">
+    <div class="msg secretary">
+      <div class="ava"><img src="https://placehold.co/90x90/5d7a91/ffffff?text=AK" alt="阿卡莉"></div>
+      <div class="bubble"><div class="role-tag">阿卡莉</div>噢，指挥官，阿卡莉随时待命。直接告诉我你要做什么～</div>
+    </div>
+  </main>
+
+  <footer>
+    <textarea id="input" rows="1" placeholder="聊天或者输入需求，如：查询吹雪改 / 计算伤害…"></textarea>
+    <button class="send" onclick="send()">发送</button>
+  </footer>
+
+  <!-- 悬浮工具菜单（默认展开） -->
+  <div class="fab-wrap open" id="fabWrap">
+    <div class="fab-menu" id="fabMenu">
+      <div class="fab-menu-title">港区工具</div>
+      <button class="sug-btn" data-cmd="查角色">查角色</button>
+      <button class="sug-btn" data-cmd="查攻略">查攻略</button>
+      <button class="sug-btn" data-cmd="计算工具">计算工具</button>
+      <button class="sug-btn" data-cmd="活动">活动</button>
+      <button class="sug-btn" data-cmd="遭遇战模拟">遭遇战模拟</button>
+      <button class="sug-btn fab-help" data-cmd="使用帮助">使用帮助</button>
+      <button class="sug-btn fab-exit" data-cmd="退出应用">退出应用</button>
+    </div>
+    <div class="fab-ball" id="fabBall" title="工具箱（底色环形显示剩余算力）" onclick="document.getElementById('fabWrap').classList.toggle('open')">
+      <div class="fab-ball-inner">
+        <div class="pct" id="fabPct">62%</div>
+        <div class="lbl">工具箱</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  // 算力百分比环形显示（模拟剩余 62%，≤20% 标红醒目）
+  (function () {
+    const ball = document.getElementById('fabBall');
+    const p = 62;                       // 模拟剩余算力百分比
+    ball.style.setProperty('--p', p);
+    const low = p <= 20;                // 不足阈值
+    ball.style.setProperty('--ring', low ? '#e74c3c' : '#2bb673');
+    if (low) ball.classList.add('low');
+    document.getElementById('fabPct').textContent = p + '%';
+  })();
+
+  const msgs = document.getElementById('messages');
+  const input = document.getElementById('input');
+  const replies = [
+    '收到，指挥官。这就为你处理～',
+    '嗯哼，阿卡莉记下了。需要的话我可以帮你算一下面板。',
+    '好的～这是模拟回复，真实环境会调用后端 /api/chat 返回。',
+    '收到指令！该模块在正式版里会走对应的计算/查询路由哦。',
+    '明白啦，指挥官想继续的话尽管说。'
+  ];
+  let i = 0;
+  function addMsg(role, text) {
+    const m = document.createElement('div');
+    m.className = 'msg ' + role;
+    m.innerHTML = role === 'secretary'
+      ? '<div class="ava"><img src="https://placehold.co/90x90/5d7a91/ffffff?text=AK"></div><div class="bubble"><div class="role-tag">阿卡莉</div>' + text + '</div>'
+      : '<div class="ava" style="background:#cdb4f0"></div><div class="bubble">' + text + '</div>';
+    msgs.appendChild(m);
+    msgs.scrollTop = msgs.scrollHeight;
+  }
+  function send() {
+    const v = input.value.trim();
+    if (!v) return;
+    addMsg('user', v.replace(/</g, '&lt;'));
+    input.value = '';
+    setTimeout(() => addMsg('secretary', replies[i++ % replies.length]), 450);
+  }
+  input.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } });
+
+  // 港区工具菜单项（模拟）
+  document.querySelectorAll('#fabMenu .sug-btn').forEach(b => {
+    b.addEventListener('click', () => {
+      document.getElementById('fabWrap').classList.remove('open');
+      const c = b.dataset.cmd;
+      if (c === '退出应用') { addMsg('secretary', '（模拟）应用已关闭。'); return; }
+      addMsg('user', c);
+      setTimeout(() => addMsg('secretary', '「' + c + '」在正式版会触发对应功能～这是静态预览的模拟答复。'), 450);
+    });
+  });
+</script>
+</body>
+</html>

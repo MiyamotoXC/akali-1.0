@@ -484,7 +484,7 @@ class SetSessionTalent(BaseTool):
         code = (params.get('talent_code') or '').strip()
         side = (params.get('side') or 'attacker').strip().lower()
         if side not in ('attacker', 'defender'):
-            return "side 必须是 attacker 或 defender"
+            return "side 必须是 attacker 或 defender。"
         if code:
             r = resolve_talents(app, ship_name, code)
         else:

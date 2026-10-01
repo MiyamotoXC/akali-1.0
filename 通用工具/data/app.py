@@ -289,10 +289,13 @@ class App:
         """计算路径加载角色：底层 data.json 为基，仅覆盖用户自定义面板。
         副本历史快照为整船全量（技能段/新增字段会随底层更新而过时），
         故技能段等结构数据一律以底层为准；用户自定义只作用于 attack_panel/defense_panel。
+        该面板即「用户自己的装备面板」：默认无装备=底层基础值，仅含装备属性、
+        刻意不含天赋/羁绊加成（天赋由计算流程单独以会话级 buff 叠加，见 calc_flow），
+        是给用户显示与计算用的面板。
 
         用户面板来源按运行模式（AKALI_RUN_MODE）分流：
-        - local（默认）：服务器用户副本 user_data.json —— 行为与改造前完全一致；
-        - cloud：客户端随请求携带的 panel_overrides（服务器无用户文件、无状态），
+        - local：服务器用户副本 user_data.json —— 显式 local 时行为与改造前完全一致；
+        - cloud（默认）：客户端随请求携带的 panel_overrides（服务器无用户文件、无状态），
           由 /api/chat 入口写入 core.req_ctx 请求上下文（绝对赋值，覆盖同名字段）。
         """
         if not name:

@@ -3,7 +3,6 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-<link rel="manifest" href="/manifest.webmanifest">
 <link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32.png">
 <link rel="icon" type="image/png" sizes="16x16" href="/icons/favicon-16.png">
 <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
@@ -38,28 +37,18 @@
   }
   /* 顶栏 */
   header {
-    position: relative; z-index: 1; /* 置于聊天背景层之上，保证清晰显示 */
-    /* 顶端背景与聊天背景分开、互不重叠（用户口径 2026-09-22）：
-       此前用「半透明 + 毛玻璃」，聊天背景图（main::before，覆盖全视口）会从顶栏
-       透上来，两张图在顶栏视觉上叠在一起；现改为**不透明**淡色纯色，顶栏自成一层。
-       若 知识库/图片素材/背景/顶端.png 存在，由 JS 加 .has-top-bg 换用顶端专用图。 */
-    background-color: #f7f8fa;
+    position: relative; z-index: 1; /* 置于聊天背景层之上 */
+    /* 顶端背景 = 当前聊天背景的淡化版：透出 main::before 的聊天背景（自动跟随时段：
+       白天/清晨/黄昏/夜间），以白纱 + 毛玻璃柔化，头像与标题清晰可读，
+       并与下方聊天背景融为一体，而不是另叠一张顶端专用图。 */
+    background: rgba(255, 255, 255, 0.75);
+    backdrop-filter: blur(10px) saturate(1.05);
+    -webkit-backdrop-filter: blur(10px) saturate(1.05);
     border-bottom: 1px solid var(--line);
     padding: 12px 20px;
     display: flex;
     align-items: center;
     gap: 12px;
-  }
-  /* 顶栏淡色按时段区分（不透明；清晨暖白 / 白天灰白 / 黄昏暖橘 / 夜间冷蓝白）。
-     只写 background-color：用 background 简写会把下面的顶端图 background-image 清掉 */
-  body.bg-dawn header { background-color: #c9c4be; }
-  body.bg-evening header { background-color: #fdf0e6; }
-  body.bg-night header { background-color: #e9eef7; }
-  /* 顶端专用背景图（--top-bg 由 JS 探测 背景/顶端[_时段].png 后设置）：
-     与聊天背景分层显示、互不重叠；探测不到时回落上面的淡色纯色 */
-  header.has-top-bg {
-    background-image: var(--top-bg);
-    background-size: cover; background-position: center; background-repeat: no-repeat;
   }
   .avatar {
     width: 54px; height: 54px; border-radius: 65%;
@@ -72,22 +61,40 @@
   .fab-wrap { position: fixed; left: calc(100vw - 64px); top: 8px; z-index: 60; }
   .fab-ball { width: 72px; height: 72px; border-radius: 50%; overflow: hidden; cursor: grab;
     border: 2px solid var(--line); box-shadow: 0 4px 12px rgba(30, 40, 50, 0.18);
-    background: var(--panel); padding: 0; transition: box-shadow .15s;
-    touch-action: none; user-select: none; -webkit-user-select: none; }
+    /* 环形进度底色：--p=剩余百分比，--ring=正常绿/不足红（值由 checkQuotaAlert 写入） */
+    background: conic-gradient(var(--ring, #2bb673) calc(var(--p, 0) * 1%), #e9eef3 0);
+    padding: 0; transition: box-shadow .15s;
+    touch-action: none; user-select: none; -webkit-user-select: none;
+    display: flex; align-items: center; justify-content: center; position: relative; }
   .fab-ball:active { cursor: grabbing; }
   .fab-ball:hover { box-shadow: 0 6px 16px rgba(30, 40, 50, 0.28); }
-  .fab-ball img { width: 100%; height: 100%; object-fit: cover; display: block; pointer-events: none; }
+  /* 不足阈值（≤QUOTA_ALERT_PCT）时红色光晕，醒目 */
+  .fab-ball.low { box-shadow: 0 0 0 3px rgba(231,76,60,.35), 0 4px 12px rgba(30,40,50,.18); }
+  /* 内圈白底，做出环形进度 */
+  .fab-ball::after { content: ''; position: absolute; inset: 7px; border-radius: 50%; background: #fff; }
+  /* 前景：百分比 + 工具箱字样 */
+  .fab-ball-inner { position: relative; z-index: 1; text-align: center; line-height: 1.05; }
+  .fab-ball-inner .pct { font-size: 20px; font-weight: 800; color: var(--ring, #1F3A54); }
+  .fab-ball-inner .lbl { font-size: 12px; font-weight: 700; color: #1F3A54; letter-spacing: 1px; margin-top: 1px; }
+  .fab-ball img { width: 100%; height: 100%; object-fit: cover; display: block; pointer-events: none;
+    position: absolute; inset: 0; z-index: 0; }
   .fab-menu { display: none; position: absolute; top: calc(100% + 8px); left: 50%;
     transform: translateX(-50%);
     flex-direction: column; gap: 6px; min-width: 136px;
     background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
     padding: 8px; box-shadow: 0 8px 20px rgba(30, 40, 50, 0.22); }
   .fab-wrap.open .fab-menu { display: flex; }
+  /* 工具面板标题（参考图：右侧「港区工具」下拉菜单顶栏） */
+  .fab-menu .fab-menu-title { font-size: 12px; font-weight: 600; letter-spacing: 2px;
+    color: #fff; background: #1F3A54; border-radius: 8px; padding: 5px 8px; text-align: center; }
   .fab-menu .sug-btn { width: 100%; margin: 0; background: var(--accent-soft); }
   /* 悬浮球「退出」：与功能项分隔并加警示色，提示这是会重置对话的休眠操作 */
   .fab-menu .sug-btn.fab-exit { margin-top: 4px; padding-top: 10px; border-top: 1px solid var(--line);
     color: #fff; background: #c0392b; font-weight: 600; }
   .fab-menu .sug-btn.fab-exit:hover { background: #a93226; }
+  /* 悬浮球「使用帮助」：淡绿色，与功能项/退出区分，点击直接弹手册 */
+  .fab-menu .sug-btn.fab-help { background: #e6f4ea; color: #1f7a4d; border: 1px solid rgba(31,122,77,0.35); }
+  .fab-menu .sug-btn.fab-help:hover { background: #d6ecdb; }
   .title-wrap { flex: 1; }
   .title { font-size: 17px; font-weight: 600; }
   .subtitle { font-size: 13px; color: var(--ink-soft); }
@@ -630,12 +637,17 @@
     .bubble table, .bubble pre.code { max-width: 100%; }
     .sug-btn { padding: 6px 12px; font-size: 14px; }
     .fab-ball { width: 46px; height: 46px; }
-    .fab-menu { min-width: 124px; }
+    .fab-ball::after { inset: 4px; }
+    .fab-ball-inner .pct { font-size: 13px; }
+    .fab-ball-inner .lbl { font-size: 8px; letter-spacing: 0; }
     .story-modal-box { width: 94%; max-height: 86vh; }
     .input-row { gap: 6px; }
     .input-row textarea { font-size: 17px; }   /* ≥16px 防 iOS 聚焦自动放大 */
     footer button { padding: 8px 10px; }
     .up-head, .up-actions { flex-wrap: wrap; }
+    /* 移动端：工具菜单改为贴右侧的竖向「港区工具」下拉面板（参考图），默认展开 */
+    .fab-menu { left: auto; right: 0; transform: none; min-width: 112px; gap: 5px; padding: 7px; }
+    .fab-menu .sug-btn { padding: 10px 10px; font-size: 14px; }
   }
 
   /* 反馈按钮：常显在阿卡莉气泡**外侧右下角**（用户口径 2026-09-25）。
@@ -687,17 +699,23 @@
   </header>
 
   <!-- 悬浮球：挂在标题栏阿卡莉头像下方，点击展开工具菜单；逻辑见 JS「功能菜单（悬浮球）」区块 -->
-  <div class="fab-wrap" id="fabWrap">
-    <button class="fab-ball" id="fabBall" title="工具菜单">
-      <img src="/kb/图片素材/背景/悬浮窗.png" alt="工具菜单">
+  <!-- open：参考图要求「悬浮窗开始默认是打开的」 -->
+  <div class="fab-wrap open" id="fabWrap">
+    <button class="fab-ball" id="fabBall" title="工具箱（底色环形显示剩余算力）">
+      <span class="fab-ball-inner">
+        <span class="pct" id="fabPct"></span>
+        <span class="lbl">工具箱</span>
+      </span>
     </button>
     <div class="fab-menu" id="fabMenu">
+      <div class="fab-menu-title">港区工具</div>
       <button class="sug-btn" data-cmd="查角色">查角色</button>
       <button class="sug-btn" data-cmd="查攻略">查攻略</button>
       <button class="sug-btn" data-cmd="计算工具">计算工具</button>
       <button class="sug-btn" data-cmd="活动">活动</button>
       <button class="sug-btn" data-cmd="遭遇战模拟">遭遇战模拟</button>
-      <button class="sug-btn fab-exit" data-cmd="退出" title="关闭网页">退出</button>
+      <button class="sug-btn fab-help" data-cmd="使用帮助">使用帮助</button>
+      <button class="sug-btn fab-exit" data-cmd="退出应用" title="关闭网页">退出应用</button>
     </div>
   </div>
 
@@ -715,7 +733,7 @@
         <button id="upLoad">载入面板</button>
         <button id="upRefresh">刷新列表</button>
       </div>
-      <div class="up-fields" id="upFields"><div class="up-note">输入舰名后点「载入面板」，可修改面板数值并保存。计算（遭遇战/PVP/单体）将以副本面板为基础，查询仍显示底层数据。</div></div>
+      <div class="up-fields" id="upFields"><div class="up-note">输入舰名后点「载入面板」，可改成 <b>你自己的本地副本</b>。计算（遭遇战/PVP/单体）以此副本面板为基础；<b>未保存时回落底层基础面板（默认无装备）</b>。面板<b>仅含装备属性，不含天赋/羁绊加成</b>，仅供显示与计算。</div></div>
       <div class="up-actions">
         <button id="upSaveAbs">保存（设为输入值）</button>
         <button id="upSaveDelta">保存增量（相对当前值）</button>
@@ -854,7 +872,7 @@ function upRenderFields(data) {
   upState.curDef = data.cur_def || {};
   upState.baseAtk = data.base_atk || {};
   upState.baseDef = data.base_def || {};
-  let html = '<div class="up-field"><label>攻击</label><span style="color:#64748b">（下方输入=副本当前值，灰字=底层基础值）</span></div>';
+  let html = '<div class="up-field"><label>攻击</label><span style="color:#64748b">（输入=你的副本当前值；灰字=底层基础值·默认无装备；仅装备属性，不含天赋/羁绊）</span></div>';
   UP_ATK_FIELDS.forEach(function (f) {
     const cur = upState.curAtk[f] || 0;
     const base = upState.baseAtk[f] || 0;
@@ -1220,6 +1238,25 @@ function openGuidePreview(g) {
     document.body.appendChild(a); a.click(); a.remove();
   });
   mask.addEventListener('click', (e) => { if (e.target === mask) mask.remove(); });
+}
+
+// 使用者手册弹窗：首次注册成功 / 聊天「想看说明」意图触发，复用 .sb-mask 风格，
+// 内含 iframe 载入 /manual，底部「确认/关闭」。onClose 为关闭后回调（首次注册用于进应用）。
+function openManual(onClose) {
+  if (document.getElementById('manual-mask')) return;
+  const mask = document.createElement('div');
+  mask.id = 'manual-mask';
+  mask.className = 'sb-mask';
+  mask.innerHTML =
+    '<div class="sb-box" style="height:min(82vh,720px);">'
+    + '<div class="sb-head"><b>使用说明</b>'
+    + '<button id="manualClose" style="border:none;background:var(--accent,#6b8caa);color:#fff;border-radius:8px;padding:6px 14px;font-size:14px;cursor:pointer;">确认/关闭</button></div>'
+    + '<iframe src="/manual" style="flex:1;border:0;width:100%;background:#fff;"></iframe>'
+    + '</div>';
+  document.body.appendChild(mask);
+  const close = () => { mask.remove(); if (typeof onClose === 'function') onClose(); };
+  mask.querySelector('#manualClose').addEventListener('click', close);
+  mask.addEventListener('click', e => { if (e.target === mask) close(); });
 }
 
 // 攻略库面板：fetch 索引 → 渲染列表。
@@ -2149,6 +2186,18 @@ function checkQuotaAlert() {
     .then(r => (r.ok ? r.json() : null))
     .then(d => {
       const p = (d && !d.unlimited && d.cloud_mode !== false) ? Number(d.remain_percent) : NaN;
+      // 移动端右上角角标：只要拿到有效百分比就常驻显示（桌面端被 CSS 隐藏）
+      const fabBallEl = document.getElementById('fabBall');
+      var pctTxt = isNaN(p) ? '' : Math.max(0, Math.round(p)) + '%';
+      // 悬浮球环形底色：剩余算力百分比（不足阈值标红 + 红色光晕）
+      if (fabBallEl) {
+        fabBallEl.style.setProperty('--p', isNaN(p) ? 0 : Math.max(0, Math.round(p)));
+        const low = !isNaN(p) && p <= QUOTA_ALERT_PCT;
+        fabBallEl.style.setProperty('--ring', low ? '#e74c3c' : '#2bb673');
+        fabBallEl.classList.toggle('low', low);
+        const pctEl = document.getElementById('fabPct');
+        if (pctEl) pctEl.textContent = pctTxt;
+      }
       if (isNaN(p) || p > QUOTA_ALERT_PCT) { if (bar) bar.style.display = 'none'; return; }
       const msg = '今日系统算力不足' + QUOTA_ALERT_PCT + '%';
       if (bar && txt) { txt.textContent = msg + '（基础功能不受影响，明日零点自动恢复）'; bar.style.display = ''; }
@@ -2187,6 +2236,12 @@ function fabSetPos(x, y) {
   fabWrap.dataset.y = c[1];
 }
 function fabAlignMenu() {   // 菜单与球中心对齐；靠视口边缘时平移防溢出
+  if (window.matchMedia('(max-width: 640px)').matches) {   // 手机端：贴右侧竖向面板，无需水平校正
+    fabMenu.style.left = 'auto';
+    fabMenu.style.right = '0';
+    fabMenu.style.transform = 'none';
+    return;
+  }
   fabMenu.style.left = '50%';
   fabMenu.style.transform = 'translateX(-50%)';
   var r = fabMenu.getBoundingClientRect();
@@ -2227,7 +2282,8 @@ document.querySelectorAll('#fabMenu .sug-btn').forEach(function (btn) {
     fabWrap.classList.remove('open');
     var cmd = btn.dataset.cmd;
     if (cmd === '查角色') { openShipBrowser(); return; }   // 「查角色」直接开角色面板，不发对话
-    if (cmd === '退出') { requestExit(); return; }          // 「退出」关闭网页，不触发后端退出/清记忆
+    if (cmd === '使用帮助') { openManual(); return; }       // 「使用帮助」直接弹手册，不发对话
+    if (cmd === '退出应用') { requestExit(); return; }      // 「退出应用」关闭网页，不触发后端退出/清记忆
     sendChat(cmd);   // 查攻略/计算工具/遭遇战模拟 → 发对应指令，后端按路由展开
   });
 });
@@ -2406,10 +2462,56 @@ ${weatherData.location}实时天气：${weatherData.weather}
   }
 }
 
+// 弹手册的「意图」判定：整句话是在索要使用说明/帮助才弹，而非句中恰好带「帮助」二字。
+// 例如「请帮助我算伤害」「这个帮助很大」不应触发——前者是计算请求、后者只是顺带提到。
+// 做法：剥掉首尾语气/引导词后，若剩余内容可被「帮助类核心词」完全解释，则判为意图成立。
+function wantManual(text) {
+  if (!text) return false;
+  let s = text.toLowerCase().replace(/[\s　]/g, '');
+  // 帮助类「核心词」（整词匹配，避免「使用赤城」误触发）
+  const CORE = ['使用说明', '使用帮助', '使用手册', '使用指引', '操作说明', '操作指南',
+                '玩法说明', '说明', '帮助', 'help', 'manual', '手册', '指南', '指引',
+                '教程', '怎么用', '如何使用', '不会用', '怎么玩', '怎么操作', '如何操作', '怎么使用'];
+  // 可出现在首尾的语气/引导词（忽略后不影响「要帮助」意图判断）
+  const FILL = ['我想', '我要', '我看', '看下', '看看', '看一', '打开', '给我', '来个', '要个',
+                '需要', '麻烦', '请', '想', '要', '看', '的', '了', '吗', '呢', '吧', '啊',
+                '哦', '嗯', '嘛', '你', '您', '我', '它', '这', '那', '下', '一', '个', '帮', 'me'];
+  // 反复剥首尾 filler，直到稳定
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const f of FILL) {
+      if (s.startsWith(f)) { s = s.slice(f.length); changed = true; }
+      else if (s.endsWith(f)) { s = s.slice(0, s.length - f.length); changed = true; }
+    }
+  }
+  // 剥掉所有帮助核心词；再清标点与首尾 filler；若最终清空 → 整句即「要帮助」意图
+  let left = s;
+  for (const c of CORE) left = left.split(c).join('');
+  left = left.replace(/[，。、！？!?.,~·\-_'"「」『』""''()（）]/g, '');
+  changed = true;
+  while (changed) {
+    changed = false;
+    for (const f of FILL) {
+      if (left.startsWith(f)) { left = left.slice(f.length); changed = true; }
+      else if (left.endsWith(f)) { left = left.slice(0, left.length - f.length); changed = true; }
+    }
+  }
+  return left.length === 0;
+}
+
 // 发送按钮
 function send() {
   const text = inputEl.value.trim();
   if (!text) return;
+  // 聊天里表达「想看使用说明/帮助」的**意图**才弹手册（不把该元指令发往后端）；
+  // 用意图而非关键字：避免「请帮助我算伤害」「这个帮助很大」这类请求误触发。
+  if (wantManual(text)) {
+    openManual();
+    inputEl.value = '';
+    inputEl.style.height = 'auto';
+    return;
+  }
   sendChat(text);
 }
 
@@ -2500,9 +2602,27 @@ function showRegisterResult(j) {
       <button id="reg-go" style="width:100%;padding:11px;border:none;border-radius:9px;background:var(--accent,#6b8caa);color:#fff;font-size:15px;cursor:pointer;">开始使用</button>
     </div>`;
   document.body.appendChild(ov);
-  const go = () => { location.reload(); };
+  const enter = () => { location.reload(); };
+  // 进入应用前，先移除残留的「邀请码遮罩」(auth-overlay, z9999) 与本成功遮罩(register-result, z10000)，
+  // 否则随后弹出的手册(.sb-mask, z9998)会被压在下面、看不到也关不掉 → 表现为「开始使用」点了没反应。
+  const cleanup = () => {
+    ['auth-overlay', 'register-result'].forEach(function (id) {
+      const el = document.getElementById(id);
+      if (el) el.remove();   // 含本成功层(ov)一并移除，否则手册(.sb-mask,z9998)会被压在下面
+    });
+    ov.remove();
+  };
+  const go = () => {
+    // 首次注册：进入应用前自动弹一次手册（底部「确认/关闭」），仅弹一次
+    if (!localStorage.getItem('akali_manual_seen')) {
+      cleanup();   // 先清掉自己与邀请码遮罩，让手册成为最上层
+      openManual(function () { localStorage.setItem('akali_manual_seen', '1'); enter(); });
+    } else {
+      enter();
+    }
+  };
   ov.querySelector('#reg-go').addEventListener('click', go);
-  setTimeout(go, 8000);   // 不点也会自动进（避免用户以为卡住）
+  setTimeout(go, 8000);   // 不点也会自动弹手册（首次）/ 直接进（非首次）
 }
 
 // 设备标识：浏览器生成一次并持久化，作为"我是谁"的主标识传给服务端。
@@ -2707,48 +2827,8 @@ function bgPeriod() {
   apply();
   setInterval(apply, 60 * 1000);
 })();
-// 顶端背景图（用户口径 2026-09-22：顶端背景与聊天背景分开、不重叠）：
-//   约定 知识库/图片素材/背景/ 下放 顶端.png 即作为顶栏背景（可按时段细分
-//   顶端_清晨.png / 顶端_黄昏.png / 顶端_夜晚.png，存在则优先于通用 顶端.png）；
-//   探测不到就保持 CSS 的不透明淡色纯色（body.bg-* header），不再透出聊天背景图。
-//   放图后刷新页面生效；同一时段内不重复探测。
-(function initTopBg() {
-  const header = document.querySelector('header');
-  if (!header) return;
-  // 顶端图目录：跨域/扩展场景走 ASSET_BASE（'http://主机/kb'）；同源时等价于原来的 '/kb'
-  const BASE = (window.ASSET_BASE || '/kb') + '/图片素材/背景/';
-  const SUFFIX = { dawn: '_清晨', evening: '_黄昏', night: '_夜晚', day: '' };
-  const okCache = {};   // url → 是否存在（避免重复网络探测）
-  function probe(url) {
-    if (url in okCache) return Promise.resolve(okCache[url]);
-    return new Promise(resolve => {
-      const img = new Image();
-      img.onload = () => { okCache[url] = true; resolve(true); };
-      img.onerror = () => { okCache[url] = false; resolve(false); };
-      img.src = url;
-    });
-  }
-  let lastPeriod = null;
-  async function apply() {
-    const period = bgPeriod();
-    if (lastPeriod === period) return;
-    lastPeriod = period;
-    const suf = SUFFIX[period] || '';
-    const cands = [];
-    if (suf) cands.push(BASE + '顶端' + suf + '.png');   // 时段专用图优先
-    cands.push(BASE + '顶端.png');                        // 通用顶端图兜底
-    for (const url of cands) {
-      if (await probe(url)) {
-        header.style.setProperty('--top-bg', "url('" + url + "')");
-        header.classList.add('has-top-bg');
-        return;
-      }
-    }
-    header.classList.remove('has-top-bg');   // 无顶端图 → 用 CSS 淡色纯色
-  }
-  apply();
-  setInterval(apply, 60 * 1000);
-})();
+// 顶端背景：现由 CSS 的 header 直接以「当前聊天背景的淡化版」呈现（白纱 + 毛玻璃透出
+//   main::before，自动跟随时段）；原先「顶端.png 专用顶栏图」逻辑已停用（has-top-bg 不再有样式）。
 
 // 节庆主题（数据驱动：2026-09-27 升级）。后端 /api/ui_assets 下发 holiday：
 // { theme, assets:{bubble, fall:[{file,size,speed,rotate}]}, palette:{cssVar:value} }。
@@ -2932,6 +3012,15 @@ function applyFestivalTheme(hol) {
   }
 })();
 
+// 提取气泡正文：克隆后剔除角色标签（阿卡莉）与反馈按钮本身，避免污染上报文本
+function _fbBubbleText(node) {
+  const bubble = (node && node.querySelector) ? node.querySelector('.bubble') : null;
+  if (!bubble) return '';
+  const clone = bubble.cloneNode(true);
+  clone.querySelectorAll('.role-tag, .feedback-btn').forEach(function (el) { el.remove(); });
+  return (clone.textContent || '').trim();
+}
+
 // 反馈按钮功能
 function initFeedbackButtons() {
   // 在 renderSecretaryReply 函数中注入反馈按钮
@@ -2955,6 +3044,7 @@ function initFeedbackButtons() {
       const msgEl2 = target;
       const msgId = 'msg-' + Date.now() + '-' + Math.random().toString(36).substr(2, 6);
       msgEl2.setAttribute('data-msg-id', msgId);
+      msgEl2.setAttribute('data-from-kb', data.from_kb ? '1' : '0');
       const bubble = msgEl2.querySelector('.bubble');
       if (bubble) {
         const btn = document.createElement('button');
@@ -2965,17 +3055,44 @@ function initFeedbackButtons() {
         btn.setAttribute('aria-label', '反馈此答复');
         btn.addEventListener('click', function() {
           if (btn.classList.contains('done')) return;   // 已提交过，避免重复上报
-          const userMsg = messagesEl.querySelector('.msg.user:last-of-type');
-          const userText = userMsg ? userMsg.querySelector('.bubble').textContent.trim() : '';
-          const replyText = data.reply || '';
+
+          // —— 采集「自上一个结束/中断进程之后」的完整向量对话轮次 ——
+          // 从当前被反馈的秘书消息向前回溯，连续收集 data-from-kb="1" 的
+          // (用户问, 阿卡莉答) 配对；遇到非 kb 秘书消息（进程结束/中断回复、
+          // 欢迎语、工具输出等）即停——该边界天然对应「上一个结束或中断的进程」。
+          const conv = [];
+          let node = msgEl2;
+          while (node && node.classList && node.classList.contains('secretary')) {
+            if (!node.getAttribute('data-from-kb')) break;   // 进程边界
+            // 找紧邻的上一条用户消息作为「提问」
+            let u = node.previousElementSibling;
+            let userText = '';
+            while (u) {
+              if (u.classList && u.classList.contains('user')) { userText = _fbBubbleText(u); break; }
+              if (u.classList && u.classList.contains('secretary')) break;  // 无对应用户提问
+              u = u.previousElementSibling;
+            }
+            conv.unshift({ user: userText, assistant: _fbBubbleText(node) });   // 保持时间正序
+            // 跳到上一条秘书消息继续回溯
+            let p = node.previousElementSibling;
+            while (p && !(p.classList && p.classList.contains('secretary'))) p = p.previousElementSibling;
+            node = p;
+          }
+
+          // 单轮字段：取本轮的最后一问一答（修复原 `.msg.user:last-of-type` 取不到
+          // 导致 user_input 恒为空的问题；向后兼容既有读取脚本）
+          const lastPair = conv.length ? conv[conv.length - 1] : null;
+          const singleUser = lastPair ? lastPair.user : '';
+          const singleReply = lastPair ? lastPair.assistant : (data.reply || '');
           const payload = {
             session_id: _sessionId(),
             message_id: msgId,
-            user_input: userText,
-            assistant_reply: replyText,
+            user_input: singleUser,
+            assistant_reply: singleReply,
             timestamp: new Date().toISOString(),
             feedback_type: 'unsatisfied',
-            from_kb: !!data.from_kb
+            from_kb: !!data.from_kb,
+            conversation: conv.slice(-30)   // 封顶 30 轮，防止异常膨胀
           };
           // 提交后把按钮改成绿勾（不再弹 alert 打断对话；失败则还原并提示一次）
           fetch('/api/feedback', {
@@ -3056,15 +3173,10 @@ async function queryWeather(message) {
   }
 }
 
-// PWA：注册 Service Worker（离线壳 + 可安装到手机桌面）。失败静默，不影响正常使用。
-if ('serviceWorker' in navigator) {
-  window.addEventListener('load', function () {
-    navigator.serviceWorker.register('/sw.js').catch(function () {});
-  });
-}
+
 
 // URL 参数 ?q=<内容>：打开页面后自动发一条消息，用于「快捷方式直达」场景
-// （PWA 快捷方式 / 浏览器书签 / 浏览器扩展划词查询，见 接口契约.md）。
+// （浏览器书签 / 浏览器扩展划词查询，见 接口契约.md）。
 // 云端需口令时先等解锁（authUnlocked=false 期间不发，避免 401），最多等 60 秒。
 (function initAutoQuery() {
   const q = (new URLSearchParams(location.search).get('q') || '').trim();

@@ -16,9 +16,10 @@
 
 设计约束（与现有架构保持一致，这层不得突破）
 --------------------------------------------
-- **一次判定**：LLM 仍然只做一次三分支判定。技能包**不引入**"先选包、再选工具"的第二跳 ——
-  它是**组织与启用单元**，不是路由单元。两跳会破坏"agent 模式下不二次分类"的口径，
-  并显著增加延迟与误判面。
+- **不做"选包→选工具"的两跳**：技能包是**组织与启用单元**，不是路由单元；包内工具由同一
+  次元路由按 when/示例直接选。两跳会显著增加延迟与误判面。
+  （用户口径 2026-09-28：允许**多次 LLM 意图分析**——仅"进入明确工具流程"豁免；
+   但"选包再选工具"的两跳仍不引入。）
 - **原文直出**：数据类包沿用 `OUTPUT_VERBATIM`，工具输出逐字返回、不回灌 LLM
   （见 `tool_adapter.invoke_tool`）。
 - **不膨胀 prompt**：默认只启 `default=True` 的包；`prompt_hint` 只作**留位**，
@@ -158,6 +159,15 @@ SKILL_PACKS = (
         when='礼包/活动截止/月度兑换提醒（core.reminder.collect_reminders）与邮件、限时远征'
              '（web_app._affair_hints），确定性生成后织入首页顶部事务提醒横幅。'
              '已在 web_app.index() 接线：关闭时不注入横幅。',
+        tools=(),
+        kind=KIND_BACKEND, output=OUTPUT_FLOW, default=True,
+    ),
+    SkillPack(
+        name='boundary',
+        title='边界与违规',
+        when='违规（涉政/违法/暴力/竞品）与越界情色的判定与固定话术，统一由 core.boundary 提供；'
+             '由 guard **在路由前**拦截（避免漏进工具/攻略路由），话术按「主体」分流'
+             '（冲着阿卡莉本人 / 某个角色）。不绑工具。',
         tools=(),
         kind=KIND_BACKEND, output=OUTPUT_FLOW, default=True,
     ),

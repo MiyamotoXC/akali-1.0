@@ -5,7 +5,7 @@ LLM 每次只做一件事：对用户输入判定走哪条分支——①数据�
 它**不生成回复**，只输出 tool_calls（或什么都不输出）。
 """
 
-ROUTER_SYSTEM = (
+_RAW_ROUTER_SYSTEM = (
     '你是拂晓（舰灵海战手游）秘书助手「阿卡莉」的三分支路由器。\n'
     '对用户这条消息，必须严格按两步处理（只做判定，绝不用自然语言作答）：\n'
     '第一步先理解用户的完整意图，输出 intent；第二步才根据该 intent 选择工具和参数。'
@@ -15,7 +15,9 @@ ROUTER_SYSTEM = (
     '以当前输入为准；只有"那她呢""二型呢""我说的是装备"这类真正省略或纠正的追问，'
     '才从上下文补全对象与诉求。不得因为上轮查资料，就把后续闲聊继续判为查资料。\n'
     '角色面板后的"评价下她""她怎么样""值得练吗"是对同一角色的评估追问，'
-    '必须从上下文补全角色并判为 backend_flow；不能脱离数据自由编写评价。\n'
+    '必须从上下文补全角色并判为 backend_flow；不能脱离数据自由编写评价。'
+    '但若当前输入本身已点名具体舰灵并询问其改造/强度（如"胡德改造厉害吗"），'
+    '则按该舰灵的具体知识问题走 guide_rag，不从面板上下文补全。\n'
     '用户说"你在胡说/不对/哪来的/你确定"等是在质疑上一条事实回答，判为 backend_flow，'
     '由后端撤回并复核；不得判为 casual 后自行声称数据已校验。\n'
     'RA-01、虚构档案编号以及基于它的"调取/打开"没有对应工具，判为 backend_flow，'
@@ -109,7 +111,9 @@ ROUTER_SYSTEM = (
     '   不得选 backend_flow、calculation 或角色对比。\n'
     '用户明确引用攻略榜单、装备表或知识库条目来追问时，'
     '必须调 guide_rag 核对对应条目，不选 no_tool，也不要只查其中一个舰灵的面板；\n'
-    '   · 单个舰灵"值不值得练"和"先练哪个"的主观评估问句由后端处理；'
+    '   · 未点名具体舰灵的"值不值得练"和"先练哪个"主观评估问句由后端处理；'
+    '一旦点名具体舰灵（如"胡德改造厉害吗""企业改造后强吗"），就是该舰灵的具体知识问题，'
+    '必须用 guide_rag 检索其改造/培养攻略，不得判 backend_flow。\n'
     '但泛化的舰灵改造优先级必须按上面的规则调用 query_guide。\n'
     '   · 问候与功能确认、无明确诉求的短句。\n'
     '\n'
@@ -142,5 +146,86 @@ ROUTER_SYSTEM = (
     '→ 必走 ship_filter 或 query_ships_by_skill，**绝不可**当攻略知识问题调 guide_rag。\n'
     '6) 优先级铁律：泛化的**舰灵改造优先级**问句要的是已有攻略结论，'
     '一律调用 query_guide(keyword="舰灵改造优先级")，绝不能调用 ship_filter 列出所有可改造舰灵；'
-    '单舰值不值得练、先练哪个以及两个以上舰灵的横向比较不调用工具，由后端评估处理器处理。\n'
+    '单舰值不值得练、先练哪个以及两个以上舰灵的横向比较（均指未点名具体舰灵的泛化问句）'
+    '不调用工具，由后端评估处理器处理；点名具体舰灵后问其强度/改造/培养则走 guide_rag。\n'
 )
+
+
+# =============================================================================
+# 规则段 → skill 的**精确归属**（rules 精确到每一条规则/工具）
+#
+# 原则：**不改原文一字**。每个片段用"起始锚点"在 _RAW_ROUTER_SYSTEM 中定位，
+#      片段 = 该锚点所在行 → 下一片段锚点所在行（逐字切片，含行首缩进）。
+# 归属：
+#   __shared__  = 前言 / 分支标题 / 硬性要求（任何 skill 启用都保留）
+#   lookup      = ① 各查询工具（query_ship_info / query_ships_by_skill / query_talent_ships /
+#                 ship_filter / query_scout_sum / query_guide / ammo_mech_qa / query_activity·query_weather）
+#   calculation = ① 里的 calc_favor / calc_reload_cd
+#   guide_qa    = ② 检索工具（guide_rag）
+#   casual      = ③ 都不调（闲聊/调情/助手自身能力/后端统一处理）
+#   calc_wizard = ③ 里的多轮计算向导
+# 全启用时 build_router_system() 与 _RAW_ROUTER_SYSTEM **逐字一致**（见 _selftest_router）。
+# =============================================================================
+_SEGMENTS = (
+    ('__shared__',  'preamble',  '你是拂晓'),
+    ('__shared__',  'h_desc',    '①【数据工具】'),
+    ('lookup',      'data',      '· 单个角色的面板'),
+    ('lookup',      'data',      '· 按技能条件找角色'),
+    ('lookup',      'data',      '· 按天赋名或天赋效果找角色'),
+    ('lookup',      'data',      '· 按属性组合筛选角色'),
+    ('lookup',      'data',      '· 多角色面板索敌合计'),
+    ('lookup',      'data',      '· 攻略目录'),
+    ('lookup',      'data',      '· 培养或改造优先级'),
+    ('lookup',      'data',      '· 弹种'),
+    ('lookup',      'data',      '· 当前活动的名称'),
+    ('calculation', 'data',      '· 好感升级需求'),
+    ('guide_qa',    'retrieval', '②【检索工具】'),
+    ('casual',      'no_tool',   '③【都不调】'),
+    ('calc_wizard', 'no_tool',   '· 明确要执行具体伤害计算'),
+    ('casual',      'no_tool',   '· 游戏内资源不足'),
+    ('__shared__',  'hard',      '硬性要求：'),
+)
+
+# 分支标题段 → 依赖的分支：仅当该分支有启用的规则段时，标题才输出（避免出现空标题）
+_HEADER_DEP = {'h_desc': 'data'}
+
+
+def build_router_system() -> str:
+    """按启用的技能包，从原文精确拼出路由 system prompt（逐字保留原文）。
+
+    规则段精确到"每一条规则/工具"，只在所属 skill 启用时保留；关闭某 skill → 其规则段自动消失。
+    """
+    from .skill_pack import enabled_skill_names
+    enabled = set(enabled_skill_names())
+    raw = _RAW_ROUTER_SYSTEM
+    starts = []
+    for owner, tag, anchor in _SEGMENTS:
+        pos = raw.find(anchor)
+        if pos < 0:
+            raise RuntimeError('router 规则锚点未找到: %r (%s)' % (anchor, tag))
+        starts.append((owner, raw.rfind('\n', 0, pos) + 1))
+    for k in range(len(starts) - 1):
+        if starts[k][1] >= starts[k + 1][1]:
+            raise RuntimeError('router 规则锚点顺序/重复错误: %r' % (_SEGMENTS[k][2],))
+    out = []
+    for k, (owner, i) in enumerate(starts):
+        j = starts[k + 1][1] if k + 1 < len(starts) else len(raw)
+        if owner != '__shared__':
+            if owner in enabled:
+                out.append(raw[i:j])
+            continue
+        # 共享段：分支标题仅在所属分支有启用规则时输出；前言 / 硬性要求恒输出
+        dep = _HEADER_DEP.get(_SEGMENTS[k][1])
+        if dep is None or any(
+                ow != '__shared__' and ow in enabled and tg == dep
+                for ow, tg, _ in _SEGMENTS):
+            out.append(raw[i:j])
+    return ''.join(out)
+
+
+try:
+    ROUTER_SYSTEM = build_router_system()
+except Exception as _e:  # 锚点异常时安全回退原文，绝不因切分失败而丢 prompt
+    import sys as _sys
+    print('[prompts] build_router_system 失败，回退原文：%r' % _e, file=_sys.stderr)
+    ROUTER_SYSTEM = _RAW_ROUTER_SYSTEM

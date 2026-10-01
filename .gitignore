@@ -20,6 +20,9 @@
 # ---- 内部测试用户表（含每人口令，绝不入库）----
 # 外层 users.json 由部署环境提供（云端 compose 挂载到宿主机，改完立即生效）
 users.json
+# 本机/AI 测试用的隔离用户表（运行测试时设 AKALI_USERS_FILE=users.test.json 指向它，
+# 确保测出来的账号只落在这里，绝不与正式发放的 users.json 混淆）
+users.test.json
 
 # ---- Python ----
 __pycache__/

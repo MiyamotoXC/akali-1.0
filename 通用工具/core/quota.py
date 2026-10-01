@@ -15,8 +15,8 @@
         输入 0.0024 元/千 token；输出 0.0144 元/千 token
 
 运行模式（见 core/runtime.py）：
-    AKALI_RUN_MODE=local（默认） → 不限额（仅内存统计，行为同改造前）
-    AKALI_RUN_MODE=cloud         → 启用按 IP 限额
+    AKALI_RUN_MODE=local         → 不限额（仅内存统计，行为同改造前）
+    AKALI_RUN_MODE=cloud（默认） → 启用按 IP 限额
 
 限额维度与白名单：
     AKALI_QUOTA_KEY=ip|session   （默认：cloud→ip，local→session）
@@ -43,11 +43,12 @@ PRICE_IN_YUAN_PER_K = 0.0024   # 元 / 千 token（输入）
 PRICE_OUT_YUAN_PER_K = 0.0144  # 元 / 千 token（输出）
 
 # ===== 限额（token 总量 / 天 / 维度键）=====
-_TOK_LIMIT_FREE = runtime.quota_daily_tok()          # 默认 60000
+# 默认值（可被 .env 的 FX_IP_DAILY_TOK / FX_IP_DAILY_TOK_MONTH 覆盖）。
+_TOK_LIMIT_FREE = runtime.quota_daily_tok()          # 默认 50000（取 FX_IP_DAILY_TOK）
 try:
-    _TOK_LIMIT_MONTH = max(0, int(os.getenv('FX_IP_DAILY_TOK_MONTH') or '300000'))
+    _TOK_LIMIT_MONTH = max(0, int(os.getenv('FX_IP_DAILY_TOK_MONTH') or '200000'))
 except (TypeError, ValueError):
-    _TOK_LIMIT_MONTH = 300000
+    _TOK_LIMIT_MONTH = 200000
 
 # 本地模拟用（云端部署时由 get_user_plan 接白名单/订阅系统）
 _DEFAULT_PLAN = os.getenv('FX_USER_PLAN', 'free').strip().lower()
@@ -58,8 +59,11 @@ except Exception:
 _QUOTA_DIR = os.getenv('FX_QUOTA_DIR', '').strip()
 _BACKEND = os.getenv('FX_QUOTA_BACKEND', '').strip().lower()
 
-# 测试阶段：所有用户暂时无 token 上限（用户口径 2026-09-27）。
-# 置 FX_QUOTA_TEST_UNLIMITED=1（或 true/yes/on）即全员不限量；清掉该变量并重建容器即恢复套餐档限额。
+# 测试模式总闸 FX_QUOTA_TEST_UNLIMITED（用户口径 2026-09-29）：
+#   · 置 1/true/yes/on → 全员不限量（get_user_plan 直接返回 unlimited，覆盖所有维度）；
+#   · 清掉该变量 → 关闭测试模式：开发者本人 + 白名单（FX_USER_PLAN_MAP / users.json 中
+#     plan=unlimited）不限量，其余按 FX_USER_PLAN 默认档限额（free=FX_IP_DAILY_TOK，
+#     month=FX_IP_DAILY_TOK_MONTH，单位 token/天）。
 _TEST_UNLIMITED = os.getenv('FX_QUOTA_TEST_UNLIMITED', '').strip().lower() in ('1', 'true', 'yes', 'on')
 
 _lock = threading.Lock()
@@ -357,19 +361,20 @@ def get_user_id(req) -> str:
 
 
 def _lookup_plan_from_db(key: str) -> str:
-    """uid → 套餐。
+    """uid → 套餐（读自 users.json 的 plan 字段，不再写死）。
 
-    账号体系下（用户口径 2026-09-25）：**开发者本人（AKALI_OWNER_UID）为 unlimited
-    （真不限量）**，测试用户默认 free；其余（IP/session 维度）返回空串，走原环境变量
-    白名单（FX_USER_PLAN_MAP / FX_USER_PLAN），保持向后兼容。
+    账号体系下（用户口径 2026-09-29）：**开发者本人（AKALI_OWNER_UID）为 unlimited
+    （真不限量）**；测试用户（users.json 中的账号）→ 取其记录里的 `plan` 字段
+    （如 'unlimited' / 'free' / 'month'）；**未配置 plan 则返回空串**，交由
+    get_user_plan 走 FX_USER_PLAN_MAP / FX_USER_PLAN 配置档，保持向后兼容。
     """
     try:
         from core import users as _users
         if key and key == _users.owner_uid():
-            return 'unlimited'      # 用户口径 2026-09-25：开发者自己的用量不限制
-        accts = {u['uid'] for u in _users.parse_users()}
-        if key in accts:
-            return 'free'
+            return 'unlimited'      # 开发者自己的用量不限制
+        for u in _users.parse_users():
+            if u['uid'] == key:
+                return str(u.get('plan') or '').strip()   # 套餐看 users.json，不写死
     except Exception:
         pass
     return ''
@@ -378,8 +383,10 @@ def _lookup_plan_from_db(key: str) -> str:
 def get_user_plan(key: str) -> str:
     """返回额度档：'unlimited' / 'free' / 'month'。
 
-    顺序：测试期全员不限量（FX_QUOTA_TEST_UNLIMITED）→ 数据库（账号体系，含开发者不限量）
-    → FX_USER_PLAN_MAP（键为 IP/session）→ FX_USER_PLAN → free。
+    顺序：测试模式总闸（FX_QUOTA_TEST_UNLIMITED→全员不限量）→ 账号体系
+    （users.json 的 plan 字段 / 开发者本人 unlimited）→ FX_USER_PLAN_MAP
+    （键为 IP/session，即白名单）→ FX_USER_PLAN（配置默认档）。
+    关闭总闸时：开发者 + 白名单不限量，其余按免费/月卡限额（free=5w、month=20w token/天）。
     签名（key → 套餐）保持不变，故调用方无需随升级而改动。
     """
     if _TEST_UNLIMITED:

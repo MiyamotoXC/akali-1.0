@@ -2,7 +2,7 @@
 # 阿卡莉 1.0 云端编排：akali(FastAPI) + nginx(反代/真实IP透传) + redis(配额共享)
 #
 # 启动：docker compose up -d --build
-# 访问：http://<云主机IP>/           （网页端打开 / 手机「添加到主屏幕」）
+# 访问：http://<云主机IP>/           （网页端打开 / 或打包 android_app/ WebView APK 直连）
 # 日志：docker compose logs -f akali
 #
 # 【运行模式：本地 / 云端分开，全部由 .env 控制】
@@ -28,14 +28,15 @@ services:
       - akali_data:/data
       # ① 知识库直接挂载（若采用对象存储同步方案，可注释掉本行）
       - ./知识库:/app/知识库
-      # ② 用户反馈落盘到宿主机（用户口径 2026-09-25）：/api/feedback 写的是
-      #    /app/调试/反馈收集/，不挂出来就随镜像重建一起丢。挂出来后
-      #    直接在服务器 `cat 调试/反馈收集/反馈收集.txt` 即可查看，无需进容器。
-      - ./调试/反馈收集:/app/调试/反馈收集
-      # ③ 内部测试用户表（用户口径 2026-09-25）：外层 users.json 挂进来，
-      #    直接编辑宿主机文件即可增删测试用户，**改完立即生效、无需重启**
-      #    （服务端按 mtime 自动重载；总开关与开发者口令仍在 .env）。
-      - ./users.json:/app/users.json
+      # ② 用户反馈落盘到**命名卷**（用户口径 2026-09-25，2026-09-28 起改命名卷；
+      #    2026-09-29 起本地目录由 调试/反馈收集 改名 反馈信息/反馈收集）：
+      #    /api/feedback 写的是 /app/反馈信息/反馈收集/。改用命名卷后，反馈数据彻底脱离
+      #    代码目录，部署/重建代码永不会触碰用户反馈，且与 git/rsync 同步完全隔离。
+      - akali_feedback:/app/反馈信息/反馈收集
+      # ③ 内部测试用户表（用户口径 2026-09-25，2026-09-28 起改命名卷）：
+      #    挂载到 /app/users_data，由 AKALI_USERS_FILE 指向其中 users.json。
+      #    同样脱离代码目录，本地/部署同步永不会覆盖云端用户数据（改完仍按 mtime 自动生效）。
+      - akali_users:/app/users_data
       # ④ 业务代码挂出来（用户口径 2026-09-25：改一点东西就要等好几分钟，太慢）。
       #    原先代码是 COPY 进镜像的，改一行也得 docker compose build（2~3 分钟）。
       #    挂出来后：把新文件拷进宿主机对应目录 → docker compose restart akali（约 5 秒）。
@@ -61,13 +62,18 @@ services:
     restart: unless-stopped
     ports:
       - "80:80"
-      # 有域名 + 证书时再开 443，并挂载证书目录
-      # - "443:443"
+      # 启用 HTTPS 时取消下一行注释（并先在 deploy/nginx.conf 放开 443 server 块、挂载证书目录）
+      - "443:443"
     volumes:
       - ./deploy/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      # 启用 HTTPS（certbot）时需要：证书目录 + ACME webroot（宿主机路径，certbot 在宿主机执行）
+      - /etc/letsencrypt:/etc/letsencrypt:ro
+      - /var/www/letsencrypt:/var/www/letsencrypt:ro
     depends_on:
       - akali
 
 volumes:
   akali_data:
   redis_data:
+  akali_users:
+  akali_feedback:

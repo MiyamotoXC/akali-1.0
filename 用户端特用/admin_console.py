@@ -159,7 +159,7 @@ ADMIN_HTML = r"""<!DOCTYPE html>
       h += '<tr' + (r.is_owner ? ' class="owner"' : '') + '>'
         + '<td class="mono">' + r.key + '</td>'
         + '<td>' + (r.name || '') + (r.is_owner ? ' <span class="pill on">我</span>' : '') + '</td>'
-        + '<td>' + (r.plan === 'unlimited' ? '开发者' : r.plan) + '</td>'
+        + '<td>' + (r.is_owner ? '开发者' : (r.plan === 'unlimited' ? '不限量' : r.plan)) + '</td>'
         + '<td class="num">' + (r.req_count || 0) + '</td>'
         + '<td class="num">' + fmt(r.rounds) + '</td>'
         + '<td class="num">' + fmt(r.tok_in) + '</td>'

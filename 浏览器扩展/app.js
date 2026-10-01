@@ -2298,15 +2298,10 @@ async function queryWeather(message) {
   }
 }
 
-// PWA：注册 Service Worker（离线壳 + 可安装到手机桌面）。失败静默，不影响正常使用。
-if ('serviceWorker' in navigator) {
-  window.addEventListener('load', function () {
-    navigator.serviceWorker.register('/sw.js').catch(function () {});
-  });
-}
+
 
 // URL 参数 ?q=<内容>：打开页面后自动发一条消息，用于「快捷方式直达」场景
-// （PWA 快捷方式 / 浏览器书签 / 浏览器扩展划词查询，见 接口契约.md）。
+// （浏览器书签 / 浏览器扩展划词查询，见 接口契约.md）。
 // 云端需口令时先等解锁（authUnlocked=false 期间不发，避免 401），最多等 60 秒。
 (function initAutoQuery() {
   const q = (new URLSearchParams(location.search).get('q') || '').trim();
