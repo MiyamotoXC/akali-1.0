@@ -2551,7 +2551,7 @@ def _chat_impl(req: ChatRequest):
         _favor_req = req.message or ''
         if '好感' in _favor_req and '计算' in _favor_req:
             from core.calc_flow import route_work as _cf_route
-            _fav = _cf_route(work_tools, sover, _favor_req, agent=agent, history=hist)
+            _fav = _cf_route(work_tools, sover, _favor_req, agent=agent, allow_intent_llm=False)
             work_result = _fav if (_fav and _fav.get('favor_form')) else \
                 route_work(work_tools, sover, req.message, agent=agent, history=hist)
         else:
