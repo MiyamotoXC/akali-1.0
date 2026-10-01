@@ -4146,7 +4146,7 @@ def _dispatch_intent(tools, overrides, msg, agent, decision):
     return handler(tools, msg, agent=agent, overrides=overrides, decision=decision)
 
 
-def _favor_dispatch(tools, overrides, msg):
+def _favor_dispatch(tools, overrides, msg, _li_is_fn=None):
     """好感度计算分支：固定公式输出，不走 LLM（防编数字）。返回含 favor_form 标记的 dict 或 None。
 
     显式入口（工具箱菜单「好感度」发送的「好感度计算」）与 favor_pending 追问上下文都走这里。
@@ -4158,7 +4158,7 @@ def _favor_dispatch(tools, overrides, msg):
     # 仅当同时含「好感」+「计算」才强制，避免「查询好感度」等查询被误拦截进计算。
     _favor_force = ('好感' in msg and '计算' in msg)
     if not (('好感' in msg or overrides.get('favor_pending')) and not _favor_explain
-            and (_li_is('favor') or _favor_force)):
+            and (_favor_force or (_li_is_fn and _li_is_fn('favor')))):
         return None
     # 追问上下文中出现其它明确工作意图 → 放弃好感追问，放行后续路由
     if overrides.get('favor_pending') and '好感' not in msg \
@@ -4839,7 +4839,7 @@ def route_work(tools, overrides, msg: str, agent=None, allow_intent_llm=True, up
     # 机制解释类问法（有什么用/怎么算的）不拦截，交回 LLM。
     # favor_pending：上一轮已引导补参，追问短句（"现在喜欢，进度30%，到誓约"）不含"好感"也能接上。
     # —— 统一交给定点函数 _favor_dispatch 处理（显式「好感度计算」入口已在 route_work 顶部优先拦截）。
-    _r = _favor_dispatch(tools, overrides, msg)
+    _r = _favor_dispatch(tools, overrides, msg, _li_is)
     if _r is not None:
         return _r
 
