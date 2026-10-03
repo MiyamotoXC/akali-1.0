@@ -135,8 +135,13 @@ class QuotaStore:
             return e
 
     def log_request(self, key: str, tok: int):
-        """把一次 /api/chat 请求记进本周期的流水桶；每周期最多保留 _REQLOG_MAX_PER_DAY 条。"""
-        day = _period()
+        """把一次 /api/chat 请求记进**当天**的流水桶；每天最多保留 _REQLOG_MAX_PER_DAY 条。
+
+        注意口径区别（用户口径 2026-10-03）：**限额按周期**（周四→下周四，见 _period()），
+        但**请求明细按天**展示 —— 此前这里误用 `_period()` 做分桶键，导致控制台按"今天"
+        取明细时永远是空桶（用量表却是周期记账，看起来"用量更新了、明细没更新"）。
+        """
+        day = date.today().isoformat()
         entry = {'date': day, 'ts': datetime.now().strftime('%H:%M:%S'),
                  'key': str(key or ''), 'tok': int(tok or 0)}
         with self._lock:

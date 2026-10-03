@@ -811,6 +811,14 @@ _BOOT_ID = uuid.uuid4().hex[:8]
 
 app = FastAPI(title="拂晓只能小秘书")
 
+# ===== gzip 压缩（2026-10-03）=====
+# 背景：首页是「内联 CSS/JS 的单文件」（≈196KB），在线路窄的云主机上未压缩传输体感很慢。
+# nginx 侧压不了：反代配了 `proxy_buffering off`（为长计算不被缓冲），而 nginx 无法压缩
+# 未缓冲的代理响应 —— 所以压缩放到**应用层**，对 / 、/api/* 一并生效。
+# 注：GZip 只压文本类（JSON/HTML/JS/CSS），图片是压缩格式不会重复压。
+from fastapi.middleware.gzip import GZipMiddleware as _GZipMiddleware
+app.add_middleware(_GZipMiddleware, minimum_size=1024)
+
 
 # ===== 未捕获异常统一回 JSON（用户口径 2026-10-03）=====
 # 背景：控制台/前端都是 JSON 客户端（fetch + res.json()）。此前服务端 500 返回的是
