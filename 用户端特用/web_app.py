@@ -3069,11 +3069,19 @@ async def feedback(req: Request):
             r = _redis.from_url(os.getenv('FX_REDIS_URL', 'redis://localhost:6379/0'), decode_responses=True)
             r.rpush('akali:feedback', line)
             r.ltrim('akali:feedback', -2000, -1)
-        else:
+        # 落盘（2026-10-03 用户口径：**反馈必须写在云端文件里**）：
+        # 本地模式一直如此；云端此前只写 Redis（内存列表、2000 条上限、Redis 异常不好追溯），
+        # 现在云端**也写一份**到 /app/反馈信息/反馈收集/反馈收集.txt —— compose 已把该目录
+        # 绑定挂载到宿主机 ./反馈信息/反馈收集，故重建容器 / 重新部署都不会丢。
+        # 落盘失败不阻断（Redis 已记录），只打日志。
+        try:
             feedback_dir = os.path.join(PROJECT_ROOT, "反馈信息", "反馈收集")
             os.makedirs(feedback_dir, exist_ok=True)
             with open(os.path.join(feedback_dir, "反馈收集.txt"), "a", encoding="utf-8") as f:
                 f.write(line + "\n")
+        except Exception as _fe:
+            print('[FEEDBACK] 落盘失败（Redis 已记录，不阻断）：%s'
+                  % _mask(_fe, _API_TOKEN), flush=True)
 
         print("[FEEDBACK] %s -> %s" % (record['用户uid'], record['内容'][:40]), flush=True)
         return {"ok": True}
