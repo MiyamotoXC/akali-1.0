@@ -1630,9 +1630,14 @@ async def api_ship_detail(name: str = ""):
 
 
 @app.get("/kb_html/{file_path:path}")
-async def kb_html(file_path: str):
+async def kb_html(file_path: str, request: Request):
     """docx 攻略网页预览：后端把 docx 转 HTML（纯本地，零 token / 零 LLM 开销）。
-    优先 python-docx（含表格样式）；缺库时用纯标准库回退（zipfile+xml 提取段落/表格）。"""
+    优先 python-docx（含表格样式）；缺库时用纯标准库回退（zipfile+xml 提取段落/表格）。
+
+    ⚠️ 预览**只提取文字与表格，不解析图片**（docx 内嵌图需解包 + 关联
+    rels/media 才能还原，成本与风险都高）。用户口径 2026-10-03：所有 docx 攻略
+    预览页**顶端**必须提示「不加载图片，完整版请下载」，并给出下载入口 —— 免得
+    用户以为攻略本就缺图。下载链接沿用当前查询串（扩展端带 token）。"""
     target = os.path.normpath(os.path.join(KB_STATIC_DIR, file_path))
     if not target.startswith(KB_STATIC_DIR) or not os.path.isfile(target):
         raise HTTPException(status_code=404, detail="文件不存在")
@@ -1661,13 +1666,27 @@ async def kb_html(file_path: str):
             body = _docx_to_html_stdlib(target)
         except Exception:
             body = f"<p>（docx 解析失败，请直接下载打开）</p>"
+    # 下载链接：沿用当前查询串（扩展端 iframe 里带 token），路径做 URL 编码
+    # （文件名/目录多为中文，含空格或 # 时不编码会断链）。
+    from urllib.parse import quote as _urlq
+    _q = ('?' + request.url.query) if request.url.query else ''
+    _dl = '/kb/' + _urlq(file_path) + _q
     html = f"""<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8">
 <title>{os.path.basename(target)}</title>
 <style>body{{font-family:-apple-system,'Segoe UI','Microsoft YaHei',sans-serif;max-width:880px;margin:0 auto;padding:20px;line-height:1.7;color:#2b2f36;}}
 h1{{font-size:18px;border-bottom:1px solid #e5e8ec;padding-bottom:8px;}}table{{width:100%;font-size:13px;}}td{{padding:4px 8px;}}
-.raw-link{{display:inline-block;margin-top:12px;font-size:13px;color:#6b8caa;}}</style></head>
-<body><h1>{os.path.basename(target)}</h1>{body}
-<p><a class="raw-link" href="/kb/{file_path}" target="_blank">下载原始文档</a></p></body></html>"""
+.raw-link{{display:inline-block;margin-top:12px;font-size:13px;color:#6b8caa;}}
+/* 顶端提示条（用户口径 2026-10-03）：所有 docx 攻略预览都要说明「不加载图片」。
+   sticky 贴顶，长文滚动时提示不会消失。 */
+.preview-tip{{position:sticky;top:0;z-index:5;margin:-2px 0 16px;padding:9px 12px;
+border:1px solid #f0d9a8;background:#fff8e6;border-radius:8px;color:#7a5b13;font-size:13px;line-height:1.65;}}
+.preview-tip b{{color:#b45309;}}
+.preview-tip a{{color:#b45309;font-weight:600;}}</style></head>
+<body><h1>{os.path.basename(target)}</h1>
+<div class="preview-tip">本页是<b>在线预览</b>：<b>不加载图片</b>（攻略里的配图 / 示意图 / 截图不会显示，文字与表格是完整的）。
+看完整版（含全部图片）请<b>下载原文档</b>：<a href="{_dl}" target="_blank">下载 {os.path.basename(target)}</a></div>
+{body}
+<p><a class="raw-link" href="{_dl}" target="_blank">下载原始文档</a></p></body></html>"""
     return HTMLResponse(html)
 
 
