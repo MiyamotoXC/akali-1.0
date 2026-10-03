@@ -118,6 +118,52 @@ async function panelCloudRestore() {
   } catch (e) {}
 }
 
+/* ===== 本地面板库：全部舰船的底层基础面板（用户口径 2026-10-03）=====
+   「载入全部基础面板」按钮一次把全部舰船的基础面板存到本机，之后在舰名框里
+   直接选（带联想）即可载入编辑，不用逐个输舰名；单舰请求只做兜底。
+   注意：这份库只用于「基线 + 选择联想」，**不会**混进随聊天携带的 panel_overrides
+   —— 那份只放你真正改过的舰，否则每条消息都要多传几百 KB。 */
+function panelLibKey() { return 'arkly_panels_lib' + (ARKLY_UID ? ('_' + ARKLY_UID) : ''); }
+function panelLibLoad() {
+  try {
+    const m = JSON.parse(localStorage.getItem(panelLibKey()) || '{}');
+    return (m && typeof m === 'object') ? m : {};
+  } catch (e) { return {}; }
+}
+function panelLibSave(m) { try { localStorage.setItem(panelLibKey(), JSON.stringify(m || {})); } catch (e) {} }
+// 用库里的舰名填舰名框的联想列表（<datalist>），并刷新状态提示
+function panelLibFillDatalist() {
+  const names = Object.keys(panelLibLoad());
+  const dl = document.getElementById('upShipList');
+  if (dl) dl.innerHTML = names.map(function (n) { return '<option value="' + esc(n) + '"></option>'; }).join('');
+  const info = document.getElementById('upLibInfo');
+  if (info) {
+    info.textContent = names.length
+      ? ('已载入基础面板 ' + names.length + ' 艘 —— 舰名框里可直接输入或下拉选择（本机保存，换设备/清缓存需重新载入）')
+      : '';
+  }
+  return names.length;
+}
+// 「载入全部基础面板」：一次请求取全部舰船底层面板 → 存本机面板库 → 刷新联想列表
+async function upLoadAllBase() {
+  const btn = document.getElementById('upLoadAll');
+  const _label = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.textContent = '载入中…'; }
+  try {
+    const d = await upFetch('/api/ship_panels');
+    const ships = (d && d.ships) || {};
+    const n = Object.keys(ships).length;
+    if (!n) { alert('服务器没有返回基础面板数据'); return; }
+    panelLibSave(ships);
+    panelLibFillDatalist();
+    alert('已载入 ' + n + ' 艘的基础面板到本机。\n之后在舰名框里直接输入或下拉选择，点「载入面板」即可编辑。');
+  } catch (e) {
+    alert('载入全部基础面板失败：' + e.message);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = _label || '载入全部基础面板'; }
+  }
+}
+
 async function upFetch(url, opts) {
   const _t = credGet('arkly_api_token') || new URLSearchParams(location.search).get('token') || '';
   const _h = Object.assign({ 'Content-Type': 'application/json' }, _t ? { 'X-API-Token': _t } : {});
@@ -188,15 +234,28 @@ async function upLoadShip() {
   if (!name) { alert('请输入舰名'); return; }
   try {
     if (ARKLY_PANEL_STORE === 'client') {
-      // 云端：底层面板取服务器，本地缓存叠加为当前值
-      const b = await upFetch('/api/ship_panel?name=' + encodeURIComponent(name));
-      if (!b.ship) { alert('未找到角色'); return; }
-      const ov = panelLSLoad()[b.ship.name] || {};
+      // 云端：基础面板优先用**本地面板库**（点过「载入全部基础面板」就不必再请求）；
+      // 库里没有（或输入的不是规范名）→ 单舰请求兜底，再回库取基线
+      const lib = panelLibLoad();
+      let shipName = '', baseAtk = {}, baseDef = {};
+      if (lib[name]) {
+        shipName = name;
+        baseAtk = (lib[name].attack_panel) || {};
+        baseDef = (lib[name].defense_panel) || {};
+      } else {
+        const b = await upFetch('/api/ship_panel?name=' + encodeURIComponent(name));
+        if (!b.ship) { alert('未找到角色'); return; }
+        shipName = b.ship.name;
+        const lb = lib[shipName];
+        baseAtk = (lb && lb.attack_panel) || b.ship.base_atk || {};
+        baseDef = (lb && lb.defense_panel) || b.ship.base_def || {};
+      }
+      const ov = panelLSLoad()[shipName] || {};
       upRenderFields({
-        name: b.ship.name,
-        base_atk: b.ship.base_atk || {}, base_def: b.ship.base_def || {},
-        cur_atk: panelMerge(b.ship.base_atk, ov.attack_panel),
-        cur_def: panelMerge(b.ship.base_def, ov.defense_panel),
+        name: shipName,
+        base_atk: baseAtk, base_def: baseDef,
+        cur_atk: panelMerge(baseAtk, ov.attack_panel),
+        cur_def: panelMerge(baseDef, ov.defense_panel),
         level: ov.level                       // 本地缓存里存的等级（可选）
       });
       return;
@@ -314,6 +373,9 @@ async function upRefresh() {
   wrap.addEventListener('click', function () { panel.classList.toggle('open'); });
   document.getElementById('upLoad').addEventListener('click', upLoadShip);
   document.getElementById('upRefresh').addEventListener('click', upRefresh);
+  const _upAllBtn = document.getElementById('upLoadAll');
+  if (_upAllBtn) _upAllBtn.addEventListener('click', upLoadAllBase);
+  panelLibFillDatalist();   // 恢复上次「载入全部基础面板」的舰名联想列表
   document.getElementById('upSaveAbs').addEventListener('click', function () { upSave('abs'); });
   document.getElementById('upSaveDelta').addEventListener('click', function () { upSave('delta'); });
   document.getElementById('upRemove').addEventListener('click', upRemove);

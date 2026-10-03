@@ -267,6 +267,9 @@
   /* 等级输入：不参与拉伸（舰名输入框独占剩余宽度），固定窄宽 */
   .up-head .up-lv { display: flex; align-items: center; gap: 4px; color: #475569; font-size: 13px; white-space: nowrap; }
   .up-head .up-lv input { flex: 0 0 auto; width: 88px; min-width: 0; text-align: right; }
+  /* 基础面板库状态行（「载入全部基础面板」的结果提示） */
+  .up-lib { color: #64748b; font-size: 12px; margin-top: 6px; }
+  .up-lib:empty { display: none; }
   .up-head button, .up-actions button { padding: 4px 10px; border: 1px solid #cbd5e1; background: #f8fafc; border-radius: 6px;
     cursor: pointer; font-size: 13px; }
   .up-head button:hover, .up-actions button:hover { background: #eef2ff; }
@@ -746,12 +749,15 @@
     <div class="user-panel-toggle" id="upToggle">⚓ 我的舰船 · 装备面板（本地副本）</div>
     <div class="user-panel" id="userPanel">
       <div class="up-head">
-        <input id="upShip" placeholder="输入舰名，如 吹雪改 / 胡德 / 光辉…" />
+        <input id="upShip" list="upShipList" placeholder="输入/选择舰名，如 吹雪改 / 胡德 / 光辉…" />
+        <datalist id="upShipList"></datalist>
         <label class="up-lv">等级 <input id="upLevel" type="number" min="1" max="200" step="1" placeholder="如 120" /></label>
         <button id="upLoad">载入面板</button>
         <button id="upRefresh">刷新列表</button>
+        <button id="upLoadAll" title="一次把全部舰船的基础面板载入本机：之后在舰名框直接选一艘就能编辑，不用逐个输舰名">载入全部基础面板</button>
       </div>
-      <div class="up-fields" id="upFields"><div class="up-note">输入舰名后点「载入面板」，可改成 <b>你自己的本地副本</b>。计算（遭遇战/PVP/单体）以此副本面板为基础；<b>未保存时回落底层基础面板（默认无装备）</b>。面板<b>仅含装备属性，不含天赋/羁绊加成</b>，仅供显示与计算。<br>「等级」为该舰实战等级（可选，留空=按底层基线 Lv100）：遭遇战按它计算 <b>PVE 等级压制</b>（每差 1 级 ±2%，上限 ±50%）。</div></div>
+      <div class="up-lib" id="upLibInfo"></div>
+      <div class="up-fields" id="upFields"><div class="up-note">输入舰名后点「载入面板」，可改成 <b>你自己的本地副本</b>。计算（遭遇战/PVP/单体）以此副本面板为基础；<b>未保存时回落底层基础面板（默认无装备）</b>。面板<b>仅含装备属性，不含天赋/羁绊加成</b>，仅供显示与计算。<br>点「载入全部基础面板」可一次把 <b>全部舰船</b> 的基础面板载到本机，之后在舰名框里直接选一艘即可编辑（不用逐个输舰名）。<br>「等级」为该舰实战等级（可选，留空=按底层基线 Lv100）：遭遇战按它计算 <b>PVE 等级压制</b>（每差 1 级 ±2%，上限 ±50%）。</div></div>
       <div class="up-actions">
         <button id="upSaveAbs">保存（设为输入值）</button>
         <button id="upSaveDelta">保存增量（相对当前值）</button>
@@ -912,6 +918,52 @@ async function panelCloudRestore() {
   } catch (e) {}
 }
 
+/* ===== 本地面板库：全部舰船的底层基础面板（用户口径 2026-10-03）=====
+   「载入全部基础面板」按钮一次把全部舰船的基础面板存到本机，之后在舰名框里
+   直接选（带联想）即可载入编辑，不用逐个输舰名；单舰请求只做兜底。
+   注意：这份库只用于「基线 + 选择联想」，**不会**混进随聊天携带的 panel_overrides
+   —— 那份只放你真正改过的舰，否则每条消息都要多传几百 KB。 */
+function panelLibKey() { return 'arkly_panels_lib' + (ARKLY_UID ? ('_' + ARKLY_UID) : ''); }
+function panelLibLoad() {
+  try {
+    const m = JSON.parse(localStorage.getItem(panelLibKey()) || '{}');
+    return (m && typeof m === 'object') ? m : {};
+  } catch (e) { return {}; }
+}
+function panelLibSave(m) { try { localStorage.setItem(panelLibKey(), JSON.stringify(m || {})); } catch (e) {} }
+// 用库里的舰名填舰名框的联想列表（<datalist>），并刷新状态提示
+function panelLibFillDatalist() {
+  const names = Object.keys(panelLibLoad());
+  const dl = document.getElementById('upShipList');
+  if (dl) dl.innerHTML = names.map(function (n) { return '<option value="' + esc(n) + '"></option>'; }).join('');
+  const info = document.getElementById('upLibInfo');
+  if (info) {
+    info.textContent = names.length
+      ? ('已载入基础面板 ' + names.length + ' 艘 —— 舰名框里可直接输入或下拉选择（本机保存，换设备/清缓存需重新载入）')
+      : '';
+  }
+  return names.length;
+}
+// 「载入全部基础面板」：一次请求取全部舰船底层面板 → 存本机面板库 → 刷新联想列表
+async function upLoadAllBase() {
+  const btn = document.getElementById('upLoadAll');
+  const _label = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.textContent = '载入中…'; }
+  try {
+    const d = await upFetch('/api/ship_panels');
+    const ships = (d && d.ships) || {};
+    const n = Object.keys(ships).length;
+    if (!n) { alert('服务器没有返回基础面板数据'); return; }
+    panelLibSave(ships);
+    panelLibFillDatalist();
+    alert('已载入 ' + n + ' 艘的基础面板到本机。\n之后在舰名框里直接输入或下拉选择，点「载入面板」即可编辑。');
+  } catch (e) {
+    alert('载入全部基础面板失败：' + e.message);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = _label || '载入全部基础面板'; }
+  }
+}
+
 async function upFetch(url, opts) {
   const _t = credGet('arkly_api_token') || new URLSearchParams(location.search).get('token') || '';
   const _h = Object.assign({ 'Content-Type': 'application/json' }, _t ? { 'X-API-Token': _t } : {});
@@ -982,15 +1034,28 @@ async function upLoadShip() {
   if (!name) { alert('请输入舰名'); return; }
   try {
     if (ARKLY_PANEL_STORE === 'client') {
-      // 云端：底层面板取服务器，本地缓存叠加为当前值
-      const b = await upFetch('/api/ship_panel?name=' + encodeURIComponent(name));
-      if (!b.ship) { alert('未找到角色'); return; }
-      const ov = panelLSLoad()[b.ship.name] || {};
+      // 云端：基础面板优先用**本地面板库**（点过「载入全部基础面板」就不必再请求）；
+      // 库里没有（或输入的不是规范名）→ 单舰请求兜底，再回库取基线
+      const lib = panelLibLoad();
+      let shipName = '', baseAtk = {}, baseDef = {};
+      if (lib[name]) {
+        shipName = name;
+        baseAtk = (lib[name].attack_panel) || {};
+        baseDef = (lib[name].defense_panel) || {};
+      } else {
+        const b = await upFetch('/api/ship_panel?name=' + encodeURIComponent(name));
+        if (!b.ship) { alert('未找到角色'); return; }
+        shipName = b.ship.name;
+        const lb = lib[shipName];
+        baseAtk = (lb && lb.attack_panel) || b.ship.base_atk || {};
+        baseDef = (lb && lb.defense_panel) || b.ship.base_def || {};
+      }
+      const ov = panelLSLoad()[shipName] || {};
       upRenderFields({
-        name: b.ship.name,
-        base_atk: b.ship.base_atk || {}, base_def: b.ship.base_def || {},
-        cur_atk: panelMerge(b.ship.base_atk, ov.attack_panel),
-        cur_def: panelMerge(b.ship.base_def, ov.defense_panel),
+        name: shipName,
+        base_atk: baseAtk, base_def: baseDef,
+        cur_atk: panelMerge(baseAtk, ov.attack_panel),
+        cur_def: panelMerge(baseDef, ov.defense_panel),
         level: ov.level                       // 本地缓存里存的等级（可选）
       });
       return;
@@ -1108,6 +1173,9 @@ async function upRefresh() {
   wrap.addEventListener('click', function () { panel.classList.toggle('open'); });
   document.getElementById('upLoad').addEventListener('click', upLoadShip);
   document.getElementById('upRefresh').addEventListener('click', upRefresh);
+  const _upAllBtn = document.getElementById('upLoadAll');
+  if (_upAllBtn) _upAllBtn.addEventListener('click', upLoadAllBase);
+  panelLibFillDatalist();   // 恢复上次「载入全部基础面板」的舰名联想列表
   document.getElementById('upSaveAbs').addEventListener('click', function () { upSave('abs'); });
   document.getElementById('upSaveDelta').addEventListener('click', function () { upSave('delta'); });
   document.getElementById('upRemove').addEventListener('click', upRemove);

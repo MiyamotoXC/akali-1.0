@@ -268,6 +268,9 @@
   /* 等级输入：不参与拉伸（舰名输入框独占剩余宽度），固定窄宽 */
   .up-head .up-lv { display: flex; align-items: center; gap: 4px; color: #475569; font-size: 13px; white-space: nowrap; }
   .up-head .up-lv input { flex: 0 0 auto; width: 88px; min-width: 0; text-align: right; }
+  /* 基础面板库状态行（「载入全部基础面板」的结果提示） */
+  .up-lib { color: #64748b; font-size: 12px; margin-top: 6px; }
+  .up-lib:empty { display: none; }
   .up-head button, .up-actions button { padding: 4px 10px; border: 1px solid #cbd5e1; background: #f8fafc; border-radius: 6px;
     cursor: pointer; font-size: 13px; }
   .up-head button:hover, .up-actions button:hover { background: #eef2ff; }
@@ -747,12 +750,15 @@
     <div class="user-panel-toggle" id="upToggle">⚓ 我的舰船 · 装备面板（本地副本）</div>
     <div class="user-panel" id="userPanel">
       <div class="up-head">
-        <input id="upShip" placeholder="输入舰名，如 吹雪改 / 胡德 / 光辉…" />
+        <input id="upShip" list="upShipList" placeholder="输入/选择舰名，如 吹雪改 / 胡德 / 光辉…" />
+        <datalist id="upShipList"></datalist>
         <label class="up-lv">等级 <input id="upLevel" type="number" min="1" max="200" step="1" placeholder="如 120" /></label>
         <button id="upLoad">载入面板</button>
         <button id="upRefresh">刷新列表</button>
+        <button id="upLoadAll" title="一次把全部舰船的基础面板载入本机：之后在舰名框直接选一艘就能编辑，不用逐个输舰名">载入全部基础面板</button>
       </div>
-      <div class="up-fields" id="upFields"><div class="up-note">输入舰名后点「载入面板」，可改成 <b>你自己的本地副本</b>。计算（遭遇战/PVP/单体）以此副本面板为基础；<b>未保存时回落底层基础面板（默认无装备）</b>。面板<b>仅含装备属性，不含天赋/羁绊加成</b>，仅供显示与计算。<br>「等级」为该舰实战等级（可选，留空=按底层基线 Lv100）：遭遇战按它计算 <b>PVE 等级压制</b>（每差 1 级 ±2%，上限 ±50%）。</div></div>
+      <div class="up-lib" id="upLibInfo"></div>
+      <div class="up-fields" id="upFields"><div class="up-note">输入舰名后点「载入面板」，可改成 <b>你自己的本地副本</b>。计算（遭遇战/PVP/单体）以此副本面板为基础；<b>未保存时回落底层基础面板（默认无装备）</b>。面板<b>仅含装备属性，不含天赋/羁绊加成</b>，仅供显示与计算。<br>点「载入全部基础面板」可一次把 <b>全部舰船</b> 的基础面板载到本机，之后在舰名框里直接选一艘即可编辑（不用逐个输舰名）。<br>「等级」为该舰实战等级（可选，留空=按底层基线 Lv100）：遭遇战按它计算 <b>PVE 等级压制</b>（每差 1 级 ±2%，上限 ±50%）。</div></div>
       <div class="up-actions">
         <button id="upSaveAbs">保存（设为输入值）</button>
         <button id="upSaveDelta">保存增量（相对当前值）</button>

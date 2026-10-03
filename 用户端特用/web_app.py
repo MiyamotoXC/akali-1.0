@@ -3462,6 +3462,33 @@ def api_ship_panel(name: str):
                      'base_def': dict(getattr(ship, 'defense_panel', {}) or {})}}
 
 
+@app.get("/api/ship_panels")
+def api_ship_panels_batch():
+    """**批量**取全部角色的底层基础面板（data.json，不含用户副本）。
+
+    用途（用户口径 2026-10-03）：面板界面「一键载入全部基础面板」——
+    一次请求把全部舰船的基础面板拉到本机面板库，之后可任选一艘直接编辑，
+    不必逐个输入舰名，也避免 N 次单舰请求（单舰接口仍保留，做兜底/刷新用）。
+
+    返回：{'count': N, 'ships': {角色名: {'attack_panel': {...}, 'defense_panel': {...}}}}
+    数据源与 /api/ship_panel 同源（App.storage ← 底层 data.json），故两者恒一致。
+    """
+    ships = {}
+    try:
+        storage = getattr(agent.app, 'storage', None) or {}
+    except Exception:
+        storage = {}
+    for name, obj in list(storage.items()):
+        try:
+            ships[str(name)] = {
+                'attack_panel': dict(getattr(obj, 'attack_panel', {}) or {}),
+                'defense_panel': dict(getattr(obj, 'defense_panel', {}) or {}),
+            }
+        except Exception:
+            continue
+    return {'count': len(ships), 'ships': ships}
+
+
 @app.get("/api/user_ships")
 def api_user_ships_list(name: Optional[str] = None):
     """列出用户副本中已修改面板的角色与相对底层差异；带 name 时返回该角色明细。
