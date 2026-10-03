@@ -2083,9 +2083,13 @@ _SHIP_USE_RE = re.compile(
     r'有什么用|有啥用|干什么用|能干嘛|能干什么|能做什么|做什么用|干嘛用|拿来干嘛|拿来干'
     r'|就业|用途|定位是什么|什么定位|能配什么|配什么队|进什么队|适合什么队|有什么阵容|阵容里'
 )
-# 「阵容 / 体系」上下文特征：章节名或片段内容里出现即认为该片段在讲就业
+# 「阵容 / 体系 / 玩法场景」上下文特征：章节名或片段内容里出现即认为该片段在讲就业。
+# 2026-10-03 补：练级 / 练船 / 值得练 / 活动 —— 这些同样是"什么地方能用"的答案
+# （练级百科列的就是该练谁、怎么用），此前不在表里 → 该类证据被整段过滤掉，
+# 于是"明明攻略写了"的船仍被答成没提到（用户反馈「同理检查练级、遭遇战之类」）。
 _LINEUP_HINT_RE = re.compile(
     r'阵容|配队|体系|编队|站位|旗舰|推图|无尽|竞技|遭遇|演习|'
+    r'练级|练船|值得练|活动|阵型|推荐舰灵|'
     r'AOE|aoe|输出|拐|奶|前排|后排|辅助|生存|单点|清杂|控场|坦克'
 )
 # 职责行：形如「输出拐：胡德、沙恩（旗舰）」「奶：杰维斯」——冒号前是短定位词
@@ -2251,7 +2255,10 @@ def _handle_ship_use(tools, msg: str):
     cands = []                              # [(篇目, 章节, 内容)]
     try:
         from tools.knowledge import _guide_rag_search, _split_rag_segments
-        _text, _reason = _guide_rag_search('%s 阵容 配队 体系 定位' % name, 8)
+        # 查询词带上玩法场景（练级/遭遇战/活动），否则召回偏向"阵容"类篇章，
+        # 练级百科、遭遇战攻略里点名该舰的片段进不了候选（用户口径 2026-10-03）。
+        _text, _reason = _guide_rag_search(
+            '%s 阵容 配队 体系 定位 练级 遭遇战 活动' % name, 8)
         for _doc, _sec, _content, _sim in _split_rag_segments(_text or ''):
             cands.append((_doc or '', _sec or '', _content or ''))
     except Exception:
@@ -2268,8 +2275,13 @@ def _handle_ship_use(tools, msg: str):
     evid = []           # [(篇目, 章节, 短句)]    弱证据：片段里点名该舰（如竞技场阵容「…埃塞克斯旗…」）
     _seen_seg = set()
     for doc, sec, content in cands:
-        if not (_LINEUP_HINT_RE.search(sec) or _LINEUP_HINT_RE.search(content)):
-            continue                      # 与阵容/体系无关的片段（获取方式、技能介绍…）不抄
+        # 场景判定看**篇名 + 章节 + 正文**三处（用户口径 2026-10-03）：
+        # 篇名本身就是场景（《争锋竞技场简易百科》《遭遇战攻略》《练级百科》…），
+        # 而点名摘录常常很短、正文里未必出现"阵容/配队"字样 —— 只看正文会把
+        # 「推荐舰灵：吹雪改，白雪改…」这类真正讲就业的句子误挡掉。
+        if not (_LINEUP_HINT_RE.search(doc) or _LINEUP_HINT_RE.search(sec)
+                or _LINEUP_HINT_RE.search(content)):
+            continue                      # 与玩法/阵容无关的片段（数值表、获取方式…）不抄
         for raw in content.splitlines():
             line = raw.strip().lstrip('-*·• \u3000').strip()
             if not line or not _mentions(line):
@@ -2347,11 +2359,9 @@ def _handle_ship_use(tools, msg: str):
                     _w += ('·' if _w else '') + sec
                 if _w and _w not in _src:
                     _src.append(_w)
-            reply = '「%s」的就业（阿卡莉依据攻略提及 ＋ 它自身的数据归纳）：\n%s' % (name, _syn)
+            reply = '「%s」的就业：\n%s' % (name, _syn)
             if _src:
                 reply += '\n\n参考出处：' + '；'.join(_src)
-            reply += ('\n（这条不是攻略原文摘录，是按攻略提及＋该舰自身数据归纳的；'
-                      '要原文可问「%s 在攻略里怎么用」。）' % name)
             return {'reply': reply, 'tool_outputs': [], 'suggestions': [], 'fill_form': [],
                     'encounter_form': [], 'guide_files': [], 'guide_lib': '',
                     'from_kb': True, 'ok': True}
