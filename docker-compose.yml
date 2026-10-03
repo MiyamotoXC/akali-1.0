@@ -25,6 +25,10 @@ services:
     env_file:
       - .env
     volumes:
+      # ⓪ 宿主机 .env 只读挂进容器：额度上限 / 白名单支持「改 .env 立即生效」。
+      #    （env_file 只在容器创建时把变量注入 os.environ，改完必须重建容器才生效；
+      #      而挂了文件之后，core/runtime.live_env() 会**实时读这个文件**，改完即生效）
+      - ./.env:/app/.env:ro
       - akali_data:/data
       # ① 知识库直接挂载（若采用对象存储同步方案，可注释掉本行）
       - ./知识库:/app/知识库

@@ -65,6 +65,13 @@ _CLEAR_TOPIC_RE = re.compile(
     r'你好|早上好|中午好|晚上好|晚安|换个话题|说点别的|另一个问题|新问题|你能做什么'
 )
 
+# 「怎么反馈」类提问（用户口径 2026-10-03）：此前会被向量库检索抢答 —— 命中知识库里
+# 与本应用无关的「联系客服 / 加入腾讯频道」片段，且 from_kb 原文直出、阿卡莉本人没有
+# 机会回答。此处在**路由前**确定性作答（答案就是应用里真实存在的 💡 反馈按钮机制）。
+_FEEDBACK_RE = re.compile(r'反馈|提意见|提建议|意见箱|反馈渠道|反馈入口|反馈方式')
+_FEEDBACK_REPLY = ('觉得哪条回答不够好，点它右下角的 💡 反馈按钮就行，'
+                   '会把你刚才的提问发给我精进。（只有问答式的回答才带 💡）')
+
 
 def _last_history(history, role):
     for item in reversed(list(history or [])):
@@ -154,6 +161,12 @@ def guard(tools, overrides, msg, agent=None, history=None, context_msg=None):
     if _boundary.is_flirt_overstep(cm):
         return True, _work_dict(_boundary.overstep_reply(cm),
                                 expression_hint=_boundary.overstep_expression(cm))
+
+    # 3b) 用户问「怎么反馈 / 如何提意见」（用户口径 2026-10-03）：在路由前确定性作答。
+    #     否则会被 guide_rag 的向量检索抢走，返回知识库里「联系客服 / 加入腾讯频道」
+    #     那类与本应用无关的原文（from_kb 直出，阿卡莉本人没机会回答）。
+    if _FEEDBACK_RE.search(cm):
+        return True, _work_dict(_FEEDBACK_REPLY, expression_hint='微笑关心')
 
     unanswered = _guard_unanswered_topic(overrides, m)
     if unanswered is not None:

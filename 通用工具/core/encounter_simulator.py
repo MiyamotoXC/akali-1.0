@@ -187,9 +187,15 @@ def build_encounter_enemy(boss: dict, is_day: bool, enemy_aura: dict = None) -> 
 def load_encounter_attacker(app, ship_name: str, boss_level: float = _ENCOUNTER_BOSS_LEVEL):
     """加载角色并叠加 raguz_bonus 与 PVE 等级压制罚项到 buffs['全伤害增加']。
     遭遇战 boss 默认属于拉古兹阵营，故 raguz_bonus 一律生效。
-    PVE 等级压制（仅遭遇战 PVE）：玩家（默认 Lv100）对 boss（默认 Lv110）伤害按等级差乘算，
-    罚项 = _level_suppress_factor(玩家, boss) − 1（boss Lv110 → −0.20），作为「负增伤」加进
-    全伤害增加——即与增伤区加算（用户 2026-09-21 口径：压制乘区与增伤区加算，而非独立乘区乘算）。
+    PVE 等级压制（仅遭遇战 PVE）：玩家对 boss（默认 Lv110）伤害按等级差乘算，
+    罚项 = _level_suppress_factor(玩家, boss) − 1（玩家 Lv100 / boss Lv110 → −0.20），作为「负增伤」
+    加进全伤害增加——即与增伤区加算（用户 2026-09-21 口径：压制乘区与增伤区加算，而非独立乘区乘算）。
+
+    玩家等级来源（用户口径 2026-10-03）：**该舰在「我的舰船·装备面板」里填的等级**
+    （app.get_panel_level，云端=请求面板覆盖 / 本地=用户副本）；没填过则回落
+    _PLAYER_SHIP_LEVEL（底层基线 Lv100）。等级同时挂到 attacker.player_level，
+    供输出行 [PVE等级压制] 显示真实等级（不再固定打印 Lv100）。
+
     角色面板以用户副本（user_data.json）为基础：get_ship_for_calc 副本优先、缺失回退底层。"""
     attacker = app.get_ship_for_calc(ship_name)
     if attacker is None:
@@ -199,8 +205,19 @@ def load_encounter_attacker(app, ship_name: str, boss_level: float = _ENCOUNTER_
     if raguz_bonus > 0:
         cur = float(attacker.buffs.get("全伤害增加", 0.0) or 0.0)
         attacker.buffs["全伤害增加"] = cur + raguz_bonus
+    # 玩家等级：面板里填过就用它，否则回溯默认 Lv100（get_panel_level 失败一律回落，不影响算）
+    _lvl = None
+    try:
+        _lvl = app.get_panel_level(ship_name)
+    except Exception:
+        _lvl = None
+    _lvl = float(_lvl) if _lvl else float(_PLAYER_SHIP_LEVEL)
+    try:
+        attacker.player_level = _lvl
+    except Exception:
+        pass
     # PVE 等级压制：玩家对 boss 伤害惩罚（负增伤），与增伤区加算（非独立乘区乘算）
-    _supp = _level_suppress_factor(_PLAYER_SHIP_LEVEL, float(boss_level or _ENCOUNTER_BOSS_LEVEL))
+    _supp = _level_suppress_factor(_lvl, float(boss_level or _ENCOUNTER_BOSS_LEVEL))
     if _supp != 1.0:
         cur = float(attacker.buffs.get("全伤害增加", 0.0) or 0.0)
         attacker.buffs["全伤害增加"] = cur + (_supp - 1.0)
@@ -1388,6 +1405,44 @@ def _reconstruct_timeline(path: list, attackers: List) -> dict:
     return {"swaps": swaps, "burst_timings": burst_timings, "events": events}
 
 
+def _fmt_level(x) -> str:
+    """等级显示：整数不带小数（100 → '100'），带小数保留一位（120.5 → '120.5'）。"""
+    try:
+        v = float(x)
+    except (TypeError, ValueError):
+        v = float(_PLAYER_SHIP_LEVEL)
+    return str(int(round(v))) if abs(v - round(v)) < 1e-9 else ('%.1f' % v)
+
+
+def _suppress_lines(attackers: List, boss: dict) -> List[str]:
+    """[PVE等级压制] 输出行（时间轴与「详细伤害计算」共用一个口径）。
+
+    等级取各攻击方自身的 player_level（load_encounter_attacker 按「我的舰船」面板
+    里填的等级写入；缺失回落默认 Lv100）。全队同等级 → 一行（与改造前格式一致）；
+    等级不同 → 按等级分组分别列出 —— 伤害本就是**按各舰自身等级**压制计算的，
+    只打印一个等级会与实际伤害不符。倍率为 1.00 的档不列出（该档无压制）。
+    """
+    _bl = float(boss.get("level", _ENCOUNTER_BOSS_LEVEL) or _ENCOUNTER_BOSS_LEVEL)
+    groups = {}
+    for a in (attackers or []):
+        try:
+            lv = float(getattr(a, "player_level", _PLAYER_SHIP_LEVEL) or _PLAYER_SHIP_LEVEL)
+        except (TypeError, ValueError):
+            lv = float(_PLAYER_SHIP_LEVEL)
+        groups[lv] = groups.get(lv, 0) + 1
+    if not groups:
+        groups[float(_PLAYER_SHIP_LEVEL)] = 1
+    out = []
+    for lv in sorted(groups):
+        f = _level_suppress_factor(lv, _bl)
+        if f == 1.0:
+            continue
+        tag = '' if len(groups) == 1 else '（%d 艘）' % groups[lv]
+        out.append('[PVE等级压制] 玩家Lv%s%s vs Boss Lv%d → 玩家对Boss伤害 ×%.2f'
+                   % (_fmt_level(lv), tag, int(_bl), f))
+    return out
+
+
 def _format_timeline(best: dict, attackers: List, boss: dict, day_time: float,
                      total_time: float, dps_table: dict, course: str, air: str,
                      flagship_name: str = "", flagship_aura: dict = None,
@@ -1412,9 +1467,8 @@ def _format_timeline(best: dict, attackers: List, boss: dict, day_time: float,
     lines.append("             遭遇战模拟结果（理论最高伤害）")
     lines.append("=" * 60)
     lines.append(f"Boss: {boss.get('name', '')} | 白天: {int(day_time)}s | 黑夜: {int(total_time - day_time)}s | 总时间: {int(total_time)}s")
-    _supp = _level_suppress_factor(_PLAYER_SHIP_LEVEL, float(boss.get("level", _ENCOUNTER_BOSS_LEVEL) or _ENCOUNTER_BOSS_LEVEL))
-    if _supp != 1.0:
-        lines.append(f"[PVE等级压制] 玩家Lv{_PLAYER_SHIP_LEVEL} vs Boss Lv{int(boss.get('level', _ENCOUNTER_BOSS_LEVEL) or _ENCOUNTER_BOSS_LEVEL)} → 玩家对Boss伤害 ×{_supp:.2f}")
+    # PVE 等级压制行：按各攻击方自身等级（「我的舰船」面板里填的等级）逐档列出
+    lines.extend(_suppress_lines(attackers, boss))
     lines.append(f"航向: {course} | 制空: {air}")
     lines.append(f"初始前排: {', '.join(attackers[i].name for i in [0,1,2])}")
     lines.append(f"初始后排: {', '.join(attackers[i].name for i in [3,4,5])}")
@@ -1701,9 +1755,7 @@ def build_detail_module(attackers: List, boss: dict, day_time: float,
                      f"白天: {int(day_time)}s | 黑夜: {_nt}s | 总时长: {_tt}s（黑夜 = 120 - 白天）")
     else:
         lines.append(f"Boss: {boss.get('name', '')} | 航向: {course} | 制空: {air} | 白天: {int(day_time)}s")
-        _supp = _level_suppress_factor(_PLAYER_SHIP_LEVEL, float(boss.get("level", _ENCOUNTER_BOSS_LEVEL) or _ENCOUNTER_BOSS_LEVEL))
-        if _supp != 1.0:
-            lines.append(f"[PVE等级压制] 玩家Lv{_PLAYER_SHIP_LEVEL} vs Boss Lv{int(boss.get('level', _ENCOUNTER_BOSS_LEVEL) or _ENCOUNTER_BOSS_LEVEL)} → 玩家对Boss伤害 ×{_supp:.2f}")
+        lines.extend(_suppress_lines(attackers, boss))
     lines.append("说明：下列为每个角色各技能【逐次释放】的完整式子与期望伤害；")
     lines.append("      带「持续buff」的技能释放后，其绑定 buff 在 duration 内生效——")
     lines.append("      敌方减益(全伤害减免/各类型减免等)为全队共享，会使窗口内全队伤害变化；")

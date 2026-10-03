@@ -5,12 +5,13 @@
 
 设计目标（2026-09-15 改版：无账号 · 按 IP 限额）
 - 云端部署下**没有账号体系**，用户自由使用（仅需全局邀请口令准入）。
-- 因此限额以**客户端 IP** 为维度：同一 IP 每日 LLM token 消耗总量有上限。
+- 因此限额以**客户端 IP** 为维度：同一 IP **每个周期**的 LLM token 消耗总量有上限。
+- 周期口径（用户口径 2026-10-03）：**每周刷新，周四 00:00 → 下周四 00:00**（本地时间）。
 - 超限额：停用 LLM 闲聊（返回固定提示），但**基础工具（查询/计算/攻略/遭遇战）
-  不受影响**、正常工作；次日零点（本地日期）自动恢复。
+  不受影响**、正常工作；到下周四零点自动恢复。
 
 限额口径：
-    每日 token 总量（输入 + 输出）/ IP。各档额度直接读 env（0 = 不限量，可随意设置）：
+    每个周期（周四 → 下周四）token 总量（输入 + 输出）/ IP。各档额度直接读 env（0 = 不限量，可随意设置）：
         developer（开发者本人）→ 恒不限量
         whitelist（白名单）    → FX_QUOTA_WHITELIST（默认 200000，类似开发者但可调限量）
         paid（付费用户）       → FX_QUOTA_PAID（默认 200000）
@@ -36,7 +37,7 @@
 import os
 import json
 import threading
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Optional
 
 from core import runtime
@@ -46,11 +47,15 @@ PRICE_IN_YUAN_PER_K = 0.0024   # 元 / 千 token（输入）
 PRICE_OUT_YUAN_PER_K = 0.0144  # 元 / 千 token（输出）
 
 # ===== 限额（token 总量 / 天 / 维度键）=====
-# 四档额度（直接读 env；0 = 不限量，可随意设置）：
+# 四档额度（0 = 不限量，可随意设置）：
 #   developer（开发者本人）→ 恒不限量（无需配置）
 #   whitelist（白名单）    → FX_QUOTA_WHITELIST（类似开发者，独立可调限量）
 #   paid（付费用户）       → FX_QUOTA_PAID
 #   free（免费用户）       → FX_QUOTA_FREE
+#
+# ⚠️ 这些上限**每次实时读宿主机 .env 文件**（runtime.live_env）：改完立即生效，
+#    不需要重启容器、也不需要重建。百分比（usage_brief）与闸控（check_llm_quota）
+#    都汇到 _tok_limit() 取值，所以「上限 / 剩余百分比 / 是否超额」永远一致。
 def _env_int(name: str, default: int) -> int:
     v = os.getenv(name)
     if v in (None, ''):
@@ -61,13 +66,39 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
-QUOTA_FREE = _env_int('FX_QUOTA_FREE', 60000)    # 免费档每日 token 上限（可随意设置；0=不限量）
-QUOTA_PAID = _env_int('FX_QUOTA_PAID', 200000)   # 付费档每日 token 上限（可随意设置；0=不限量）
-QUOTA_WHITELIST = _env_int('FX_QUOTA_WHITELIST', 200000)  # 白名单每日 token 上限（可随意设置；类似开发者但可调限量）
+def _env_int_live(name: str, default: int) -> int:
+    """额度上限：实时从 .env 取值（改文件即生效）→ 回落进程环境 → 回落默认值。"""
+    v = runtime.live_env(name)
+    if v in (None, ''):
+        v = os.getenv(name)
+    if v in (None, ''):
+        return default
+    try:
+        return max(0, int(v))
+    except (TypeError, ValueError):
+        return default
 
-# 白名单（IP/uid 列表，逗号分隔）；名单内走 whitelist 额度（类似开发者，独立可调，不参与 free/paid 检测），
-# 其余用户按 users.json 的 plan 字段分 free / paid 两档。
-_WHITELIST = {k.strip() for k in (os.getenv('FX_QUOTA_WHITELIST_KEYS') or '').split(',') if k.strip()}
+
+def quota_free() -> int:
+    """免费档每周期（周四→下周四）token 上限（实时；默认 60000；0 = 不限量）。"""
+    return _env_int_live('FX_QUOTA_FREE', 60000)
+
+
+def quota_paid() -> int:
+    """付费档每周期 token 上限（实时；默认 200000；0 = 不限量）。"""
+    return _env_int_live('FX_QUOTA_PAID', 200000)
+
+
+def quota_whitelist() -> int:
+    """白名单每周期 token 上限（实时；默认 200000；0 = 不限量）。"""
+    return _env_int_live('FX_QUOTA_WHITELIST', 200000)
+
+
+def whitelist_keys() -> set:
+    """白名单集合（IP/uid，逗号分隔；**实时读 .env**，改完立即生效）。"""
+    raw = runtime.live_env('FX_QUOTA_WHITELIST_KEYS') or (os.getenv('FX_QUOTA_WHITELIST_KEYS') or '')
+    return {k.strip() for k in raw.split(',') if k.strip()}
+
 
 _QUOTA_DIR = os.getenv('FX_QUOTA_DIR', '').strip()
 _BACKEND = os.getenv('FX_QUOTA_BACKEND', '').strip().lower()
@@ -75,8 +106,15 @@ _BACKEND = os.getenv('FX_QUOTA_BACKEND', '').strip().lower()
 _lock = threading.Lock()
 
 
-def _today() -> str:
-    return date.today().isoformat()
+def _period() -> str:
+    """当前算力周期的**起始日**（用户口径 2026-10-03：每周刷新，周四 → 下周四）。
+
+    取「最近一个周四（含当天）」：周四→0 天、周五→1 天 … 周三→6 天。
+    返回 ISO 日期串，用作配额存储的分桶键（key = "<周期起始日>|<维度键>"）；
+    到下周四零点自动进入下一个周期（旧周期的数据自然不再被读取）。
+    """
+    d = date.today()
+    return (d - timedelta(days=(d.weekday() - 3) % 7)).isoformat()
 
 
 # ===== 配额存储后端（可插拔）=====
@@ -97,8 +135,8 @@ class QuotaStore:
             return e
 
     def log_request(self, key: str, tok: int):
-        """把一次 /api/chat 请求记进当天的流水桶；每天最多保留 _REQLOG_MAX_PER_DAY 条。"""
-        day = _today()
+        """把一次 /api/chat 请求记进本周期的流水桶；每周期最多保留 _REQLOG_MAX_PER_DAY 条。"""
+        day = _period()
         entry = {'date': day, 'ts': datetime.now().strftime('%H:%M:%S'),
                  'key': str(key or ''), 'tok': int(tok or 0)}
         with self._lock:
@@ -109,7 +147,7 @@ class QuotaStore:
 
     def recent_requests(self, day: str, limit: int = 100) -> list:
         with self._lock:
-            items = list(self.reqlog.get(day or _today(), []))
+            items = list(self.reqlog.get(day or _period(), []))
         return items[-max(1, int(limit)):]
 
     def persist(self):
@@ -227,7 +265,7 @@ STORE = _build_store()
 
 
 def daily_limit(key: str) -> int:
-    """某维度键的每日 token 上限（按套餐档）；**0 = 不限量**（开发者本人）。"""
+    """某维度键的每周期 token 上限（按套餐档）；**0 = 不限量**（开发者本人）。"""
     return _tok_limit(get_user_plan(key))
 
 
@@ -248,7 +286,7 @@ def log_request(key: str, tok: int):
 
 def recent_requests(day: Optional[str] = None, limit: int = 100) -> list:
     """某天的请求级流水（持久化保留，可回看历史日）。"""
-    return STORE.recent_requests((day or _today()).strip(), limit)
+    return STORE.recent_requests((day or _period()).strip(), limit)
 
 
 def usage_snapshot(day: Optional[str] = None) -> list:
@@ -257,7 +295,7 @@ def usage_snapshot(day: Optional[str] = None) -> list:
     量级说明：配额存储本身就是「全量 JSON」（Redis 后端也只是整串 set/get），
     所以这里直接读内存快照即可，不产生额外查询。返回按 token 总量倒序的列表。
     """
-    d = (day or _today()).strip()
+    d = (day or _period()).strip()
     try:
         with STORE._lock:
             items = list(STORE.usage.items())
@@ -295,7 +333,7 @@ def usage_of(key: str, day: Optional[str] = None) -> dict:
     ⚠️ 不要用它直接回给**用户侧**接口（用户口径 2026-09-25：用户只能看到剩余百分比）。
     用户侧请用 `usage_brief()`；本函数留给开发者侧/排障使用。
     """
-    d = (day or _today()).strip()
+    d = (day or _period()).strip()
     try:
         with STORE._lock:
             e = STORE.usage.get('%s|%s' % (d, key)) or {}
@@ -389,7 +427,7 @@ def get_user_plan(key: str) -> str:
         from core import users as _users
         if key and key == _users.owner_uid():
             return 'developer'
-        if key in _WHITELIST:
+        if key in whitelist_keys():
             return 'whitelist'
         for u in _users.parse_users():
             if u['uid'] == key:
@@ -406,18 +444,22 @@ def get_user_plan(key: str) -> str:
 
 
 def _tok_limit(plan: str) -> int:
-    """每日 token 上限；**0 表示不限量**（check_llm_quota 里以 limit > 0 判闸）。"""
+    """每周期 token 上限；**0 表示不限量**（check_llm_quota 里以 limit > 0 判闸）。
+
+    **实时读 .env**：改了上限立即生效。百分比（usage_brief）与闸控（check_llm_quota）
+    都取用本函数，故「上限 / 剩余百分比 / 是否超额」三者始终一致。
+    """
     if plan == 'developer':
         return 0
     if plan == 'whitelist':
-        return QUOTA_WHITELIST
+        return quota_whitelist()
     if plan == 'paid':
-        return QUOTA_PAID
-    return QUOTA_FREE   # free 及未知档位统一回落免费档
+        return quota_paid()
+    return quota_free()   # free 及未知档位统一回落免费档
 
 
 def _get_entry(key: str) -> dict:
-    return STORE.get_entry('%s|%s' % (_today(), key))
+    return STORE.get_entry('%s|%s' % (_period(), key))
 
 
 def check_llm_quota(key: str, plan: str = None) -> dict:
@@ -472,14 +514,56 @@ def record_llm_call(key: str, kind: str, tok_in: int, tok_out: int):
     STORE.persist()
 
 
+def entry_calls(key: str) -> dict:
+    """本周期该配额键的 calls 明细快照（深拷贝）。
+
+    供「知识库命中缓存」在计算前后做差，得到本轮真实消耗
+    （见 core/kb_cache：命中缓存时按这份明细复现记账）。
+    """
+    with _lock:
+        e = _get_entry(key)
+        return {str(k): dict(v) for k, v in (e.get('calls') or {}).items()
+                if isinstance(v, dict)}
+
+
+def replay_llm_calls(key: str, calls: dict) -> int:
+    """按 calls 明细**复现**一轮真实调用记账（命中缓存、未真调 LLM 时用）。
+
+    与 record_llm_call 同口径（rounds / tok / cost / calls 明细），
+    区别是**按快照整体加**（n 也照抄），保证「额度百分比」与真的算过一遍一致。
+    返回复现的 token 总数。
+    """
+    total = 0
+    with _lock:
+        e = _get_entry(key)
+        for kind, v in (calls or {}).items():
+            n = int(v.get('n') or 0)
+            tin = int(v.get('tok_in') or 0)
+            tout = int(v.get('tok_out') or 0)
+            if n <= 0 and tin <= 0 and tout <= 0:
+                continue
+            e['rounds'] += n
+            e['tok_in'] += tin
+            e['tok_out'] += tout
+            e['cost'] += tin / 1000.0 * PRICE_IN_YUAN_PER_K + tout / 1000.0 * PRICE_OUT_YUAN_PER_K
+            c = e.setdefault('calls', {}).setdefault(str(kind or 'LLM'),
+                                                    {'n': 0, 'tok_in': 0, 'tok_out': 0})
+            c['n'] += n
+            c['tok_in'] += tin
+            c['tok_out'] += tout
+            total += tin + tout
+    STORE.persist()
+    return total
+
+
 def quota_prompt(key: str, plan: str, info: dict) -> str:
     """额度用尽时的固定提示文案（不调 LLM）。基础功能仍可正常使用。
 
     只报**百分比**、不报具体 token（用户口径 2026-09-25：用户只能看到剩余百分比，
     看不到具体用量）。
     """
-    return ('今日算力已用尽（同一网络/设备共享，剩余 0%）。'
-            '基础功能（查询 / 计算 / 攻略）仍可使用，明日零点自动恢复。')
+    return ('本周算力已用尽（同一网络/设备共享，剩余 0%）。'
+            '基础功能（查询 / 计算 / 攻略）仍可使用，下周四零点自动恢复。')
 
 
 def usage_brief(key: str, day: Optional[str] = None) -> dict:
@@ -489,7 +573,7 @@ def usage_brief(key: str, day: Optional[str] = None) -> dict:
     `/api/admin/usage` 里暴露。这里刻意连 limit、used 都不返回，
     避免从响应体反推出真实用量。
     """
-    d = (day or _today()).strip()
+    d = (day or _period()).strip()
     plan = get_user_plan(key)
     limit = _tok_limit(plan)
     if not runtime.quota_enabled() or limit <= 0:

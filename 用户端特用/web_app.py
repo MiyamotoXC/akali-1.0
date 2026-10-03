@@ -155,8 +155,8 @@ EXP_DIR = os.path.normpath(os.path.join(KB_STATIC_DIR, "图片素材", "表情�
 # 云端资源根（对象存储/CDN，指向 知识库 目录）：FX_CDN_BASE=https://cdn.xxx.com/kb
 # 非空时前端资源走 CDN 直链、不再依赖本机磁盘；空=本地（仍由 /kb/ /avatar/ 路由 serve）
 CDN_BASE = os.getenv('FX_CDN_BASE', '').strip()
-# 默认头像：表情差分为空时的回退（底层立绘）
-DEFAULT_AVATAR_URL = "/kb/图片素材/阿卡莉.png"
+# 默认头像：表情差分为空时的回退（用「常态」差分；原先指向的 知识库/图片素材/阿卡莉.png 实际不存在）
+DEFAULT_AVATAR_URL = "/kb/图片素材/表情差分/常态.jpg"
 # 神态兜底前缀：LLM 神态词匹配不到差分文件时，优先用文件名以「常态」开头的图
 _EXP_FALLBACK_PREFIX = "常态"
 
@@ -959,6 +959,15 @@ async def admin_accounts(request: Request):
     }
 
 
+def _kb_cache_stats() -> dict:
+    """知识库命中缓存运行统计（拿不到就返回空 dict，不影响用量视图）。"""
+    try:
+        from core import kb_cache as _kbc
+        return _kbc.stats()
+    except Exception:
+        return {}
+
+
 @app.get("/api/admin/usage")
 async def admin_usage(request: Request, day: Optional[str] = None):
     """**用量视图**：某天（默认今天）每个维度键消耗的 token / 轮次 / 参考成本。
@@ -1006,7 +1015,9 @@ async def admin_usage(request: Request, day: Optional[str] = None):
         e['name'] = name_of.get(e['key'], '')
     return {'ok': True, 'day': day or _quota._today(), 'dim': runtime.quota_key(),
             'rows': rows, 'total_tok': total, 'total_cost': cost, 'recent': recent,
-            'backend': type(_quota.STORE).__name__, 'dates': dates}
+            'backend': type(_quota.STORE).__name__, 'dates': dates,
+            # 知识库命中缓存概况（用户口径 2026-10-03）：命中率 / 条目数 / 开关
+            'kb_cache': _kb_cache_stats()}
 
 
 @app.post("/api/register")
@@ -2459,6 +2470,8 @@ def chat(req: ChatRequest, request: Request):
         _req_ctx.reset_quota_key(_qkey_tok)
     # 请求级用量明细（开发者侧「流量/请求明细」数据源）：走 LLM 的请求由 _chat_impl
     # 把本轮 token 以 _tok 附在响应里；未走 LLM（工具类/超限提示）按 0 记。
+    # 命中缓存标记（core.kb_cache）只在内部排障用，同样不下发给前端。
+    resp.pop('_cache', None)
     try:
         from core.quota import log_request as _q_log
         _q_log(req.uid or '', int(resp.pop('_tok', 0) or 0))
@@ -3405,6 +3418,9 @@ class UserShipUpdateRequest(BaseModel):
     atk_set: Optional[dict] = None   # 攻击面板绝对赋值（炮击/雷击/航空/...）
     def_set: Optional[dict] = None   # 防御面板绝对赋值（装甲/对空/机动/...）
     delta: Optional[dict] = None     # 面板增量（+N 在副本当前值上累加）
+    # 「我的舰船·装备面板」的等级（用户口径 2026-10-03）：与面板一起保存，
+    # 供遭遇战 PVE 等级压制使用；>0 生效，0/缺省=不设置（清除该字段）。
+    level: Optional[float] = None
 
 
 def _split_panel_delta(delta: dict) -> tuple:
@@ -3458,13 +3474,16 @@ def api_user_ships_list(name: Optional[str] = None):
         return {'ship': {'name': name,
                          'base_atk': dp['base_atk'], 'base_def': dp['base_def'],
                          'cur_atk': dp['cur_atk'], 'cur_def': dp['cur_def'],
-                         'delta': {**dp['delta_atk'], **dp['delta_def']}}}
+                         'delta': {**dp['delta_atk'], **dp['delta_def']},
+                         # 「我的舰船」等级（可选）：与面板同存，供遭遇战 PVE 等级压制
+                         'level': (_user_data.get_ship_dict(name) or {}).get('level')}}
     rows = []
     for n in sorted(_user_data.list_modified()):
         dp = _user_data.diff_panels(n)
         rows.append({'name': n,
                      'delta': {**dp['delta_atk'], **dp['delta_def']},
-                     'cur_atk': dp['cur_atk'], 'cur_def': dp['cur_def']})
+                     'cur_atk': dp['cur_atk'], 'cur_def': dp['cur_def'],
+                     'level': (_user_data.get_ship_dict(n) or {}).get('level')})
     return {'ships': rows}
 
 
@@ -3482,7 +3501,7 @@ def api_user_ships_update(req: UserShipUpdateRequest):
     if base is None:
         base = {'name': name, 'attack_panel': {}, 'defense_panel': {}, 'buffs': {}}
     if not _user_data.apply_panel_to(base, req.atk_set or {}, req.def_set or {},
-                                      d_atk, d_def):
+                                     d_atk, d_def, level=req.level):
         raise HTTPException(500, '写入 user_data.json 失败')
     dp = _user_data.diff_panels(name)
     return {'ok': True, 'name': name, 'delta': {**dp['delta_atk'], **dp['delta_def']}}

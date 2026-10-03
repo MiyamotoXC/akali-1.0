@@ -8,7 +8,9 @@ panel_overrides 携带，服务器无状态。本模块提供服务器侧的**�
 
 存储：一个 uid 一个 JSON 文件，目录 `用户端特用/panels/`（可用环境变量
 AKALI_PANEL_BACKUP_DIR 覆盖，云端挂持久卷时指向卷内即可）。文件内容形如：
-    {"角色名": {"attack_panel": {...}, "defense_panel": {...}}}
+    {"角色名": {"attack_panel": {...}, "defense_panel": {...}, "level": 120}}
+（`level` 为「我的舰船·装备面板」里的等级，可选；供遭遇战 PVE 等级压制使用。
+  本模块整体 JSON 原样读写、不做字段校验，故新增字段天然随面板一起备份/回填。）
 """
 import json
 import os

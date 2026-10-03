@@ -1779,9 +1779,11 @@ def _filter_conjunctive_entities(question: str, evidence: str, answer: str) -> s
     return '\n'.join(kept).strip() or answer
 
 
-def _handle_guide_qa(tools, msg: str, identity: str = '普通', search_query: str = ''):
+def _guide_qa_uncached(tools, msg: str, identity: str = '普通', search_query: str = ''):
     """具体攻略问题：向量检索攻略片段 → LLM 依据片段作答（标注来源）。
-    检索无命中/低分或 LLM 失败返回 None（调用方回落攻略面板路径）。"""
+    检索无命中/低分或 LLM 失败返回 None（调用方回落攻略面板路径）。
+
+    ⚠️ 本函数是**真实计算**入口；对外请调用 `_handle_guide_qa`（带命中缓存）。"""
     tool = _tool(tools, 'guide_rag')
     if tool is None:
         return None
@@ -1935,6 +1937,46 @@ def _handle_guide_qa(tools, msg: str, identity: str = '普通', search_query: st
         return None
     return {'reply': answer, 'tool_outputs': [text], 'suggestions': [], 'fill_form': [],
             'encounter_form': [], 'guide_files': [], 'guide_lib': '', 'from_kb': True, 'ok': True}
+
+
+# ======================================================================
+# 知识库问答**命中缓存**（用户口径 2026-10-03）：同一问题重复问时，
+# 「向量检索 + 依据片段作答 + 证据校对」不再重算 —— 三个入参（问题 / 玩家身份 /
+# 实际检索 query）加知识库版本就是本函数的全部输入，故命中即等价重算。
+# 只缓存这一类 from_kb 的「知识库原文直出」答复；闲聊 / 调情 / 计算 / 查询 /
+# 表单一律不缓存（它们依赖会话上下文与人设，缓存会串味）。命中时照常记账
+# （core.kb_cache.charge：按首算真实消耗复现），额度口径不受影响。
+# 开关：AKALI_KB_CACHE=0 关闭；AKALI_KB_CACHE_CHARGE=0 命中不记账。
+# ======================================================================
+def _handle_guide_qa(tools, msg: str, identity: str = '普通', search_query: str = ''):
+    """知识库问答（对外入口）：命中缓存直接返回，未命中才算并回填缓存。"""
+    try:
+        from core import kb_cache as _kbc
+    except Exception:
+        return _guide_qa_uncached(tools, msg, identity, search_query)
+    _key = ''
+    _base = None
+    try:
+        if _kbc.enabled():
+            _key = _kbc.key(msg, identity, search_query or msg)
+            _hit = _kbc.get(_key)
+            if _hit is not None:
+                _kbc.charge(_hit)                     # 命中：复现记账，额度口径不变
+                cached = dict(_hit.get('result') or {})
+                cached['_cache'] = 'hit'              # 仅供排障识别（不展示给用户）
+                return cached
+            _base = _kbc.snapshot_calls()             # 计算前基线（算完做差得真实消耗）
+        else:
+            _key = ''
+    except Exception:
+        _key, _base = '', None
+    result = _guide_qa_uncached(tools, msg, identity, search_query)
+    try:
+        if _key and result:
+            _kbc.store(_key, result, _base)           # 只收知识库问答类结果
+    except Exception:
+        pass
+    return result
 
 
 # 通用知识检索兜底：正则/固定分支全漏后，把"带问意、疑似拂晓内容"的输入交给

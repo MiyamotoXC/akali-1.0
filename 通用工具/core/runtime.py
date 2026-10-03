@@ -66,6 +66,80 @@ def _flag(v: str) -> bool:
     return str(v).strip().lower() in ('1', 'true', 'on', 'yes', 'cloud')
 
 
+# ---------------- .env 实时读取（改文件即生效，无需重建/重启容器） ----------------
+# 背景：docker 的 env_file 只在**容器创建时**注入 os.environ —— 之后改宿主机 .env，
+#       已有进程里的 os.environ 不会变；而「每日算力额度上限」这类配置要求改完立即生效。
+# 做法：直接读 .env 文件（compose 已把宿主机 ./.env 只读挂载到容器 /app/.env）；
+#       按 mtime+size 缓存，只有文件真的变了才重新解析，避免每请求都读盘。
+_ENV_FILE_CACHE: dict = {}
+
+# 项目根（与上面 load_dotenv 的目标一致）：本文件在 <根>/通用工具/core/runtime.py
+_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+
+def env_file_path() -> str:
+    """实时读取用的 .env 路径：AKALI_ENV_FILE 优先，否则项目根/.env。"""
+    p = (os.environ.get('AKALI_ENV_FILE') or '').strip()
+    return p or os.path.join(_ROOT, '.env')
+
+
+def _parse_env_file(path: str) -> dict:
+    """极简 .env 解析：支持 # 整行注释、行内注释（引号内不动）、去引号、UTF-8 BOM。"""
+    data: dict = {}
+    try:
+        with open(path, encoding='utf-8-sig') as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith('#') or '=' not in line:
+                    continue
+                k, _, v = line.partition('=')
+                k = k.strip()
+                if not k:
+                    continue
+                v = v.strip()
+                if v[:1] not in ('"', "'"):
+                    for i in range(1, len(v)):
+                        if v[i] == '#' and v[i - 1] in ' \t':
+                            v = v[:i].strip()
+                            break
+                data[k] = v.strip().strip('"').strip("'")
+    except Exception:
+        return {}
+    return data
+
+
+def env_file_values() -> dict:
+    """返回 .env 解析结果（按 mtime+size 缓存；文件被改后自动重读）。"""
+    path = env_file_path()
+    try:
+        st = os.stat(path)
+        sig = (st.st_mtime_ns, st.st_size)
+    except OSError:
+        _ENV_FILE_CACHE['sig'] = None
+        _ENV_FILE_CACHE['data'] = {}
+        return {}
+    if _ENV_FILE_CACHE.get('sig') == sig:
+        return _ENV_FILE_CACHE.get('data') or {}
+    data = _parse_env_file(path)
+    _ENV_FILE_CACHE['sig'] = sig
+    _ENV_FILE_CACHE['data'] = data
+    return data
+
+
+def live_env(*names: str, default: str = '') -> str:
+    """实时取值：**先读 .env 文件**（改文件即生效），没有再回落进程环境变量。
+
+    与 _env 的区别：_env 只认进程环境（容器创建时注入，改 .env 必须重建容器）；
+    live_env 每次看 .env 文件，适合「额度上限 / 白名单」这类要求实时生效的配置。
+    """
+    vals = env_file_values()
+    for n in names:
+        v = vals.get(n)
+        if v is not None and str(v).strip() != '':
+            return str(v).strip()
+    return _env(*names, default=default)
+
+
 def run_mode() -> str:
     """返回 'local' 或 'cloud'。AKALI_RUN_MODE 优先，兼容旧 FX_CLOUD_MODE。"""
     raw = _env('AKALI_RUN_MODE')
@@ -111,9 +185,9 @@ def quota_key() -> str:
 
 
 def quota_daily_tok() -> int:
-    """每 IP 每日 token 总量上限（输入+输出），对应免费档 FX_QUOTA_FREE。"""
+    """每 IP 每日 token 总量上限（输入+输出），对应免费档 FX_QUOTA_FREE（**实时读 .env**）。"""
     try:
-        return max(0, int(_env('FX_QUOTA_FREE', default='60000')))
+        return max(0, int(live_env('FX_QUOTA_FREE', default='60000')))
     except (TypeError, ValueError):
         return 60000
 

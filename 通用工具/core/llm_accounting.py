@@ -41,6 +41,9 @@ _KIND_BY_FUNC = {
     '_llm_guide_intent': '攻略意图分析',
     '_verify_guide_answer': '攻略证据校对',
     '_handle_guide_qa': '攻略生成',
+    # 知识库问答加了命中缓存后，真正调 LLM 的是下面这个「真实计算」函数
+    # （见 calc_flow._handle_guide_qa 缓存包装），细则类型必须与改造前保持一致。
+    '_guide_qa_uncached': '攻略生成',
     '_semantic_rerank': '检索重排',
     '_expand_queries_llm': '查询改写',
     '_selfcheck_llm': '答案自检',

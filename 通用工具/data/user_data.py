@@ -98,9 +98,13 @@ def get_ship_dict(name):
     return copy.deepcopy(entry) if entry is not None else None
 
 
-def apply_panel_to(base, atk_set: dict, def_set: dict, d_atk: dict, d_def: dict) -> bool:
+def apply_panel_to(base, atk_set: dict, def_set: dict, d_atk: dict, d_def: dict,
+                   level=None) -> bool:
     """把面板赋值/增量写入副本（base 为该角色当前数据：dict 或 CombatData）。
     绝对赋值：atk_set/def_set 直接覆盖；增量：d_atk/d_def 在副本当前值上累加。
+    level：该舰在「我的舰船·装备面板」里填的等级（用户口径 2026-10-03，可选）——
+    与面板同存一份，供遭遇战 PVE 等级压制按各舰自身等级计算；
+    >0 生效（钳制 1~200），0/负数/None 表示不设置（None=不动该字段，0=清除）。
     写回 user_data.json，成功返回 True。"""
     # 统一为 dict（CombatData 走 to_dict，保留完整字段）
     if not isinstance(base, dict):
@@ -131,6 +135,16 @@ def apply_panel_to(base, atk_set: dict, def_set: dict, d_atk: dict, d_def: dict)
         c = _clamp_panel(cur + float(v))
         if c is not None:
             entry['defense_panel'][k] = c
+    # 「我的舰船」等级（可选）：>0 写入（钳制 1~200）；0/负数 = 清除；None = 不动
+    if level is not None:
+        try:
+            lv = float(level)
+        except (TypeError, ValueError):
+            lv = 0.0
+        if lv > 0:
+            entry['level'] = max(1.0, min(200.0, lv))
+        else:
+            entry.pop('level', None)
     data = load_user_data()
     data.setdefault('ships', {})[entry.get('name') or ''] = entry
     return save_user_data(data)

@@ -63,7 +63,8 @@ const sendBtn = document.getElementById('sendBtn');
 /* ================= 我的舰船·装备面板（用户本地副本管理） ================= */
 const UP_ATK_FIELDS = ['炮击', '雷击', '航空', '轰炸', '鱼雷', '索敌', '命中', '幸运', '装填'];
 const UP_DEF_FIELDS = ['装甲', '对空', '机动', '血量', '回避率', '防暴击率'];
-let upState = { name: '', curAtk: {}, curDef: {}, baseAtk: {}, baseDef: {} };
+// level：该舰「等级」输入（可选，null=留空）。与面板一起保存/读取，供遭遇战 PVE 等级压制。
+let upState = { name: '', curAtk: {}, curDef: {}, baseAtk: {}, baseDef: {}, level: null };
 
 // 面板存储位置：server=本地模式（服务器 user_data.json）/ client=云端模式（浏览器本地缓存）。
 // 启动时由 /api/auth/status 返回的 panel_store 决定；缺省 server（与改造前一致）。
@@ -92,7 +93,8 @@ function panelMigrateLegacy() {
     localStorage.removeItem('arkly_panels');
   } catch (e) {}
 }
-// 云端模式：随 /api/chat 携带的面板覆盖（{角色名:{attack_panel,defense_panel}}）；本地模式返回 null
+// 云端模式：随 /api/chat 携带的面板覆盖（{角色名:{attack_panel,defense_panel,level}}）；本地模式返回 null
+// level（可选）= 该舰「等级」，后端遭遇战按它算 PVE 等级压制（未填则按 Lv100 基线）
 function panelOverrides() { return ARKLY_PANEL_STORE === 'client' ? panelLSLoad() : null; }
 function panelMerge(base, ov) { return Object.assign({}, base || {}, ov || {}); }
 
@@ -131,6 +133,11 @@ function upRenderFields(data) {
   upState.curDef = data.cur_def || {};
   upState.baseAtk = data.base_atk || {};
   upState.baseDef = data.base_def || {};
+  // 等级（可选）：回填输入框；没有/非法 → 留空（=不覆盖，后端按底层基线 Lv100 算压制）
+  const _lv = parseFloat(data.level);
+  upState.level = (isFinite(_lv) && _lv > 0) ? _lv : null;
+  const _lvEl = document.getElementById('upLevel');
+  if (_lvEl) _lvEl.value = (upState.level == null ? '' : upState.level);
   let html = '<div class="up-field"><label>攻击</label><span style="color:#64748b">（输入=你的副本当前值；灰字=底层基础值·默认无装备；仅装备属性，不含天赋/羁绊）</span></div>';
   UP_ATK_FIELDS.forEach(function (f) {
     const cur = upState.curAtk[f] || 0;
@@ -148,6 +155,15 @@ function upRenderFields(data) {
       + '<span class="up-base">' + (Math.round(base * 100) / 100) + '</span></div>';
   });
   box.innerHTML = html;
+}
+
+// 读取「等级」输入：留空/非法 → null（=不覆盖，后端按 Lv100 基线）；越界钳制 1~200（与后端同口径）
+function readUpLevel() {
+  const el = document.getElementById('upLevel');
+  if (!el) return null;
+  const v = parseFloat(el.value);
+  if (!isFinite(v) || v <= 0) return null;
+  return Math.max(1, Math.min(200, Math.round(v * 100) / 100));
 }
 
 function upReadInputs() {
@@ -180,7 +196,8 @@ async function upLoadShip() {
         name: b.ship.name,
         base_atk: b.ship.base_atk || {}, base_def: b.ship.base_def || {},
         cur_atk: panelMerge(b.ship.base_atk, ov.attack_panel),
-        cur_def: panelMerge(b.ship.base_def, ov.defense_panel)
+        cur_def: panelMerge(b.ship.base_def, ov.defense_panel),
+        level: ov.level                       // 本地缓存里存的等级（可选）
       });
       return;
     }
@@ -202,20 +219,28 @@ async function upSave(mode) {
     Object.keys(r.defSet).forEach(function (k) {
       if (Math.abs((r.defSet[k] || 0) - (upState.baseDef[k] || 0)) > 1e-9) def[k] = r.defSet[k];
     });
+    const lv = readUpLevel();
     const m = panelLSLoad();
-    if (Object.keys(atk).length || Object.keys(def).length) m[upState.name] = { attack_panel: atk, defense_panel: def };
-    else delete m[upState.name];
+    if (Object.keys(atk).length || Object.keys(def).length || lv != null) {
+      const obj = { attack_panel: atk, defense_panel: def };
+      if (lv != null) obj.level = lv;  // 等级与面板一起存（可选，供遭遇战 PVE 等级压制）
+      m[upState.name] = obj;
+    } else delete m[upState.name];
     panelLSSave(m);
     panelCloudPush();                 // 推一份到云端备份（失败不影响本地）
     const diff = Object.assign({}, atk, def);
     upRefresh(); upLoadShip();
     alert('已保存「' + upState.name + '」到本机\n当前差异：' +
-      (Object.keys(diff).length ? Object.entries(diff).map(function (e) { return e[0] + (e[1] > 0 ? '+' : '') + e[1]; }).join(' ') : '无'));
+      (Object.keys(diff).length ? Object.entries(diff).map(function (e) { return e[0] + (e[1] > 0 ? '+' : '') + e[1]; }).join(' ') : '无')
+      + '\n等级：' + (lv != null ? lv : '未设置（按底层基线 Lv100）'));
     return;
   }
   const body = { name: upState.name };
   if (mode === 'abs') { body.atk_set = r.atkSet; body.def_set = r.defSet; }
   else { body.delta = r.delta; }
+  // 等级为绝对值：留空发 0（=清除该字段）；后端 >0 才写入
+  const lvS = readUpLevel();
+  body.level = (lvS == null ? 0 : lvS);
   try {
     const d = await upFetch('/api/user_ships', { method: 'POST', body: JSON.stringify(body) });
     alert('已保存「' + upState.name + '」' + (mode === 'abs' ? '（设为输入值）' : '（增量）') + '\n当前差异：' +
@@ -236,7 +261,9 @@ async function upRemove() {
       await upFetch('/api/user_ships?name=' + encodeURIComponent(upState.name), { method: 'DELETE' });
     }
     alert('已删除「' + upState.name + '」');
-    upState = { name: '', curAtk: {}, curDef: {}, baseAtk: {}, baseDef: {} };
+    upState = { name: '', curAtk: {}, curDef: {}, baseAtk: {}, baseDef: {}, level: null };
+    const _lvEl = document.getElementById('upLevel');
+    if (_lvEl) _lvEl.value = '';
     document.getElementById('upFields').innerHTML = '<div class="up-note">输入舰名后点「载入面板」。</div>';
     upRefresh();
   } catch (e) { alert('删除失败：' + e.message); }
@@ -258,7 +285,7 @@ async function upRefresh() {
         const delta = {};
         Object.keys(atk).forEach(function (k) { delta[k] = Math.round((atk[k] - (baseAtk[k] || 0)) * 100) / 100; });
         Object.keys(def).forEach(function (k) { delta[k] = Math.round((def[k] - (baseDef[k] || 0)) * 100) / 100; });
-        return { name: n, delta: delta };
+        return { name: n, delta: delta, level: (m[n] && m[n].level) || null };
       }));
     } else {
       const d = await upFetch('/api/user_ships');
@@ -267,7 +294,10 @@ async function upRefresh() {
     if (!ships.length) { box.innerHTML = '<span class="up-note">暂无修改，副本=底层数据（所有计算用底层面板）。</span>'; return; }
     box.innerHTML = ships.map(function (s) {
       const diff = Object.entries(s.delta || {}).map(function (e) { return e[0] + (e[1] > 0 ? '+' : '') + e[1]; }).join(' ');
-      return '<span class="up-chip" data-name="' + esc(s.name) + '" title="' + esc(diff) + '">' + esc(s.name) + '</span>';
+      // 悬停提示带上等级（有才显示），一眼看出该舰按多少级算 PVE 等级压制
+      const lvTxt = (s.level ? ('等级 ' + s.level) : '');
+      const title = [lvTxt, diff].filter(Boolean).join(' | ');
+      return '<span class="up-chip" data-name="' + esc(s.name) + '" title="' + esc(title) + '">' + esc(s.name) + '</span>';
     }).join('');
     box.querySelectorAll('.up-chip').forEach(function (c) {
       c.addEventListener('click', function () {
@@ -359,8 +389,10 @@ function resolveAsset(p) {
 })();
 
 // 阿卡莉头像：表情差分（启动时 /api/ui_assets 提供默认头像=「常态」差分；差分为空回退底层立绘）
-const ARKLY_FALLBACK_AVATAR = resolveAsset('/kb/图片素材/阿卡莉.png');
+const ARKLY_FALLBACK_AVATAR = resolveAsset('/kb/图片素材/表情差分/常态.jpg');
 let ARKLY_AVATAR = ARKLY_FALLBACK_AVATAR;
+// 表情差分 名字→URL 映射（来自 /api/ui_assets 的 expression_urls），供双击头像随机切换表情
+let ARKLY_EXPR_URLS = [];
 // 指挥官（用户）头像：与秘书侧一样走图片素材（默认 指挥官头像/用户.png；
 // 独立于 表情差分 神态目录，避免污染 LLM 神态词清单导致 <<EXP:用户>> 误切秘书脸）
 // 指挥官（用户）头像：初始值作为回退；服务端 /api/ui_assets 会用带 ?v=mtime 的实时 URL 覆盖，
@@ -442,7 +474,7 @@ function showMyIdentity() {
   fetch('/api/me', { headers: _apiHeaders() })
     .then(function (r) { return r.ok ? r.json() : null; })
     .then(function (d) {
-      uid = (d && d.uid) || '';
+      uid = (d && (d.user_uid || d.uid)) || '';
       const el = ov.querySelector('#meUid');
       if (el && uid) el.textContent = uid;
       const cp = ov.querySelector('[data-copy=""]');
@@ -451,8 +483,8 @@ function showMyIdentity() {
     .catch(function () {});
 }
 
-// 触发方式：PC 双击自己的头像；手机长按（事件委托，动态消息也能命中）
-messagesEl.addEventListener('dblclick', function (e) {
+// 触发方式：PC 单击自己的头像；手机长按（事件委托，动态消息也能命中）
+messagesEl.addEventListener('click', function (e) {
   if (e.target && e.target.closest && e.target.closest('.msg.user .ava')) showMyIdentity();
 });
 var _identityLp = null;
@@ -691,7 +723,7 @@ function sbTabList(ships) {
   return tabs;
 }
 function sbAvatarUrl(p) {
-  if (!p) return resolveAsset('/kb/图片素材/阿卡莉.png');
+  if (!p) return resolveAsset('/kb/图片素材/表情差分/常态.jpg');
   const t = credGet('arkly_api_token') || '';
   const q = t ? '?token=' + encodeURIComponent(t) : '';
   return resolveAsset('/avatar/' + String(p).replace(/\\/g, '/')) + q;
@@ -848,6 +880,14 @@ function renderSecretaryReply(data, msgEl) {
   if (/&lt;&lt;STORY&gt;&gt;/.test(html)) {
     html = html.replace(/&lt;&lt;STORY&gt;&gt;([^<\n]+)/g, function (m, name) {
       return '<button class="story-btn" data-story="' + encodeURIComponent(name) + '">📖 历史上的故事</button>';
+    });
+  }
+  // 打捞活动标记 <<SALVAGE_HL>>标题：渲染为醒目红字高亮
+  // 注意：render() 已把换行转成 <br>，此处必须以 < 为边界（同 AVATAR/STORY 标记），
+  // 否则 [^\n]* 会一路吞到末尾，导致整段回复全部变红。
+  if (/&lt;&lt;SALVAGE_HL&gt;&gt;/.test(html)) {
+    html = html.replace(/&lt;&lt;SALVAGE_HL&gt;&gt;([^<\n]*)/g, function (m, t) {
+      return '<span class="salvage-hl">' + t + '</span>';
     });
   }
   // 第一步：识别到算伤害 → 渲染填空表单（不渲染按钮）
@@ -1435,7 +1475,7 @@ function _apiHeaders() {
   return h;
 }
 // 算力提醒（用户口径 2026-09-25）：用户**不需要常驻查看**用量 ——
-// 只在剩余不足 10% 时自动提醒：「今日系统算力不足10%」。
+// 只在剩余不足 10% 时自动提醒：「本周系统算力不足10%」。
 //   · 底部出现一条警示横条（阈值以上整条隐藏）；
 //   · 同时在对话里让阿卡莉主动说一句（每会话仅一次，避免每轮刷屏）。
 // 具体 token / 成本用户看不到 —— /api/quota 只回 remain_percent，明细走 /admin。
@@ -1467,15 +1507,15 @@ function checkQuotaAlert() {
         if (pctEl) pctEl.textContent = pctTxt;
       }
       if (isNaN(p) || p > QUOTA_ALERT_PCT) { if (bar) bar.style.display = 'none'; return; }
-      const msg = '今日系统算力不足' + QUOTA_ALERT_PCT + '%';
-      if (bar && txt) { txt.textContent = msg + '（基础功能不受影响，明日零点自动恢复）'; bar.style.display = ''; }
+      const msg = '本周系统算力不足' + QUOTA_ALERT_PCT + '%';
+      if (bar && txt) { txt.textContent = msg + '（基础功能不受影响，下周四零点自动恢复）'; bar.style.display = ''; }
       let told = '';
       try { told = sessionStorage.getItem('arkly_quota_alert') || ''; } catch (e) {}
       if (told) return;
       try { sessionStorage.setItem('arkly_quota_alert', '1'); } catch (e) {}
       // 让阿卡莉主动提醒一次（addMsg 定义在其后，运行时已就绪）
       if (typeof addMsg === 'function') {
-        addMsg('secretary', msg + '。基础功能（查询 / 计算 / 攻略）仍可正常使用，明日零点自动恢复。');
+        addMsg('secretary', msg + '。基础功能（查询 / 计算 / 攻略）仍可正常使用，下周四零点自动恢复。');
       }
     })
     .catch(() => { if (bar) bar.style.display = 'none'; });
@@ -1490,7 +1530,7 @@ var fabWrap = document.getElementById('fabWrap');
 var fabBall = document.getElementById('fabBall');
 var fabMenu = document.getElementById('fabMenu');
 var FAB_PAD = 20, FAB_DEF_TOP = 8;   // 默认位：标题栏（72px）内右侧居中
-function fabSize() { return window.matchMedia('(max-width: 640px)').matches ? 46 : 72; }   // 与媒体查询的 .fab-ball 尺寸同步
+function fabSize() { return window.matchMedia('(max-width: 640px)').matches ? 56 : 72; }   // 与媒体查询的 .fab-ball 尺寸同步
 function fabClamp(x, y) {
   var s = fabSize();
   return [Math.min(Math.max(x, FAB_PAD), window.innerWidth - s - FAB_PAD),
@@ -1503,27 +1543,28 @@ function fabSetPos(x, y) {
   fabWrap.dataset.x = c[0];
   fabWrap.dataset.y = c[1];
 }
-function fabAlignMenu() {   // 菜单与球中心对齐；靠视口边缘时平移防溢出
-  if (window.matchMedia('(max-width: 640px)').matches) {   // 手机端：贴右侧竖向面板，无需水平校正
-    fabMenu.style.left = 'auto';
-    fabMenu.style.right = '0';
-    fabMenu.style.transform = 'none';
-    return;
-  }
+function fabAlignMenu() {   // 菜单与球「居中对齐」；靠视口边缘时自动平移防溢出
+  // 手机端与桌面端统一：以球心为基准居中。悬浮球默认离右边缘 20px，而菜单更宽，
+  // 居中后可能超出屏幕，故必须按视口边缘夹取（否则菜单右侧会被切掉）。
+  fabMenu.style.right = 'auto';
   fabMenu.style.left = '50%';
-  fabMenu.style.transform = 'translateX(-50%)';
   var r = fabMenu.getBoundingClientRect();
-  var min = 12, max = window.innerWidth - 12, dx = 0;
-  if (r.right > max) dx = max - r.right;
-  else if (r.left < min) dx = min - r.left;
-  if (dx) fabMenu.style.transform = 'translateX(calc(-50% + ' + dx + 'px))';
+  var dx = 0;
+  if (r.width) {                        // 菜单隐藏(display:none)时矩形全 0，跳过校正
+    var min = 12, max = window.innerWidth - 12;
+    if (r.right > max) dx = max - r.right;
+    else if (r.left < min) dx = min - r.left;
+  }
+  // 始终显式设置 transform：否则上一次的非零平移会残留（窗口变宽后菜单仍偏着）
+  fabMenu.style.transform = dx ? 'translateX(calc(-50% + ' + dx + 'px))' : 'translateX(-50%)';
 }
 function fabDefaultPos() { fabSetPos(window.innerWidth - fabSize() - FAB_PAD, FAB_DEF_TOP); }
 fabDefaultPos();
+fabAlignMenu();   // 首屏即按断点定位菜单（与球居中对齐 + 靠边防溢出）
 
 // 悬浮球自动翻转：原图 ⇄ 现在工具箱，每 10s 一次；
 // 展开菜单时强制停在「现在工具箱」面并暂停翻转，收起后恢复
-var FAB_FLIP_MS = 5000;
+var FAB_FLIP_MS = 10000;
 var fabFlipTimer = null;
 function fabFlipStart() {
   if (fabFlipTimer) return;
@@ -1531,11 +1572,12 @@ function fabFlipStart() {
 }
 function fabFlipStop() { if (fabFlipTimer) { clearInterval(fabFlipTimer); fabFlipTimer = null; } }
 
-// 初始：悬浮球默认展开 → 停在工具箱面、不自动翻转
+// 初始：悬浮球默认展开 → 停在工具箱面并暂停翻转；收起则每 10s 自动翻转
 fabBall.classList.toggle('flipped', fabWrap.classList.contains('open'));
-fabFlipStart();   // 无论是否展开都自动翻转（每 5s），解决默认展开时不翻转的问题
+if (fabWrap.classList.contains('open')) fabFlipStop(); else fabFlipStart();
 window.addEventListener('resize', function () {
   fabSetPos(+fabWrap.dataset.x || 0, +fabWrap.dataset.y || FAB_DEF_TOP);
+  fabAlignMenu();   // 旋转 / 改宽度后重新校正菜单（居中 + 防溢出）
 });
 // 拖动：pointer 事件统一鼠标/触摸；位移超过 6px 判为拖动，否则视为点击展开菜单
 var fabDrag = null;
@@ -1554,19 +1596,22 @@ fabBall.addEventListener('pointerup', function () {
     var opening = !fabWrap.classList.contains('open');
     fabWrap.classList.toggle('open');
     fabAlignMenu();
-    // 展开时停在「现在工具箱」面并暂停翻转；收起后恢复每 10s 翻转
-    if (opening) fabBall.classList.add('flipped');   // 打开瞬间停在工具箱面，翻转不暂停
+    // 打开菜单：停在「现在工具箱」面并暂停翻转；收起后恢复每 10s 翻转
+    if (opening) { fabBall.classList.add('flipped'); fabFlipStop(); }
+    else { fabFlipStart(); }
   }
   fabDrag = null;
 });
 document.addEventListener('click', function (e) {
   if (!fabWrap.contains(e.target) && fabWrap.classList.contains('open')) {
     fabWrap.classList.remove('open');
+    fabFlipStart();   // 收起菜单后恢复每 10s 翻转
   }
 });
 document.querySelectorAll('#fabMenu .sug-btn').forEach(function (btn) {
   btn.addEventListener('click', function () {
     fabWrap.classList.remove('open');
+    fabFlipStart();   // 选完功能后恢复每 10s 翻转
     var cmd = btn.dataset.cmd;
     if (cmd === '查角色') { openShipBrowser(); return; }   // 「查角色」直接开角色面板，不发对话
     if (cmd === '使用帮助') { openManual(); return; }       // 「使用帮助」直接弹手册，不发对话
@@ -1973,13 +2018,13 @@ function buildAuthOverlay(info) {
   let mode = canRegister ? 'register' : 'login';
   ov.innerHTML = `
     <div style="background:var(--panel,#fff);border:1px solid var(--line,#e5e8ec);border-radius:12px;padding:32px 36px;max-width:360px;width:90%;box-shadow:0 8px 30px rgba(0,0,0,.08);text-align:center;">
-      <div style="width:44px;height:44px;border-radius:50%;background:linear-gradient(135deg,#8fa6b8,#5d7a91);color:#fff;display:flex;align-items:center;justify-content:center;font-size:19px;margin:0 auto 14px;">阿</div>
-      <div style="font-size:17px;font-weight:600;margin-bottom:6px;">拂晓智能小秘书</div>
+      <div style="width:48px;height:48px;border-radius:50%;overflow:hidden;background:#fff;border:1px solid var(--line,#e5e8ec);margin:0 auto 14px;display:flex;align-items:center;justify-content:center;"><img src="/kb/图片素材/表情差分/常态.jpg" alt="阿卡莉" style="width:100%;height:100%;object-fit:cover;display:block;" onerror="var p=this.parentNode;this.remove();p.textContent='阿';p.style.background='linear-gradient(135deg,#8fa6b8,#5d7a91)';p.style.color='#fff';p.style.fontSize='19px';"></div>
+      <div style="font-size:17px;font-weight:600;margin-bottom:6px;">阿卡莉：拂晓智能助手</div>
       <div id="auth-hint" style="font-size:14px;color:var(--ink-soft,#6b7280);margin-bottom:14px;"></div>
       ${canRegister ? '<div style="display:flex;gap:8px;margin-bottom:14px;"><button type="button" id="tab-reg">注册</button><button type="button" id="tab-login">已有口令</button></div>' : ''}
       <div id="reg-fields">
         ${needInvite ? `<input id="auth-invite" type="text" autocomplete="off" placeholder="邀请码" style="${inpStyle}" />` : ''}
-        <input id="auth-uid" type="text" inputmode="numeric" maxlength="8" autocomplete="off" placeholder="你的 uid（8 位数字，首位 1/3/6/8）" style="${inpStyle}" />
+        <input id="auth-uid" type="text" inputmode="numeric" maxlength="8" autocomplete="off" placeholder="你的 uid" style="${inpStyle}" />
       </div>
       <div id="login-fields" style="display:none;">
         <input id="auth-token" type="password" placeholder="输入你的口令" style="${inpStyle}" />
@@ -1999,9 +2044,9 @@ function buildAuthOverlay(info) {
   const tabReg = ov.querySelector('#tab-reg');
   const tabLogin = ov.querySelector('#tab-login');
   const hintEl = ov.querySelector('#auth-hint');
-  // 以前输过邀请码的老用户：预填
+  // 预填邀请码（记住的 / URL ?invite=）
   if (needInvite && inviteEl) {
-    const remembered = credGet('arkly_invite');
+    const remembered = credGet('arkly_invite') || (new URLSearchParams(location.search).get('invite') || '');
     if (remembered) inviteEl.value = remembered;
   }
   function validUid(u) { return /^[1368][0-9]{7}$/.test(u); }
@@ -2064,7 +2109,7 @@ function buildAuthOverlay(info) {
         err.textContent = '请填写邀请码'; err.style.display = 'block'; if (inviteEl) inviteEl.focus(); return;
       }
       if (!u) {
-        err.textContent = '请填写你的 uid（8 位数字，首位 1/3/6/8）'; err.style.display = 'block'; uidEl.focus(); return;
+        err.textContent = '请填写你的 uid'; err.style.display = 'block'; uidEl.focus(); return;
       }
       if (!validUid(u)) {
         err.textContent = 'uid 须为 8 位数字、首位为 1/3/6/8'; err.style.display = 'block'; uidEl.focus(); return;
@@ -2076,7 +2121,7 @@ function buildAuthOverlay(info) {
       }).then(r => r.json()).then(j => {
         if (j && j.ok && j.token) {
           credSet('arkly_api_token', j.token);
-          if (inv) credSet('arkly_invite', inv);
+          if (inv) credSet('arkly_invite', inv);   // 记住邀请码，下次打开无需再输
           if (j.created) { showRegisterResult(j); return; }
           location.reload();
           return;
@@ -2235,8 +2280,47 @@ function applyFestivalTheme(hol) {
     }
     // 节庆主题（今天在法定节假日区间内才有）：换头像边框 / 气泡皮肤 / 落节庆装饰
     if (data.holiday) applyFestivalTheme(data.holiday);
+    // 表情差分映射（名字→URL）：双击阿卡莉头像随机切换表情用
+    if (Array.isArray(data.expression_urls)) ARKLY_EXPR_URLS = data.expression_urls;
   } catch (e) { /* 素材拉取失败沿用回退头像，不打断对话 */ }
 })();
+
+// ===== 双击阿卡莉头像：随机切换表情（排除「常态」「厌恶」）持续 3 秒 =====
+// 作用于标题栏头像（.avatar img）与每条秘书回复头像（.msg.secretary .ava img）。
+// 双击时随机挑一张非排出表情的差分图，3 秒后还原到切换前本来的头像。
+let _akaliExprTimer = null;
+function cycleAkaliExpression() {
+  if (!ARKLY_EXPR_URLS.length) return;
+  const EXCLUDE = new Set(['常态', '厌恶']);
+  const pool = ARKLY_EXPR_URLS.filter(e => e && e.name && !EXCLUDE.has(e.name));
+  if (!pool.length) return;
+  const pick = pool[Math.floor(Math.random() * pool.length)];
+  const url = resolveAsset(pick.url);
+  if (_akaliExprTimer) clearTimeout(_akaliExprTimer);
+  const imgs = document.querySelectorAll('.avatar img, .msg.secretary .ava img');
+  imgs.forEach(function (img) {
+    if (!img.dataset._exprPrev) img.dataset._exprPrev = img.src;
+    img.src = url;
+  });
+  _akaliExprTimer = setTimeout(function () {
+    document.querySelectorAll('.avatar img, .msg.secretary .ava img').forEach(function (img) {
+      if (img.dataset._exprPrev) { img.src = img.dataset._exprPrev; img.dataset._exprPrev = ''; }
+    });
+  }, 3000);
+}
+// 事件委托：单击阿卡莉头像任意一处即触发（标题栏 + 消息内头像，动态新增也能命中）
+// 守卫：仅当该头像当前就是「常态」时才响应 —— 覆盖 <<EXP>> 神态或随机切换中的临时表情时点击无效，
+// 切回常态（3 秒后或本就是默认）后才可再次触发（用户口径：必须是常态的时候点击才有效）。
+document.addEventListener('click', function (ev) {
+  const img = ev.target.closest('.avatar img, .msg.secretary .ava img');
+  if (!img) return;
+  ev.preventDefault();
+  // 归一化为绝对地址再比：img.src 恒为绝对 URL，而 ARKLY_AVATAR 在同源部署下是相对路径，
+  // 直接 !== 会因「绝对 vs 相对」永远不相等，导致守卫误判「非常态」而拦截全部单击。
+  const def = new URL(ARKLY_AVATAR, location.href).href;
+  if (img.src !== def) return;
+  cycleAkaliExpression();
+});
 
 // ===== 心跳与自动关闭 =====
 (function() {

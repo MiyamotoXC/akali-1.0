@@ -331,6 +331,50 @@ class App:
                     panel[k] = max(0.0, min(20000.0, x))
         return obj
 
+    def get_panel_level(self, name):
+        """「我的舰船·装备面板」里保存的**等级**（未设置返回 None）。
+
+        与面板同源（用户口径 2026-10-03）：
+        - local：用户副本 user_data.json 的 'level' 字段；
+        - cloud：请求携带的 panel_overrides（前端本地缓存里存的 'level'），
+          由 /api/chat 写入 core.req_ctx 请求上下文。
+        用途：遭遇战加载攻击方时，按**各舰自身等级**计算 PVE 等级压制
+        （见 core.encounter_simulator.load_encounter_attacker）——此前玩家等级
+        是写死的常量 Lv100，与真实副本等级不符。
+
+        合法范围钳制到 1~200（与「面板值 0~20000」同思路的护栏）；
+        非法值 / 未设置一律回 None，由上层回落 encounter_simulator 的默认等级。
+        """
+        if not name:
+            return None
+        _canon, _raw = self.get_raw_ship(name)
+        keys = [k for k in (_canon, name) if k]
+        d = None
+        if keys and not runtime.is_cloud():
+            try:
+                d = user_data.get_ship_dict(keys[0])
+            except Exception:
+                d = None
+        ov = None
+        for k in keys:                     # 请求覆盖优先（cloud），其次用户副本（local）
+            ov = req_ctx.get_panel_override(k)
+            if ov:
+                break
+        for src in (ov, d):
+            if not isinstance(src, dict):
+                continue
+            v = src.get('level')
+            if v in (None, ''):
+                continue
+            try:
+                x = float(v)
+            except (TypeError, ValueError):
+                continue
+            if x != x or x <= 0:           # NaN / 非正数 = 未设置（0 不可当 Lv1，会误判成重度压制）
+                continue
+            return max(1.0, min(200.0, x))
+        return None
+
     def _build_enemy_from_data(self, data):
         # 减免类与点燃抵抗从防守方 buffs 读取
         # ship_type、name、ship_type_damage_reduction 供舰种专属减伤使用
