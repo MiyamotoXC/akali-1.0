@@ -68,18 +68,53 @@ let upState = { name: '', curAtk: {}, curDef: {}, baseAtk: {}, baseDef: {} };
 // 面板存储位置：server=本地模式（服务器 user_data.json）/ client=云端模式（浏览器本地缓存）。
 // 启动时由 /api/auth/status 返回的 panel_store 决定；缺省 server（与改造前一致）。
 let ARKLY_PANEL_STORE = 'server';
-const PANEL_LS_KEY = 'arkly_panels';
+// 当前账号内部 uid（服务器身份，由 /api/auth/status 或注册结果填入）。
+// 用途：① 本地面缓存按账号隔离（同一浏览器换账号不串）；② 云端备份按 uid 存取。
+let ARKLY_UID = '';
 
+// 本地面缓存的键：有账号 → arkly_panels_<uid>；无账号（未鉴权）→ arkly_panels。
+function panelKey() { return 'arkly_panels' + (ARKLY_UID ? ('_' + ARKLY_UID) : ''); }
 function panelLSLoad() {
   try {
-    const m = JSON.parse(localStorage.getItem(PANEL_LS_KEY) || '{}');
+    const m = JSON.parse(localStorage.getItem(panelKey()) || '{}');
     return (m && typeof m === 'object') ? m : {};
   } catch (e) { return {}; }
 }
-function panelLSSave(m) { try { localStorage.setItem(PANEL_LS_KEY, JSON.stringify(m || {})); } catch (e) {} }
+function panelLSSave(m) { try { localStorage.setItem(panelKey(), JSON.stringify(m || {})); } catch (e) {} }
+// 旧版单一键 arkly_panels → 迁移到当前账号名下（仅当前账号还没有数据时），并清掉旧键
+function panelMigrateLegacy() {
+  if (!ARKLY_UID) return;
+  try {
+    const old = localStorage.getItem('arkly_panels');
+    if (old == null) return;
+    const nk = panelKey();
+    if (localStorage.getItem(nk) == null) localStorage.setItem(nk, old);
+    localStorage.removeItem('arkly_panels');
+  } catch (e) {}
+}
 // 云端模式：随 /api/chat 携带的面板覆盖（{角色名:{attack_panel,defense_panel}}）；本地模式返回 null
 function panelOverrides() { return ARKLY_PANEL_STORE === 'client' ? panelLSLoad() : null; }
 function panelMerge(base, ov) { return Object.assign({}, base || {}, ov || {}); }
+
+// 面板云端备份（用户口径 2026-10-03）：云端只作备份、本地为主。
+// 保存面板时推一份上去；进入时若本地为空则回填（本地有数据则不动）。
+async function panelCloudPush() {
+  if (ARKLY_PANEL_STORE !== 'client' || !ARKLY_UID || typeof upFetch !== 'function') return;
+  try { await upFetch('/api/me/panel', { method: 'POST', body: JSON.stringify({ panels: panelLSLoad() }) }); } catch (e) {}
+}
+async function panelCloudRestore() {
+  if (ARKLY_PANEL_STORE !== 'client' || !ARKLY_UID || typeof upFetch !== 'function') return;
+  const local = panelLSLoad();
+  if (local && Object.keys(local).length) return;      // 本地有 → 不回填
+  try {
+    const d = await upFetch('/api/me/panel');
+    const p = d && d.panels;
+    if (p && Object.keys(p).length) {
+      panelLSSave(p);
+      if (typeof upRefresh === 'function') upRefresh();
+    }
+  } catch (e) {}
+}
 
 async function upFetch(url, opts) {
   const _t = credGet('arkly_api_token') || new URLSearchParams(location.search).get('token') || '';
@@ -171,6 +206,7 @@ async function upSave(mode) {
     if (Object.keys(atk).length || Object.keys(def).length) m[upState.name] = { attack_panel: atk, defense_panel: def };
     else delete m[upState.name];
     panelLSSave(m);
+    panelCloudPush();                 // 推一份到云端备份（失败不影响本地）
     const diff = Object.assign({}, atk, def);
     upRefresh(); upLoadShip();
     alert('已保存「' + upState.name + '」到本机\n当前差异：' +
@@ -195,6 +231,7 @@ async function upRemove() {
   try {
     if (ARKLY_PANEL_STORE === 'client') {
       const m = panelLSLoad(); delete m[upState.name]; panelLSSave(m);
+      panelCloudPush();               // 同步云端备份
     } else {
       await upFetch('/api/user_ships?name=' + encodeURIComponent(upState.name), { method: 'DELETE' });
     }
@@ -1845,7 +1882,7 @@ function showRegisterResult(j) {
     <div style="background:var(--panel,#fff);border:1px solid var(--line,#e5e8ec);border-radius:12px;padding:28px 32px;max-width:380px;width:90%;box-shadow:0 8px 30px rgba(0,0,0,.08);text-align:center;">
       <div style="font-size:17px;font-weight:600;margin-bottom:14px;">注册成功</div>
       <div style="font-size:14px;color:var(--ink-soft,#6b7280);margin-bottom:4px;">你的账号</div>
-      <div style="font-size:22px;font-weight:700;letter-spacing:1px;margin-bottom:12px;">${esc(j.uid || '')}</div>
+      <div style="font-size:22px;font-weight:700;letter-spacing:1px;margin-bottom:12px;">${esc((j.user && j.user.user_uid) || j.user_uid || j.uid || '')}</div>
       <div style="font-size:14px;color:var(--ink-soft,#6b7280);margin-bottom:4px;">你的口令</div>
       <div style="font-size:17px;font-weight:600;font-family:ui-monospace,Consolas,monospace;word-break:break-all;background:#f6f4ee;border:1px solid var(--line,#e5e8ec);border-radius:8px;padding:9px 12px;margin-bottom:14px;">${esc(j.token || '')}</div>
       <div style="font-size:13px;color:#c0392b;line-height:1.6;margin-bottom:16px;">请截图或抄下这两项。<br>本机已自动记住，换手机/换浏览器时需要用它登录。</div>
@@ -1926,32 +1963,66 @@ async function tryAutoRegister(info) {
 function buildAuthOverlay(info) {
   const canRegister = !!(info && info.allow_register);
   const needInvite = !(info && info.need_invite === false);
-  const hint = canRegister
-    ? (needInvite ? '输入邀请码开始使用' : '点下方按钮直接开始使用')
-    : '请输入你的口令';
-  const ph = canRegister ? (needInvite ? '输入邀请码' : '（无需填写，直接开始）') : '输入口令';
+  const inpStyle = 'width:100%;padding:10px 12px;border:1px solid var(--line,#e5e8ec);border-radius:8px;font-size:15px;box-sizing:border-box;outline:none;margin-bottom:10px;';
+  const tabOn = 'flex:1;padding:8px 0;border:1px solid var(--accent,#6b8caa);background:var(--accent,#6b8caa);color:#fff;border-radius:8px;font-size:14px;cursor:pointer;';
+  const tabOff = 'flex:1;padding:8px 0;border:1px solid var(--line,#e5e8ec);background:#fff;color:var(--ink-soft,#6b7280);border-radius:8px;font-size:14px;cursor:pointer;';
   const ov = document.createElement('div');
   ov.id = 'auth-overlay';
   ov.style.cssText = 'position:fixed;inset:0;z-index:9999;background:var(--bg,#f4f6f8);display:flex;align-items:center;justify-content:center;';
+  // 两种模式：register=注册（邀请码 + uid 都必填）/ login=已有口令
+  let mode = canRegister ? 'register' : 'login';
   ov.innerHTML = `
     <div style="background:var(--panel,#fff);border:1px solid var(--line,#e5e8ec);border-radius:12px;padding:32px 36px;max-width:360px;width:90%;box-shadow:0 8px 30px rgba(0,0,0,.08);text-align:center;">
       <div style="width:44px;height:44px;border-radius:50%;background:linear-gradient(135deg,#8fa6b8,#5d7a91);color:#fff;display:flex;align-items:center;justify-content:center;font-size:19px;margin:0 auto 14px;">阿</div>
       <div style="font-size:17px;font-weight:600;margin-bottom:6px;">拂晓智能小秘书</div>
-      <div style="font-size:14px;color:var(--ink-soft,#6b7280);margin-bottom:18px;">${hint}</div>
-      <input id="auth-token-input" type="password" placeholder="${ph}"
-        style="width:100%;padding:10px 12px;border:1px solid var(--line,#e5e8ec);border-radius:8px;font-size:15px;box-sizing:border-box;outline:none;" />
-      <div id="auth-err" style="color:#c0392b;font-size:13px;min-height:16px;margin-top:8px;display:none;">口令错误，请重试</div>
+      <div id="auth-hint" style="font-size:14px;color:var(--ink-soft,#6b7280);margin-bottom:14px;"></div>
+      ${canRegister ? '<div style="display:flex;gap:8px;margin-bottom:14px;"><button type="button" id="tab-reg">注册</button><button type="button" id="tab-login">已有口令</button></div>' : ''}
+      <div id="reg-fields">
+        ${needInvite ? `<input id="auth-invite" type="text" autocomplete="off" placeholder="邀请码" style="${inpStyle}" />` : ''}
+        <input id="auth-uid" type="text" inputmode="numeric" maxlength="8" autocomplete="off" placeholder="你的 uid（8 位数字，首位 1/3/6/8）" style="${inpStyle}" />
+      </div>
+      <div id="login-fields" style="display:none;">
+        <input id="auth-token" type="password" placeholder="输入你的口令" style="${inpStyle}" />
+      </div>
+      <div id="auth-err" style="color:#c0392b;font-size:13px;min-height:16px;margin-top:2px;display:none;">口令错误，请重试</div>
       <button id="auth-submit"
-        style="width:100%;margin-top:12px;padding:10px 0;background:var(--accent,#6b8caa);color:#fff;border:none;border-radius:8px;font-size:15px;cursor:pointer;">解锁</button>
+        style="width:100%;margin-top:12px;padding:10px 0;background:var(--accent,#6b8caa);color:#fff;border:none;border-radius:8px;font-size:15px;cursor:pointer;"></button>
     </div>`;
   document.body.appendChild(ov);
-  const input = ov.querySelector('#auth-token-input');
+  const inviteEl = ov.querySelector('#auth-invite');
+  const uidEl = ov.querySelector('#auth-uid');
+  const tokenEl = ov.querySelector('#auth-token');
   const err = ov.querySelector('#auth-err');
   const btn = ov.querySelector('#auth-submit');
-  // 以前输过邀请码的老用户：预填，点「解锁」即可 —— 不用再翻聊天记录找邀请码
-  if (canRegister && needInvite) {
+  const regFields = ov.querySelector('#reg-fields');
+  const loginFields = ov.querySelector('#login-fields');
+  const tabReg = ov.querySelector('#tab-reg');
+  const tabLogin = ov.querySelector('#tab-login');
+  const hintEl = ov.querySelector('#auth-hint');
+  // 以前输过邀请码的老用户：预填
+  if (needInvite && inviteEl) {
     const remembered = credGet('arkly_invite');
-    if (remembered) input.value = remembered;
+    if (remembered) inviteEl.value = remembered;
+  }
+  function validUid(u) { return /^[1368][0-9]{7}$/.test(u); }
+  function curField() { return (mode === 'register' && canRegister) ? (inviteEl || uidEl) : tokenEl; }
+  function applyMode() {
+    if (mode === 'register' && canRegister) {
+      regFields.style.display = '';
+      loginFields.style.display = 'none';
+      hintEl.textContent = needInvite ? '新用户注册：邀请码 + 你的 uid，两个都要填' : '新用户注册：填写你的 8 位 uid';
+      btn.textContent = '开始使用';
+      if (tabReg) tabReg.style.cssText = tabOn;
+      if (tabLogin) tabLogin.style.cssText = tabOff;
+    } else {
+      regFields.style.display = 'none';
+      loginFields.style.display = '';
+      hintEl.textContent = '已有账号：输入你的口令登录';
+      btn.textContent = '登录';
+      if (tabReg) tabReg.style.cssText = tabOff;
+      if (tabLogin) tabLogin.style.cssText = tabOn;
+    }
+    const f = curField(); if (f) f.focus();
   }
   // 用已有口令验证（老用户换设备登录 / 管理端口令）
   function verifyToken(t) {
@@ -1964,7 +2035,9 @@ function buildAuthOverlay(info) {
           document.body.removeChild(ov);
           authUnlocked = true;
           if (d.panel_store) { ARKLY_PANEL_STORE = d.panel_store; }
+          if (d.uid) { ARKLY_UID = d.uid; panelMigrateLegacy(); }
           if (typeof upRefresh === 'function') { upRefresh(); }
+          panelCloudRestore();               // 本地为空时从云端备份回填
           // 可能有过期/占位的初始问候（401 时显示 ojbk），解锁后重发一次以刷新
           const lastMsg = messagesEl.lastElementChild;
           if (lastMsg && lastMsg.textContent.includes('服务器ojbk中')) {
@@ -1976,39 +2049,62 @@ function buildAuthOverlay(info) {
           credDel('arkly_api_token');
           err.textContent = (d && d.reason === 'paused') ? '服务暂未对测试用户开放' : '口令错误，请重试';
           err.style.display = 'block';
-          input.focus();
+          const f = curField(); if (f) f.focus();
         }
       })
-      .catch(() => { err.textContent = '网络错误，请稍后重试'; err.style.display = 'block'; input.focus(); });
+      .catch(() => { err.textContent = '网络错误，请稍后重试'; err.style.display = 'block'; const f = curField(); if (f) f.focus(); });
   }
   function submit() {
-    const v = (input.value || '').trim();
-    if (!v && !canRegister) return;
     err.style.display = 'none';
-    // ① 开放注册时：先把输入当**邀请码**试注册（同 IP 老用户也会直接回位）
-    if (canRegister) {
+    // ① 注册：邀请码 + uid 一起输（都必填）
+    if (mode === 'register' && canRegister) {
+      const inv = inviteEl ? (inviteEl.value || '').trim() : '';
+      const u = (uidEl.value || '').trim();
+      if (needInvite && !inv) {
+        err.textContent = '请填写邀请码'; err.style.display = 'block'; if (inviteEl) inviteEl.focus(); return;
+      }
+      if (!u) {
+        err.textContent = '请填写你的 uid（8 位数字，首位 1/3/6/8）'; err.style.display = 'block'; uidEl.focus(); return;
+      }
+      if (!validUid(u)) {
+        err.textContent = 'uid 须为 8 位数字、首位为 1/3/6/8'; err.style.display = 'block'; uidEl.focus(); return;
+      }
       fetch('/api/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ invite: v, device_id: deviceId() })
+        body: JSON.stringify({ invite: inv, device_id: deviceId(), user_uid: u })
       }).then(r => r.json()).then(j => {
         if (j && j.ok && j.token) {
           credSet('arkly_api_token', j.token);
-          if (v) credSet('arkly_invite', v);   // 记住邀请码，下次打开无需再输
+          if (inv) credSet('arkly_invite', inv);
           if (j.created) { showRegisterResult(j); return; }
           location.reload();
           return;
         }
-        // ② 不是邀请码 → 当**已有口令**验证
-        verifyToken(v);
-      }).catch(() => verifyToken(v));
+        const reason = (j && j.reason) || '';
+        err.textContent = {
+          bad_uid: 'uid 须为 8 位数字、首位为 1/3/6/8',
+          uid_taken: '该 uid 已被占用，请换一个',
+          bad_invite: '邀请码无效',
+          register_off: '暂未开放注册，请联系管理员',
+        }[reason] || '注册失败，请检查邀请码与 uid';
+        err.style.display = 'block';
+        if (reason === 'uid_taken' || reason === 'bad_uid') uidEl.focus(); else if (inviteEl) inviteEl.focus();
+      }).catch(() => { err.textContent = '网络错误，请稍后重试'; err.style.display = 'block'; });
       return;
     }
-    verifyToken(v);
+    // ② 已有口令登录
+    const t = (tokenEl.value || '').trim();
+    if (!t) return;
+    verifyToken(t);
   }
+  if (tabReg) tabReg.addEventListener('click', function () { mode = 'register'; err.style.display = 'none'; applyMode(); });
+  if (tabLogin) tabLogin.addEventListener('click', function () { mode = 'login'; err.style.display = 'none'; applyMode(); });
   btn.addEventListener('click', submit);
-  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') submit(); });
-  input.focus();
+  [inviteEl, uidEl, tokenEl].forEach(function (el) {
+    if (el) el.addEventListener('keydown', function (e) { if (e.key === 'Enter') submit(); });
+  });
+  applyMode();
   authUnlocked = false;
 }
 
@@ -2021,12 +2117,16 @@ function buildAuthOverlay(info) {
     _runMode = (d && d.run_mode) || '';
     // 面板存储位置由后端运行模式决定：server=本地(服务器副本) / client=云端(浏览器本地缓存)
     if (d && d.panel_store) { ARKLY_PANEL_STORE = d.panel_store; }
+    if (d && d.uid) { ARKLY_UID = d.uid; panelMigrateLegacy(); }
     if (d && d.auth_required && !d.authenticated) {
       // 先静默尝试"就位"：老用户按 IP 直接回位、带邀请码的新用户自动注册；
       // 两者都不成立才弹遮罩（用户口径 2026-09-25：第一次打开尽量无感）
       const auto = await tryAutoRegister(d);
       if (!auto) { authUnlocked = false; buildAuthOverlay(d); }
-    } else if (typeof upRefresh === 'function') { upRefresh(); }
+    } else {
+      if (typeof upRefresh === 'function') { upRefresh(); }
+      panelCloudRestore();               // 本地为空时从云端备份回填
+    }
   } catch (e) {
     // 探测失败（网络/后端旧版无此接口）→ 不弹遮罩，保持原行为
   }

@@ -1092,6 +1092,39 @@ async def my_profile(request: Request):
             # /api/admin/usage）。此处用 usage_brief 而非 usage_of。
             'usage': _quota.usage_brief(uid)}
 
+
+@app.get("/api/me/panel")
+async def my_panel_get(request: Request):
+    """**面板云端备份（读）**：返回当前 uid 的面板备份（本地缓存丢失时回填用）。
+
+    用户口径 2026-10-03：云端只作**备份**、本地为主 —— 前端保存面板时推一份上来，
+    本地缓存为空（换设备 / 清了缓存）时才回填；本地有数据则不动。
+    """
+    uid = str(getattr(request.state, 'uid', '') or '')
+    if not uid:
+        raise HTTPException(status_code=401, detail='需要口令才能使用')
+    from data import panel_backup as _pb
+    return {'ok': True, 'panels': _pb.load(uid)}
+
+
+@app.post("/api/me/panel")
+async def my_panel_save(request: Request):
+    """**面板云端备份（写）**：保存当前 uid 的面板备份（客户端保存面板时推一份）。"""
+    uid = str(getattr(request.state, 'uid', '') or '')
+    if not uid:
+        raise HTTPException(status_code=401, detail='需要口令才能使用')
+    try:
+        body = await request.json()
+    except Exception:
+        body = None
+    panels = body.get('panels') if isinstance(body, dict) else body
+    if not isinstance(panels, dict):
+        from fastapi.responses import JSONResponse
+        return JSONResponse({'ok': False, 'error': '请求体须为面板对象'}, status_code=400)
+    from data import panel_backup as _pb
+    return {'ok': bool(_pb.save(uid, panels))}
+
+
 # 注入三无秘书人设
 agent = AgentApp(prompt_template=WEB_PERSONA_PROMPT)
 
