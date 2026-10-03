@@ -3039,12 +3039,15 @@ def _chat_impl(req: ChatRequest):
 
 @app.post("/api/feedback")
 async def feedback(req: Request):
-    """接收用户反馈（用户口径 2026-09-25），落盘为 JSON 一行一条。
+    """接收用户反馈（用户口径 2026-09-25；2026-10-03 补记「回复」），落盘为 JSON 一行一条。
 
-    每条记录仅含三个字段：
+    记录字段：
       - 时间：服务端接收时间（%Y-%m-%d %H:%M:%S）
       - 用户uid：提交反馈的用户标识
       - 内容：反馈对应的用户提问（前端在知识库问答回复上点反馈时上报）
+      - 回复：**阿卡莉当时给出的回答**（用户口径 2026-10-03：此前只存提问，
+              看不到"答得哪里不对"，没法据反馈精进；同样过敏感词过滤并截断）
+      - 会话：会话标识（便于按会话回溯服务端日志，非个人信息）
     云端模式写 Redis 列表 akali:feedback（保留最近 2000 条，跨重启不丢）；
     本地模式追加落盘 反馈信息/反馈收集/反馈收集.txt（同样为 JSON 一行一条）。
     """
@@ -3055,6 +3058,9 @@ async def feedback(req: Request):
             '时间': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
             '用户uid': str(getattr(req.state, 'uid', '') or ''),
             '内容': filter_sensitive_words(str(data.get('user_input') or ''))[:2000],
+            # 回复（2026-10-03 补）：前端本来就随包上报 assistant_reply，此前后端把它丢了
+            '回复': filter_sensitive_words(str(data.get('assistant_reply') or ''))[:2000],
+            '会话': str(data.get('session_id') or '')[:64],
         }
         line = json.dumps(record, ensure_ascii=False)
 
