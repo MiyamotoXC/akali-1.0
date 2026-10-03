@@ -44,6 +44,9 @@ _KIND_BY_FUNC = {
     # 知识库问答加了命中缓存后，真正调 LLM 的是下面这个「真实计算」函数
     # （见 calc_flow._handle_guide_qa 缓存包装），细则类型必须与改造前保持一致。
     '_guide_qa_uncached': '攻略生成',
+    # 舰船「就业」问答：证据不足时用 LLM 归纳 + 自评（见 calc_flow._handle_ship_use）
+    '_ship_use_llm_summary': '就业归纳',
+    '_ship_use_verify': '就业自评',
     '_semantic_rerank': '检索重排',
     '_expand_queries_llm': '查询改写',
     '_selfcheck_llm': '答案自检',

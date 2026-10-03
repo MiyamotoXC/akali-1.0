@@ -2095,6 +2095,109 @@ _DUTY_LINE_RE = re.compile(r'^[^：:=\n]{1,10}[：:]')
 _DUTY_BAD_PREFIX_RE = re.compile(r'是|原因|因为|所以|问题|说明|注意|机制|流程|步骤|操作|会导致|由于')
 
 
+def _ship_use_llm_disabled() -> bool:
+    """就业归纳是否停用（AKALI_SHIP_USE_LLM=0 关闭 → 直接走诚实兜底，不花 token）。"""
+    import os as _os
+    return str(_os.environ.get('AKALI_SHIP_USE_LLM', '1')).strip().lower() in (
+        '0', 'false', 'no', 'off')
+
+
+def _ship_use_facts(evid) -> str:
+    """证据 → 给 LLM 的事实清单（攻略出处 + 原文短句）。"""
+    rows = []
+    for doc, sec, line in (evid or [])[:8]:
+        w = ('《%s》' % doc) if doc else ''
+        if sec:
+            w += ('·' if w else '') + sec
+        rows.append('- %s：%s' % (w or '攻略', line))
+    return '\n'.join(rows) if rows else '（攻略里没有任何点名该舰的片段）'
+
+
+def _ship_use_llm_summary(name: str, msg: str, evid) -> str:
+    """就业归纳 + 自评把关：返回可用的简短归纳；未过关/失败/已关开关 → ''。
+
+    生成与自评都**只依据给定证据**：证据里没有的阵容/舰名/数值/结论不得出现；
+    证据为空时只能按舰种机制做通用判断，且必须显式标注"攻略未提、以下按舰种判断"，
+    否则自评判不合格。调用方在返回 '' 时回落诚实兜底（用户口径 2026-10-03）。
+    """
+    if _ship_use_llm_disabled() or not name:
+        return ''
+    facts = _ship_use_facts(evid)
+    try:
+        from openai import OpenAI
+        from llm.llm_client import get_llm_config, MODEL_SERVER
+        cfg = get_llm_config(temperature=0.0)
+        client = OpenAI(api_key=cfg['api_key'], base_url=MODEL_SERVER, timeout=30)
+        resp = client.chat.completions.create(
+            model=cfg['model'],
+            messages=[
+                {'role': 'system', 'content':
+                    '你是拂晓（舰灵海战手游）的攻略助手。任务：归纳某舰的「就业环境」'
+                    '（什么地方能用 / 能进什么队）。\n'
+                    '【只依据证据】下面是攻略里点名该舰的片段（含出处）。证据里没有的玩法、'
+                    '阵容、舰名、数值一律不得写入；禁止把「同类手游通用机制」「一般来说」'
+                    '「通常」这类常识当成结论。\n'
+                    '【证据为空时】只能按该舰的舰种 / 技能机制做**通用判断**，并且开头必须写明'
+                    '「攻略未提及该舰的具体就业，以下按舰种机制判断」，不许编具体阵容。\n'
+                    '【输出】不超过 130 字，分 2~4 条短句，直说能用在什么地方；不确定就写不确定；'
+                    '不要反问、不要推销、不要提「攻略库」等元信息。'},
+                {'role': 'user', 'content':
+                    '舰名：%s\n用户问：%s\n\n攻略证据：\n%s' % (name, msg, facts)},
+            ],
+        )
+        draft = (resp.choices[0].message.content or '').strip()
+    except Exception:
+        return ''
+    if not draft or len(draft) > 400:
+        return ''
+    try:
+        if not _ship_use_verify(name, msg, facts, draft):
+            print('[ship_use] 自评未通过 → 走诚实兜底 | %s' % name, flush=True)
+            return ''
+    except Exception:
+        return ''       # 自评失败一律不放行（宁可不答，也不放未经把关的推断）
+    return draft
+
+
+def _ship_use_verify(name: str, msg: str, facts: str, draft: str) -> bool:
+    """就业归纳的**自我评测**：核对是否忠于证据、有无编造 → 是否放行。
+
+    典型不合格：出现证据外的具体阵容/舰名/数值；把推测写成确定；空证据时不标注
+    "通用判断"就给具体打法；答非所问（没讲"能用在哪"）；含反问或推销。异常按不放行。
+    """
+    try:
+        from openai import OpenAI
+        from llm.llm_client import get_llm_config, MODEL_SERVER
+        cfg = get_llm_config(temperature=0.0)
+        client = OpenAI(api_key=cfg['api_key'], base_url=MODEL_SERVER, timeout=30)
+        resp = client.chat.completions.create(
+            model=cfg['model'],
+            messages=[
+                {'role': 'system', 'content':
+                    '你是严格的答案审核员。给你【攻略证据】和一份【草稿】，判断草稿能否发给用户。\n'
+                    '不合格（ok=false）：出现证据里没有的具体阵容/舰名/数值/玩法结论；把推测写成确定；'
+                    '证据为空却未标注「通用判断」就给出具体打法；没讲清"能用在哪"；含反问或推销。\n'
+                    '合格（ok=true）：每句话都能在证据或舰种通识里找到支撑，且明确回答了就业方向。\n'
+                    '只输出 JSON：{"ok": true/false, "reason": "一句话理由"}'},
+                {'role': 'user', 'content':
+                    '舰名：%s\n用户问：%s\n\n【攻略证据】\n%s\n\n【草稿】\n%s'
+                    % (name, msg, facts, draft)},
+            ],
+        )
+        raw = (resp.choices[0].message.content or '').strip()
+    except Exception:
+        return False
+    _m = re.search(r'\{[\s\S]*\}', raw)
+    if not _m:
+        return False
+    try:
+        import json as _json
+        obj = _json.loads(_m.group(0))
+    except Exception:
+        return False
+    return obj.get('ok') is True
+
+
 def _handle_ship_use(tools, msg: str):
     """「某舰有什么用 / 就业」→ 攻略向量库里找**阵容里点名该舰**的片段，原文作答。
 
@@ -2128,6 +2231,21 @@ def _handle_ship_use(tools, msg: str):
             name = _n
     if not name:
         return None
+    # 匹配变体（用户口径 2026-10-03）：改造舰在攻略里常按**未改造原名**写
+    # （「吹雪·改」的阵容就写在「吹雪」名下），只用正规名精确匹配会漏证据。
+    # 一并接受「去 ·改 / 去改」的写法；短于 2 字不收（单字极易误命中，如"雪/风"）。
+    _names = [name]
+    for _v in (name.replace('·改', '改'), name.replace('·改', ''), name.replace('改', '')):
+        if _v and _v != name and len(_v) >= 2 and _v not in _names:
+            _names.append(_v)
+
+    def _mentions(txt: str) -> str:
+        """该片段是否点名了本舰（含改造前原名），返回命中的那个写法（未命中 → ''）。"""
+        for _v in _names:
+            if _v in txt:
+                return _v
+        return ''
+
     # 候选片段两路取：① 定向阵容检索（query 直接带「阵容 配队 体系 定位」）
     # ② 实体为中心的检索（该舰被点名的片段）。两路都过下面同一套"职责行"过滤。
     cands = []                              # [(篇目, 章节, 内容)]
@@ -2146,13 +2264,15 @@ def _handle_ship_use(tools, msg: str):
                           str((_mt or {}).get('content') or '')))
     except Exception:
         pass
-    picks = []          # [(篇目, 章节, 职责行)]
+    picks = []          # [(篇目, 章节, 职责行)]  强证据：「定位/职责：舰名…」这类带冒号的职责行
+    evid = []           # [(篇目, 章节, 短句)]    弱证据：片段里点名该舰（如竞技场阵容「…埃塞克斯旗…」）
+    _seen_seg = set()
     for doc, sec, content in cands:
         if not (_LINEUP_HINT_RE.search(sec) or _LINEUP_HINT_RE.search(content)):
             continue                      # 与阵容/体系无关的片段（获取方式、技能介绍…）不抄
         for raw in content.splitlines():
             line = raw.strip().lstrip('-*·• \u3000').strip()
-            if not line or name not in line:
+            if not line or not _mentions(line):
                 continue
             if ('=' in line) or ('表格记录' in line):
                 continue                  # 表格行（名称=…；获取方式=…）不是就业描述
@@ -2160,22 +2280,83 @@ def _handle_ship_use(tools, msg: str):
                 # 长句（如竞技场"默认为：女灶神，丹阳，…。备选：…"整段）→ 按句读切开，
                 # 只留含该舰的那一小句，否则整句又长又杂、也过不了职责行正则。
                 _parts = [p.strip() for p in re.split(r'[。；;]', line) if p.strip()]
-                _hit = [p for p in _parts if name in p and len(p) <= 80]
+                _hit = [p for p in _parts if _mentions(p) and len(p) <= 80]
                 if not _hit:
                     continue
                 line = _hit[0]
-            if not _DUTY_LINE_RE.match(line):
-                continue                  # 只抄「定位：舰名…」这种职责行，防跑偏
-            _pre = re.split(r'[：:]', line, 1)[0]
-            if _DUTY_BAD_PREFIX_RE.search(_pre):
-                continue                  # 机制/说明/因果句，不是就业行
-            if (doc, sec, line) not in picks:
-                picks.append((doc, sec, line))
-            break                         # 一个片段只取一行，避免同一队伍刷屏
+            if _DUTY_LINE_RE.match(line) and \
+                    not _DUTY_BAD_PREFIX_RE.search(re.split(r'[：:]', line, 1)[0]):
+                if (doc, sec, line) not in picks:
+                    picks.append((doc, sec, line))
+                break                     # 一个片段只取一行职责行，避免同一队伍刷屏
+            # 点名了该舰但不是职责行（如竞技场「埃塞克斯旗为饺子旗雷击航」）→ 记弱证据，
+            # 供后面归纳就业定位用；同一片段最多留一句，防刷屏。
+            # 用户口径 2026-10-03：这类"攻略里明明写了"的船**必须找到并回复**，
+            # 不能再谎报"攻略没提到"（「饺子就业」就是被旧逻辑的冒号要求漏掉的）。
+            if (doc, sec) not in _seen_seg and len(line) <= 80:
+                evid.append((doc, sec, line))
+                _seen_seg.add((doc, sec))
+    # 竞技场参考阵容是「谁在哪一队」的硬证据（正文按 金/紫/蓝 × 小/中/大 分块）。
+    # 该舰在哪一块被点名就补一条证据 —— 不依赖 RAG 是否恰好召回该篇。
+    try:
+        from tools.knowledge import _pvp_parse_lineups
+        for (_pq, _ps), _pblk in (_pvp_parse_lineups() or {}).items():
+            for _pln in (_pblk or '').splitlines():
+                _pln = _pln.strip()
+                if _mentions(_pln) and len(_pln) <= 80:
+                    _pe = ('争锋竞技场简易百科', '三、参考阵容推荐·%s%s船场' % (_pq, _ps), _pln)
+                    if _pe not in evid:
+                        evid.append(_pe)
+                    break
+    except Exception:
+        pass
+    def _fallback_reply():
+        """没有职责行时的诚实兜底：有弱证据就列出"它在哪被点名"，不谎称"攻略没提到"。"""
+        if not evid:
+            return ('攻略里没有提到「%s」的阵容/就业定位，这个阿卡莉不能替它编。\n'
+                    '（想看它自身的技能与面板，直接说「查%s」即可。）' % (name, name))
+        _hits, _src = [], []
+        for doc, sec, line in evid[:3]:
+            _hits.append('- %s' % line)
+        for doc, sec, _l in evid[:6]:
+            _w = ('《%s》' % doc) if doc else ''
+            if sec:
+                _w += ('·' if _w else '') + sec
+            if _w and _w not in _src:
+                _src.append(_w)
+        return ('攻略里没有写「%s」的**就业定位**（没有「定位：…」这类描述行），'
+                '但它在这些地方被点名过：\n%s\n（出处：%s）\n'
+                '（阿卡莉不替它编定位；想看它自身技能与面板说「查%s」。）'
+                % (name, '\n'.join(_hits), '；'.join(_src) or '攻略相关章节', name))
+
     if not picks:
-        return {'reply': ('攻略里没有提到「%s」的阵容/就业定位，这个阿卡莉不能替它编。\n'
-                          '（想看它自身的技能与面板，直接说「查%s」即可。）' % (name, name)),
-                'tool_outputs': [], 'suggestions': [], 'fill_form': [],
+        # 用户口径 2026-10-03：找不到**直接对应**的攻略段落时走阶梯 ——
+        # ① 先让 LLM 依据「攻略里点名该舰的片段 + 该舰面板/技能」做简短归纳；
+        # ② 回复前**自我评测**（是否忠于证据、有没有编造、有没有答到"什么地方能用"）；
+        # ③ 评测优秀才回给用户，否则回落诚实兜底（绝不硬编）。
+        _syn = ''
+        try:
+            _syn = _ship_use_llm_summary(name, msg, evid)
+        except Exception as _e:
+            print('[ship_use] LLM 归纳失败，走兜底 | %s: %s' % (type(_e).__name__, _e), flush=True)
+        if _syn:
+            _src = []
+            for doc, sec, _l in evid[:6]:
+                _w = ('《%s》' % doc) if doc else ''
+                if sec:
+                    _w += ('·' if _w else '') + sec
+                if _w and _w not in _src:
+                    _src.append(_w)
+            reply = '「%s」的就业（阿卡莉依据攻略提及 ＋ 它自身的数据归纳）：\n%s' % (name, _syn)
+            if _src:
+                reply += '\n\n参考出处：' + '；'.join(_src)
+            reply += ('\n（这条不是攻略原文摘录，是按攻略提及＋该舰自身数据归纳的；'
+                      '要原文可问「%s 在攻略里怎么用」。）' % name)
+            return {'reply': reply, 'tool_outputs': [], 'suggestions': [], 'fill_form': [],
+                    'encounter_form': [], 'guide_files': [], 'guide_lib': '',
+                    'from_kb': True, 'ok': True}
+        _fb = _fallback_reply()
+        return {'reply': _fb, 'tool_outputs': [], 'suggestions': [], 'fill_form': [],
                 'encounter_form': [], 'guide_files': [], 'guide_lib': '',
                 'from_kb': True, 'ok': True}
     _MAX = 6
