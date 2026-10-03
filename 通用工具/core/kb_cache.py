@@ -79,11 +79,14 @@ _VER_LOCK = threading.Lock()
 _VER = {'ts': 0.0, 'value': '0'}
 
 _KB_PATHS = (
-    ('通用工具/tools/knowledge', '_GUIDE_QA_JSON'),
-    ('通用工具/tools/knowledge', '_GUIDE_QA_NPZ'),
-    ('通用工具/tools/common', 'GUIDE_KB_FILE'),
-    ('通用工具/tools/common', 'GUIDE_INDEX_FILE'),
-    ('通用工具/tools/common', 'AGENT_KB_FILE'),
+    # 注意：这里必须用**真实包名**（tools.*）—— 项目把「通用工具」目录本身加入了 sys.path，
+    # 容器里 `通用工具` 并不是可导入的包；写成 `通用工具.tools.*` 会取不到路径、
+    # 导致版本恒为 '0'（改库不失效，只剩 TTL 兜底）。本地/容器两边都只认 tools.*。
+    ('tools.knowledge', '_GUIDE_QA_JSON'),
+    ('tools.knowledge', '_GUIDE_QA_NPZ'),
+    ('tools.common', 'GUIDE_KB_FILE'),
+    ('tools.common', 'GUIDE_INDEX_FILE'),
+    ('tools.common', 'AGENT_KB_FILE'),
 )
 
 

@@ -812,6 +812,23 @@ _BOOT_ID = uuid.uuid4().hex[:8]
 app = FastAPI(title="拂晓只能小秘书")
 
 
+# ===== 未捕获异常统一回 JSON（用户口径 2026-10-03）=====
+# 背景：控制台/前端都是 JSON 客户端（fetch + res.json()）。此前服务端 500 返回的是
+# 纯文本 "Internal Server Error"，前端只能抛「SyntaxError: Unexpected token 'I'」——
+# 既看不到真实原因，也不便排障。这里统一转成 {'ok': False, 'error': '...'}，真实堆栈照旧打日志。
+# 注：HTTPException（401/403/404 等）有 FastAPI 自己的处理器，不受本处理器影响。
+@app.exception_handler(Exception)
+async def _unhandled_exception_handler(request: Request, exc: Exception):
+    import traceback as _tb
+    _tb.print_exc()
+    from fastapi.responses import JSONResponse
+    return JSONResponse(
+        {'ok': False, 'error': '%s: %s' % (type(exc).__name__, _mask(exc, _API_TOKEN)),
+         'path': str(getattr(request.url, 'path', '') or '')},
+        status_code=500,
+    )
+
+
 # ==================== 可选 API Token 鉴权（部署对外时启用） ====================
 # 在 .env 配置 AKALI_INVITE_CODE 后：外部访问的 API 请求
 # 须带请求头 X-API-Token: xxxx（或 ?token=xxxx），否则 401。
@@ -970,51 +987,74 @@ def _kb_cache_stats() -> dict:
 
 @app.get("/api/admin/usage")
 async def admin_usage(request: Request, day: Optional[str] = None):
-    """**用量视图**：某天（默认今天）每个维度键消耗的 token / 轮次 / 参考成本。
+    """**用量视图**（用户口径 2026-10-03）—— **按天看用量、按周期看限额**：
+
+    - **当日**（默认今天；`?day=YYYY-MM-DD` 回看历史日）：取自请求流水 `reqlog`
+      （按天分桶，含未走 LLM 的工具类请求）→ 当日请求数 / LLM 轮次 / token；
+    - **本周期**（周四→下周四，见 core.quota._period）：取自记账 `usage` → 已用 token
+      （输入 / 输出 / 合计）、参考成本、占额度百分比 —— 限额是**周期**口径，
+      所以百分比只对「本周期」成立（当日 token 那一列是纯流水，不含额度含义）。
 
     仅开发者侧白名单可调（用户口径 2026-09-25：运营方面的集中放在开发者侧）。
     维度键在接入账号体系后就是 **uid**（老部署是 IP/session，也能正常显示）。
     """
     _require_admin(request)
     from core import quota as _quota
-    rows = _quota.usage_snapshot(day)
-    # 日期下拉：用量或请求流水里出现过的日期都算（用户口径 2026-10-02：可回看任意历史日）
+    d = (day or datetime.date.today().isoformat()).strip()
+    period = _quota._period()
+    # ① 当日：请求流水（含未走 LLM 的请求，tok=0）
+    day_stat = {}
+    for e in _quota.recent_requests(d, 500):
+        _k = str(e.get('key') or '')
+        it = day_stat.setdefault(_k, {'req': 0, 'tok': 0, 'rounds': 0})
+        it['req'] += 1
+        _t = int(e.get('tok') or 0)
+        it['tok'] += _t
+        if _t > 0:
+            it['rounds'] += 1
+    # ② 本周期：记账口径（限额 / 占额度 / 成本 / 调用细则）
+    cur = {r['key']: r for r in _quota.usage_snapshot(period)}
+    # 日期下拉：有请求流水的日子（按天）+ 本周期起始日（供周期视图回看）
     dates = sorted(
-        {k.split('|', 1)[0] for k in _quota.STORE.usage.keys()
-         if isinstance(k, str) and '|' in k}
-        | {d for d in _quota.STORE.reqlog.keys() if isinstance(d, str)},
+        {k for k in _quota.STORE.reqlog.keys() if isinstance(k, str)} | {period},
         reverse=True,
     )
     # 把 uid 对应的人名补上，便于一眼看出是谁在用
     name_of = {u['uid']: u.get('name') or '' for u in _users.list_accounts()}
-    # 流量口径 = 请求数：按 uid 统计今天 /api/chat 请求次数（含未走 LLM 的工具类请求）
-    req_cnt = {}
-    for e in _quota.recent_requests(day, 500):
-        req_cnt[e['key']] = req_cnt.get(e['key'], 0) + 1
     owner = _users.owner_uid()
-    owner_seen = False
-    for r in rows:
-        r['name'] = name_of.get(r['key'], '')
-        r['req_count'] = req_cnt.get(r['key'], 0)
-        r['is_owner'] = (r['key'] == owner)
-        if r['key'] == owner:
-            owner_seen = True
-    # 开发者本人**始终置顶**：在「按 token 降序」之外再强制排第一（用户口径 2026-09-25）；
-    # 即便当天零用量、不在记录里，也补一行置顶，保证开发者始终可见。
-    rows.sort(key=lambda x: (0 if x['key'] == owner else 1, -x['tok_total']))
-    if not owner_seen:
-        rows.insert(0, {'key': owner, 'name': name_of.get(owner, '开发者本人'),
-                        'req_count': 0, 'rounds': 0, 'tok_in': 0, 'tok_out': 0,
-                        'tok_total': 0, 'cost': 0.0, 'plan': 'developer',
-                        'limit': 0, 'is_owner': True})
-    total = sum(r['tok_total'] for r in rows)
-    cost = round(sum(r['cost'] for r in rows), 4)
+    rows = []
+    for _k in set(day_stat) | set(cur) | {owner}:
+        if not _k:
+            continue
+        p = cur.get(_k) or {}
+        ds = day_stat.get(_k) or {}
+        rows.append({
+            'key': _k, 'name': name_of.get(_k, ''), 'is_owner': (_k == owner),
+            'plan': p.get('plan') or _quota.get_user_plan(_k),
+            'limit': p.get('limit') if p else _quota.daily_limit(_k),
+            # 当日（请求流水）
+            'req_count': ds.get('req', 0),
+            'day_tok': ds.get('tok', 0),
+            'day_rounds': ds.get('rounds', 0),
+            # 本周期（记账）
+            'rounds': p.get('rounds', 0),
+            'tok_in': p.get('tok_in', 0), 'tok_out': p.get('tok_out', 0),
+            'tok_total': p.get('tok_total', 0), 'cost': p.get('cost', 0.0),
+            'calls': p.get('calls') or {},
+        })
+    # 开发者本人**始终置顶**（用户口径 2026-09-25）：即便当天零用量、不在记录里也保留一行，
+    # 保证开发者始终可见（owner 已在上面并入键集合，这里只需排序）。
+    rows.sort(key=lambda x: (0 if x['key'] == owner else 1, -x['tok_total'], -x['day_tok']))
+    total = sum(r['tok_total'] for r in rows)         # 本周期合计（限额口径）
+    cost = round(sum(r['cost'] for r in rows), 4)     # 本周期参考成本
+    day_total = sum(r['day_tok'] for r in rows)       # 当日合计（请求流水口径）
     # 请求级明细（按天持久化，token=0 表示该请求未走 LLM）：供控制台「请求明细」表
-    recent = _quota.recent_requests(day, 500)
+    recent = _quota.recent_requests(d, 500)
     for e in recent:
         e['name'] = name_of.get(e['key'], '')
-    return {'ok': True, 'day': day or _quota._today(), 'dim': runtime.quota_key(),
-            'rows': rows, 'total_tok': total, 'total_cost': cost, 'recent': recent,
+    return {'ok': True, 'day': d, 'period': period, 'dim': runtime.quota_key(),
+            'rows': rows, 'total_tok': total, 'total_cost': cost, 'day_tok': day_total,
+            'recent': recent,
             'backend': type(_quota.STORE).__name__, 'dates': dates,
             # 知识库命中缓存概况（用户口径 2026-10-03）：命中率 / 条目数 / 开关
             'kb_cache': _kb_cache_stats()}

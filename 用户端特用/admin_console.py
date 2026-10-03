@@ -154,12 +154,12 @@ ADMIN_HTML = r"""<!DOCTYPE html>
       $('usage').innerHTML = '<div class="empty">' + d.day + ' 还没有用量记录。（维度：' + d.dim + '，存储：' + d.backend + '）</div>';
       return;
     }
-    var h = '<table><tr><th>uid</th><th>备注</th><th>套餐</th><th class="num">流量(请求)</th>'
-          + '<th class="num">LLM调用</th>'
-          + '<th class="num">输入</th><th class="num">输出</th><th class="num">合计</th>'
-          + '<th>占额度</th><th class="num">参考成本</th><th>细则</th></tr>';
+    var h = '<table><tr><th>uid</th><th>备注</th><th>套餐</th><th class="num">当日请求</th>'
+          + '<th class="num">当日LLM</th><th class="num">当日token</th>'
+          + '<th class="num">本周期入</th><th class="num">本周期出</th><th class="num">本周期合计</th>'
+          + '<th>本周期占额度</th><th class="num">本周期成本</th><th>细则</th></tr>';
     rows.forEach(function (r) {
-      // limit = 0 表示不限量（开发者本人），不画进度条
+      // limit = 0 表示不限量（开发者本人），不画进度条；百分比只对**本周期**成立（限额是周期口径）
       var unlimited = !r.limit;
       var pct = unlimited ? 0 : Math.min(100, r.tok_total / r.limit * 100);
       h += '<tr' + (r.is_owner ? ' class="owner"' : '') + '>'
@@ -167,10 +167,11 @@ ADMIN_HTML = r"""<!DOCTYPE html>
         + '<td>' + (r.name || '') + (r.is_owner ? ' <span class="pill on">我</span>' : '') + '</td>'
         + '<td>' + (r.is_owner ? '开发者' : ({'developer':'开发者','whitelist':'白名单','paid':'付费','free':'免费','unlimited':'不限量'}[r.plan] || r.plan)) + '</td>'
         + '<td class="num">' + (r.req_count || 0) + '</td>'
-        + '<td class="num">' + fmt(r.rounds) + '</td>'
+        + '<td class="num">' + fmt(r.day_rounds) + '</td>'
+        + '<td class="num"><b>' + fmt(r.day_tok) + '</b></td>'
         + '<td class="num">' + fmt(r.tok_in) + '</td>'
         + '<td class="num">' + fmt(r.tok_out) + '</td>'
-        + '<td class="num"><b>' + fmt(r.tok_total) + '</b></td>'
+        + '<td class="num">' + fmt(r.tok_total) + '</td>'
         + '<td>' + (unlimited
             ? '<span class="pill on">不限量</span>'
             : '<div class="bar' + (pct >= 80 ? ' warn' : '') + '"><i style="width:' + pct.toFixed(1) + '%"></i></div>'
@@ -180,8 +181,9 @@ ADMIN_HTML = r"""<!DOCTYPE html>
         + '<td><details><summary style="cursor:pointer">点开</summary>' + renderDetail(r, d) + '</details></td>'
         + '</tr>';
     });
-    h += '</table><div class="empty">合计 ' + fmt(d.total_tok) + ' token，参考成本 ￥'
-       + (d.total_cost || 0).toFixed(4) + '　（' + d.day + '，维度：' + d.dim + '，存储：' + d.backend + '）</div>';
+    h += '</table><div class="empty">当日（' + d.day + '）合计 ' + fmt(d.day_tok) + ' token；'
+       + '本周期（' + (d.period || '') + ' 起，周四→下周四）合计 ' + fmt(d.total_tok) + ' token，参考成本 ￥'
+       + (d.total_cost || 0).toFixed(4) + '　（维度：' + d.dim + '，存储：' + d.backend + '）</div>';
     // 请求明细：全部请求的流水（本轮token=0 表示该请求未走 LLM，如攻略/计算）
     var rc = d.recent || [];
     h += '<div style="margin-top:12px;font-size:12px;color:var(--soft);font-weight:600">'

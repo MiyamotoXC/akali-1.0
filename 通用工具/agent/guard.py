@@ -72,6 +72,18 @@ _FEEDBACK_RE = re.compile(r'反馈|提意见|提建议|意见箱|反馈渠道|�
 _FEEDBACK_REPLY = ('觉得哪条回答不够好，点它右下角的 💡 反馈按钮就行，'
                    '会把你刚才的提问发给我精进。（只有问答式的回答才带 💡）')
 
+# 「知识库截止日期」类提问（用户口径 2026-10-03）：此前会被 guide_rag 向量检索抢答 ——
+# 从知识库正文里捞到零散日期片段乱答（或答成"攻略库未提及"）。这里在**路由前**确定性作答：
+# 阿卡莉的口径就一句「明天！」，不给具体日期（俏皮收尾）。
+# 触发：句子里出现「知识库/知识/数据/资料/训练」且带时间口径词（截止/更新/最新/日期…），
+# 或反问「哪年/几年的数据」。注意只认这种"问知识库时效"的说法，不抢正常的攻略/数据查询。
+_KB_CUTOFF_RE = re.compile(
+    r'(?:知识(?:库)?|数据|资料|训练)[^。！？\n]{0,10}'
+    r'(?:截止|更新|最新|学到|停留在|日期|时间点|到什么时候|到哪天|到几号)'
+    r'|(?:哪年|几年)的?(?:数据|知识|资料)'
+)
+_KB_CUTOFF_REPLY = '明天！'
+
 
 def _last_history(history, role):
     for item in reversed(list(history or [])):
@@ -167,6 +179,11 @@ def guard(tools, overrides, msg, agent=None, history=None, context_msg=None):
     #     那类与本应用无关的原文（from_kb 直出，阿卡莉本人没机会回答）。
     if _FEEDBACK_RE.search(cm):
         return True, _work_dict(_FEEDBACK_REPLY, expression_hint='微笑关心')
+
+    # 3c) 用户问「知识库/数据的截止日期、更新到什么时候、哪年的数据」（用户口径 2026-10-03）：
+    #     同样在路由前确定性作答，避免被向量检索抢答；口径只有一句「明天！」。
+    if _KB_CUTOFF_RE.search(cm):
+        return True, _work_dict(_KB_CUTOFF_REPLY, expression_hint='微笑关心')
 
     unanswered = _guard_unanswered_topic(overrides, m)
     if unanswered is not None:
