@@ -27,6 +27,17 @@ def route_work_dispatch(tools, overrides, msg, agent=None, history=None):
                 return _use
     except Exception:
         pass
+    # 争锋竞技场「队伍/阵容推荐」（用户口径 2026-10-03）：同样放在最前 ——
+    # RAG 会只捞到「金大船」那几块（正文写的是"金中船/紫中船"，体量词对不上），
+    # 这里按场质/体量定向取原文块直出；命中不到就交回原链路。
+    try:
+        if not (overrides or {}).get('calc_state'):
+            from core.calc_flow import _handle_pvp_lineup
+            _pvp = _handle_pvp_lineup(tools, msg)
+            if _pvp is not None:
+                return _pvp
+    except Exception:
+        pass
     mode = os.environ.get('AKALI_ROUTE_MODE', 'agent').strip().lower()
     if mode == 'agent':
         try:

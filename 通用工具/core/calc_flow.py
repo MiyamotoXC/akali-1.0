@@ -2193,6 +2193,66 @@ def _handle_ship_use(tools, msg: str):
             'from_kb': True, 'ok': True}
 
 
+# ======================================================================
+# 争锋竞技场「队伍/阵容推荐」（用户口径 2026-10-03）
+# 问题：问「竞技场中船队伍推荐」，RAG 只捞到「金大船」那几块就作答（正文写的是
+# 「金中船/紫中船」，体量词字面对不上），答案跑偏；换个说法（pvp…）还会撞上服务异常。
+# 做法：攻略《7.1 争锋竞技场简易百科》的「三、参考阵容推荐」本来就按
+# 【金/紫/蓝 × 小/中/大船】分块写好（tools.knowledge._pvp_parse_lineups 已可解析），
+# 这里按用户问到的场质/体量**定向取原文块直出** —— 准、快、零 LLM。
+# ======================================================================
+_PVP_LINEUP_RE = re.compile(r'竞技场|争锋|pvp|jjc', re.I)
+_PVP_WANT_RE = re.compile(r'阵容|队伍|配队|推荐|用哪些|带哪些|练哪些')
+
+
+def _handle_pvp_lineup(tools, msg: str):
+    """问「竞技场（金/紫/蓝 × 小/中/大）船 队伍/阵容 推荐」→ 直出对应块的攻略原文。
+
+    触发：消息含 竞技场/争锋/pvp **且**含 阵容/队伍/推荐 等词，且能定位到具体分块。
+    未指明场质/体量 → 全部列出（最多 4 块）；定位不到 → 返回 None 交回原链路。
+    """
+    if not msg or not _PVP_LINEUP_RE.search(msg) or not _PVP_WANT_RE.search(msg):
+        return None
+    try:
+        from tools.knowledge import _pvp_parse_lineups
+        blocks = _pvp_parse_lineups() or {}
+    except Exception:
+        return None
+    if not blocks:
+        return None
+    qs = [q for q in '金紫蓝' if q in msg]
+    ss = [s for s in '小中大' if s in msg]
+    keys = [k for k in sorted(blocks, key=lambda k: ('金紫蓝'.index(k[0]), '小中大'.index(k[1])))
+            if (not qs or k[0] in qs) and (not ss or k[1] in ss)]
+    if not keys:
+        return None
+    _CAP = 2600
+    parts, used = [], 0
+    for (q, s) in keys:
+        text = (blocks.get((q, s)) or '').strip()
+        if not text:
+            continue
+        parts.append('◆ %s·%s船场\n%s' % (q, s, text))
+        used += 1
+        if used >= 4:
+            break
+    if not parts:
+        return None
+    body = '\n\n'.join(parts)
+    cut = ''
+    if len(body) > _CAP:
+        body = body[:_CAP].rstrip() + '…'
+        cut = '\n（原文较长，此处截断）'
+    head = ('《争锋竞技场简易百科 · 三、参考阵容推荐》原文（%s）：'
+            % '＋'.join('%s%s' % (q, s) for q, s in keys[:used]))
+    reply = (head + '\n\n' + body + cut +
+             '\n\n（原文摘录、未改写。天气与赛季会影响强度，别照抄阵容；'
+             '想看整篇可回复「争锋攻略」。）')
+    return {'reply': reply, 'tool_outputs': [], 'suggestions': [], 'fill_form': [],
+            'encounter_form': [], 'guide_files': [], 'guide_lib': '',
+            'from_kb': True, 'ok': True}
+
+
 def _route_guide(tools, msg: str) -> dict:
     """攻略路由：①精确篇名匹配 → 直接给那一篇攻略（免费）；
     ②分类直达 → 打开滑块并选中分类；

@@ -1024,7 +1024,14 @@ _TERM_ALIAS = {
     '点燃': '点燃 燃烧', '燃烧': '点燃 燃烧',
     '暴击': '暴击率 暴击伤害', '命中': '命中值 命中率',
     '练级': '练级 经验', '推图': '推图 主线', '配队': '配队 阵容',
-    '竞技场': '争锋竞技场', 'jjc': '争锋竞技场',
+    '竞技场': '争锋竞技场', 'jjc': '争锋竞技场', 'pvp': '争锋竞技场 PVP',
+    # 竞技场「体量」口语（用户口径 2026-10-03）：攻略《争锋竞技场简易百科·参考阵容推荐》
+    # 按「金/紫/蓝 × 小/中/大船」分块写，问"中船队伍推荐"却检索不到中船那一块 ——
+    # 这里把体量词展开成正文用词，让 BM25/向量两路都能对上。
+    '小船': '小船 金小船 紫小船 蓝小船 参考阵容',
+    '中船': '中船 金中船 紫中船 蓝中船 参考阵容',
+    '大船': '大船 金大船 紫大船 蓝大船 参考阵容',
+    '队伍推荐': '队伍 阵容 参考阵容 推荐', '阵容推荐': '阵容 参考阵容 推荐',
     '拉古兹': '拉古兹', '遭遇战': '遭遇战',
     '旗舰': '旗舰', '支援技': '支援技', '必杀': '必杀技', '通常技': '通常技',
     '架': '舰载机 飞机', '门': '火炮 主炮',
@@ -1062,17 +1069,32 @@ def _expand_query(query: str) -> str:
     except Exception:
         pass
     low = q.lower()
+    # ③-0 竞技场「体量」优先对齐（用户口径 2026-10-03）：
+    #   攻略正文写的是「金中船 / 紫中船」，用户口语是「中船队伍推荐」——体量词若进不了
+    #   query，就检索不到中船那一块（实测会只捞到"金大船"并据此作答）。
+    #   ③ 的追加按 key 长度排序且只补 2 个术语，"中船"（2 字）永远挤不进去，故在此**优先**补。
+    if re.search(r'竞技场|争锋|pvp|jjc', low):
+        _qs = [x for x in '金紫蓝' if x in low]
+        _ss = [x for x in '小中大' if x in low]
+        if _ss:
+            _sz = _ss[0]
+            _toks = [_sz + '船']
+            if _qs:
+                _toks.append(_qs[0] + _sz + '船')
+            else:
+                _toks.extend([x + _sz + '船' for x in '金紫蓝'])
+            adds.append(' '.join(_toks))   # 作为一个多词项追加：'中船 金中船 紫中船 蓝中船'
     # ③ 机制/玩法口语：昵称已占满 2 个则不再追加；最多补 2 个术语，避免长 query 被无关术语稀释
-    if len(adds) < 2:
+    if len(adds) < 3:
         for k, v in sorted(_TERM_ALIAS.items(), key=lambda x: -len(x[0])):
             if k in low:
                 for term in v.split():
                     if term not in adds:
                         adds.append(term)
                         break
-            if len(adds) >= 2:
+            if len(adds) >= 3:
                 break
-    return q if not adds else (q + " " + " ".join(adds[:2]))
+    return q if not adds else (q + " " + " ".join(adds[:3]))
 
 
 # jieba 词级分词（BM25 词项来源）：用户词典由内置词典表生成——
