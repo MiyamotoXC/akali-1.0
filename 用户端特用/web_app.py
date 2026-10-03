@@ -3041,15 +3041,15 @@ def _chat_impl(req: ChatRequest):
 async def feedback(req: Request):
     """接收用户反馈（用户口径 2026-09-25；2026-10-03 补记「回复」），落盘为 JSON 一行一条。
 
-    记录字段：
-      - 时间：服务端接收时间（%Y-%m-%d %H:%M:%S）
-      - 用户uid：提交反馈的用户标识
-      - 内容：反馈对应的用户提问（前端在知识库问答回复上点反馈时上报）
-      - 回复：**阿卡莉当时给出的回答**（用户口径 2026-10-03：此前只存提问，
-              看不到"答得哪里不对"，没法据反馈精进；同样过敏感词过滤并截断）
-      - 会话：会话标识（便于按会话回溯服务端日志，非个人信息）
-    云端模式写 Redis 列表 akali:feedback（保留最近 2000 条，跨重启不丢）；
-    本地模式追加落盘 反馈信息/反馈收集/反馈收集.txt（同样为 JSON 一行一条）。
+    记录字段（用户口径 2026-10-03：按「**用户输入 / 回答**」两栏录入）：
+      - 用户输入：用户当时的提问（前端在知识库问答回复上点反馈时上报）
+      - 回答：**阿卡莉当时给出的回答**（此前只存提问，看不到"答得哪里不对"，
+              没法据反馈精进；前端本来就随包上报 assistant_reply，是后端丢掉了）
+      - 时间 / 用户uid / 会话：元信息（服务端接收时间、提交者、会话标识），便于排序与回溯
+    两条正文都过敏感词过滤并截断 2000 字。
+    云端模式**双写**：Redis 列表 akali:feedback（快速回溯，保留最近 2000 条）
+      + 落盘 反馈信息/反馈收集/反馈收集.txt（绑定挂载到宿主机，重建容器不丢）；
+    本地模式只落盘同一份文件。均为 JSON 一行一条。
     """
     try:
         data = await req.json()
@@ -3057,9 +3057,8 @@ async def feedback(req: Request):
         record = {
             '时间': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
             '用户uid': str(getattr(req.state, 'uid', '') or ''),
-            '内容': filter_sensitive_words(str(data.get('user_input') or ''))[:2000],
-            # 回复（2026-10-03 补）：前端本来就随包上报 assistant_reply，此前后端把它丢了
-            '回复': filter_sensitive_words(str(data.get('assistant_reply') or ''))[:2000],
+            '用户输入': filter_sensitive_words(str(data.get('user_input') or ''))[:2000],
+            '回答': filter_sensitive_words(str(data.get('assistant_reply') or ''))[:2000],
             '会话': str(data.get('session_id') or '')[:64],
         }
         line = json.dumps(record, ensure_ascii=False)
@@ -3083,7 +3082,7 @@ async def feedback(req: Request):
             print('[FEEDBACK] 落盘失败（Redis 已记录，不阻断）：%s'
                   % _mask(_fe, _API_TOKEN), flush=True)
 
-        print("[FEEDBACK] %s -> %s" % (record['用户uid'], record['内容'][:40]), flush=True)
+        print("[FEEDBACK] %s -> %s" % (record['用户uid'], record['用户输入'][:40]), flush=True)
         return {"ok": True}
     except Exception as e:
         print(f"[FEEDBACK ERROR] {_mask(e, _API_TOKEN)}", flush=True)
