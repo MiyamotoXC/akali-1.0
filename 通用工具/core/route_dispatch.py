@@ -16,6 +16,17 @@ import traceback
 
 
 def route_work_dispatch(tools, overrides, msg, agent=None, history=None):
+    # 舰船「用途 / 就业」问答（用户口径 2026-10-03）：放在**五层分发最前** ——
+    # agent 模式下 dispatcher 的 LLM 路由会先接走「X 有什么用」，答成泛泛的攻略片段；
+    # 这里确定性拦下（不调 LLM），agent / legacy 两种模式都覆盖。
+    try:
+        if not (overrides or {}).get('calc_state'):
+            from core.calc_flow import _handle_ship_use
+            _use = _handle_ship_use(tools, msg)
+            if _use is not None:
+                return _use
+    except Exception:
+        pass
     mode = os.environ.get('AKALI_ROUTE_MODE', 'agent').strip().lower()
     if mode == 'agent':
         try:

@@ -2071,6 +2071,128 @@ def _handle_tips(msg: str):
             'ok': True}
 
 
+# ======================================================================
+# 舰船「用途 / 就业」问答（用户口径 2026-10-03）
+# 用户问「X 有什么用 / 有什么就业 / 能配什么队」时：到**向量库**里找攻略中**点名该舰**的
+# 阵容 / 体系片段（实体为中心的检索 find_ship_mentions），把该舰在阵容里承担的**职责行**
+# 原文抄给用户（连篇目·章节一起给）；攻略里没点名 / 没有阵容上下文 → 给诚实答复，不硬编。
+# 取舍：这一步**不调 LLM** —— 就业本来就写在攻略的职责行里（如「输出拐：胡德、沙恩（旗舰）」），
+# 原文直出最准、最快、零成本；回复同样带 from_kb 标记（前端会给 💡 反馈按钮）。
+# ======================================================================
+_SHIP_USE_RE = re.compile(
+    r'有什么用|有啥用|干什么用|能干嘛|能干什么|能做什么|做什么用|干嘛用|拿来干嘛|拿来干'
+    r'|就业|用途|定位是什么|什么定位|能配什么|配什么队|进什么队|适合什么队|有什么阵容|阵容里'
+)
+# 「阵容 / 体系」上下文特征：章节名或片段内容里出现即认为该片段在讲就业
+_LINEUP_HINT_RE = re.compile(
+    r'阵容|配队|体系|编队|站位|旗舰|推图|无尽|竞技|遭遇|演习|'
+    r'AOE|aoe|输出|拐|奶|前排|后排|辅助|生存|单点|清杂|控场|坦克'
+)
+# 职责行：形如「输出拐：胡德、沙恩（旗舰）」「奶：杰维斯」——冒号前是短定位词
+_DUTY_LINE_RE = re.compile(r'^[^：:=\n]{1,10}[：:]')
+# 冒号前若是这些词，说明是机制/说明/因果句，不是"这艘船干什么"的就业行（如
+# 「卡切换的原因是：…有胡德必杀…」曾被误收）。用于剔除这类句子。
+_DUTY_BAD_PREFIX_RE = re.compile(r'是|原因|因为|所以|问题|说明|注意|机制|流程|步骤|操作|会导致|由于')
+
+
+def _handle_ship_use(tools, msg: str):
+    """「某舰有什么用 / 就业」→ 攻略向量库里找**阵容里点名该舰**的片段，原文作答。
+
+    - 触发：消息里有用途/就业类问法 **且**能解析出具体舰名（BOSS 名不算，交回原链路）；
+    - 命中：列出该舰在各阵容里承担的职责行（≤6 条）+ 篇目·章节出处；
+    - 未命中：诚实答复"攻略未提及"（不返回 None，免得又被别的链路编一通）；
+    - 非该类问法 / 解析不出舰名 → 返回 None（完全不影响原有链路）。
+    """
+    if not msg or not _SHIP_USE_RE.search(msg):
+        return None
+    # 舰名解析：先把昵称/谐音/错字换成正规名（standardize 返回的是**整句替换后文本**），
+    # 再拿 App 里的正规舰名做子串匹配、取最长的那个（吹雪·改 优先于 吹雪）。
+    # 用 App 的舰名表天然排除 BOSS（嘉波等不在 storage 里）→「嘉波配什么队」会交回遭遇战链路。
+    try:
+        from core.entity_norm import standardize
+        _std = str(standardize(msg) or msg)
+    except Exception:
+        _std = msg
+    app = None
+    for _t in (tools or []):
+        _cfg = getattr(_t, 'cfg', None)
+        if isinstance(_cfg, dict) and _cfg.get('app') is not None:
+            app = _cfg['app']
+            break
+    if app is None or not getattr(app, 'storage', None):
+        return None
+    name = ''
+    for _n in (app.storage or {}):
+        _n = str(_n)
+        if _n and _n in _std and len(_n) > len(name):
+            name = _n
+    if not name:
+        return None
+    # 候选片段两路取：① 定向阵容检索（query 直接带「阵容 配队 体系 定位」）
+    # ② 实体为中心的检索（该舰被点名的片段）。两路都过下面同一套"职责行"过滤。
+    cands = []                              # [(篇目, 章节, 内容)]
+    try:
+        from tools.knowledge import _guide_rag_search, _split_rag_segments
+        _text, _reason = _guide_rag_search('%s 阵容 配队 体系 定位' % name, 8)
+        for _doc, _sec, _content, _sim in _split_rag_segments(_text or ''):
+            cands.append((_doc or '', _sec or '', _content or ''))
+    except Exception:
+        pass
+    try:
+        from tools.knowledge import find_ship_mentions
+        for _mt in ((find_ship_mentions(name) or {}).get('mentions') or []):
+            cands.append((str((_mt or {}).get('doc') or ''),
+                          str((_mt or {}).get('section') or ''),
+                          str((_mt or {}).get('content') or '')))
+    except Exception:
+        pass
+    picks = []          # [(篇目, 章节, 职责行)]
+    for doc, sec, content in cands:
+        if not (_LINEUP_HINT_RE.search(sec) or _LINEUP_HINT_RE.search(content)):
+            continue                      # 与阵容/体系无关的片段（获取方式、技能介绍…）不抄
+        for raw in content.splitlines():
+            line = raw.strip().lstrip('-*·• \u3000').strip()
+            if not line or name not in line:
+                continue
+            if ('=' in line) or ('表格记录' in line):
+                continue                  # 表格行（名称=…；获取方式=…）不是就业描述
+            if len(line) > 90:
+                # 长句（如竞技场"默认为：女灶神，丹阳，…。备选：…"整段）→ 按句读切开，
+                # 只留含该舰的那一小句，否则整句又长又杂、也过不了职责行正则。
+                _parts = [p.strip() for p in re.split(r'[。；;]', line) if p.strip()]
+                _hit = [p for p in _parts if name in p and len(p) <= 80]
+                if not _hit:
+                    continue
+                line = _hit[0]
+            if not _DUTY_LINE_RE.match(line):
+                continue                  # 只抄「定位：舰名…」这种职责行，防跑偏
+            _pre = re.split(r'[：:]', line, 1)[0]
+            if _DUTY_BAD_PREFIX_RE.search(_pre):
+                continue                  # 机制/说明/因果句，不是就业行
+            if (doc, sec, line) not in picks:
+                picks.append((doc, sec, line))
+            break                         # 一个片段只取一行，避免同一队伍刷屏
+    if not picks:
+        return {'reply': ('攻略里没有提到「%s」的阵容/就业定位，这个阿卡莉不能替它编。\n'
+                          '（想看它自身的技能与面板，直接说「查%s」即可。）' % (name, name)),
+                'tool_outputs': [], 'suggestions': [], 'fill_form': [],
+                'encounter_form': [], 'guide_files': [], 'guide_lib': '',
+                'from_kb': True, 'ok': True}
+    _MAX = 6
+    lines = []
+    for doc, sec, line in picks[:_MAX]:
+        where = ('《%s》' % doc) if doc else ''
+        if sec:
+            where += ('·' if where else '') + sec
+        lines.append('· %s%s' % (line, ('　（%s）' % where) if where else ''))
+    reply = ('「%s」在攻略里的就业：\n%s\n\n以上为攻略原文摘录（共 %d 处阵容/体系提及%s）。'
+             % (name, '\n'.join(lines), len(picks),
+                ('，此处列前 %d 处' % _MAX) if len(picks) > _MAX else ''))
+    return {'reply': reply, 'tool_outputs': [], 'suggestions': [], 'fill_form': [],
+            'encounter_form': [], 'guide_files': [], 'guide_lib': '',
+            'from_kb': True, 'ok': True}
+
+
 def _route_guide(tools, msg: str) -> dict:
     """攻略路由：①精确篇名匹配 → 直接给那一篇攻略（免费）；
     ②分类直达 → 打开滑块并选中分类；
@@ -4333,6 +4455,14 @@ def route_work(tools, overrides, msg: str, agent=None, allow_intent_llm=True, up
         return {'reply': f'《{m_unimpl.group(0)}》暂未实装，指挥官。',
                 'tool_outputs': [], 'suggestions': [], 'fill_form': [],
                 'encounter_form': [], 'guide_files': [], 'guide_lib': '', 'ok': True}
+
+    # 0. 舰船「用途 / 就业」问答（用户口径 2026-10-03）：在意图分发前确定性处理 ——
+    #    否则「X 值得练吗」会被 evaluate（_handle_ship_compare）抢走、「X 有什么用」会被
+    #    末端 RAG 兜底随机发挥。计算流程进行中不打断（放行给原流程）。
+    if not overrides.get('calc_state'):
+        _use_r = _handle_ship_use(tools, msg)
+        if _use_r is not None:
+            return _use_r
 
     # 0. 计算流程排他（工具流程中禁止切闲聊/其他工具）：
     # calc_state 激活时（计算进行中），输入默认进 handle_calc 计算流程，
