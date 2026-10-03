@@ -74,3 +74,16 @@ schema_used_range.txt
 Thumbs.db
 *.swp
 *.lnk
+
+# ---- 本机临时脚本 / 日志（自用，勿入库）----
+# 说明：排障时会在仓库根目录生成 _t_*.py / _t_*.ps1 / _t_*.sh、服务日志 _srv.*、
+# 上传用的 _deploy.tgz 等；此前有两次误提交，这里在根目录统一忽略。
+/_*.py
+/_*.ps1
+/_*.sh
+/_*.bat
+/_srv.*
+/_deploy.tgz
+/_t_page.html
+/_t_dom.*
+/_t_chrome/
