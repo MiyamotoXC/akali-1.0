@@ -508,6 +508,11 @@
   .guide-preview-body iframe { width: 100%; height: 100%; border: none; }
   .guide-preview-body img { width: 100%; height: auto; display: block; }
   .guide-preview-body .dl-tip { padding: 40px; text-align: center; color: var(--ink-soft); font-size: 15px; }
+  /* 图片类攻略直载时的占位提示（用户口径 2026-10-04：图片类攻略要**直接加载**） */
+  .guide-img-tip {
+    padding: 12px 16px; font-size: 13px; color: var(--ink-soft);
+    background: var(--accent-soft, #eef4f9); border-bottom: 1px solid var(--line);
+  }
   /* 旗舰勾选（单选互斥） */
   .fill-flagship {
     display: inline-flex; align-items: center; gap: 4px;
@@ -810,6 +815,82 @@ window.AKALI_BOOT_ID = '__AKALI_BOOT_ID__';
   window.fetch = function (u, o) {
     if (typeof u === 'string' && u.charAt(0) === '/') u = B + u;
     return _f(u, o);
+  };
+})();
+
+// ===== 全局 API 超时保护（用户口径 2026-10-04：**所有回复**都算，不止对话）=====
+// 任何 /api/ 请求超过 API_TIMEOUT_MS 仍未返回 → 直接 abort（调用方 catch 到超时错误，
+// 给「响应过久，服务器ojbk中」提示），并**自动反馈**一次（提问随包上报，开发者不必
+// 等用户手点 💡）。覆盖对话 / 天气 / 面板备份 / 名录 等一切接口 —— 不再只保护对话。
+// 可调（排障/自测）：URL 带 ?chat_timeout_ms=1234，或 window.ARKLY_API_TIMEOUT_MS /
+// ARKLY_CHAT_TIMEOUT_MS；设 0 关闭。
+var API_TIMEOUT_MS = (function () {
+  try {
+    var sp = new URLSearchParams(location.search);
+    var q = sp.get('chat_timeout_ms') || sp.get('api_timeout_ms');
+    if (q !== null && q !== '' && !isNaN(Number(q))) return Math.max(0, Number(q));
+  } catch (e) {}
+  if (typeof window.ARKLY_API_TIMEOUT_MS === 'number') return window.ARKLY_API_TIMEOUT_MS;
+  if (typeof window.ARKLY_CHAT_TIMEOUT_MS === 'number') return window.ARKLY_CHAT_TIMEOUT_MS;
+  return 60000;
+})();
+
+// 调用方据此判断「这次失败是超时中止」而非网络/服务异常
+function isTimeoutError(e) {
+  return !!(e && (e.name === 'AbortError' || /abort/i.test(String(e.message || ''))));
+}
+
+// 超时自动反馈：与 💡 按钮同一接口（/api/feedback），类型 timeout
+function _reportTimeout(url, opts, secs) {
+  if (String(url || '').indexOf('/api/feedback') >= 0) return;   // 防自身递归
+  var q = '';
+  try {
+    if (opts && typeof opts.body === 'string') {
+      var b = JSON.parse(opts.body);
+      q = b.message || b.query || b.name || '';
+    }
+  } catch (e) {}
+  var headers = { 'Content-Type': 'application/json' };
+  try { if (typeof _apiHeaders === 'function') headers = Object.assign(headers, _apiHeaders()); } catch (e) {}
+  var sid = '';
+  try { if (typeof _sessionId === 'function') sid = _sessionId(); } catch (e) {}
+  try {
+    var raw = window.__arklyRawFetch || window.fetch;
+    raw('/api/feedback', {
+      method: 'POST', headers: headers, credentials: 'include',
+      body: JSON.stringify({
+        session_id: sid,
+        message_id: 'timeout-' + Date.now(),
+        user_input: q || ('（接口 ' + url + ' 请求超时）'),
+        assistant_reply: '（响应超时 ' + secs + 's，已自动中止：' + url + '）',
+        feedback_type: 'timeout', from_kb: false,
+        timestamp: new Date().toISOString(), conversation: []
+      })
+    }).then(function (r) { return r.json(); })
+      .then(function (d) { console.log('[timeout-feedback]', url, d); })
+      .catch(function () {});
+  } catch (e) {}
+}
+
+(function () {
+  // 装在 ARKLY_API_BASE 那层之内（顺序：超时 → BASE 重写 → 原生），故 u 还是原始
+  // 相对路径（/api/...），跨域场景也能正确命中判断。
+  var raw = window.fetch.bind(window);
+  window.__arklyRawFetch = raw;
+  window.fetch = function (u, o) {
+    var url = String(u || '');
+    o = o || {};
+    if (url.indexOf('/api/') < 0 || API_TIMEOUT_MS <= 0 || o.signal) return raw(u, o);
+    var ctl = new AbortController();
+    var t = setTimeout(function () {
+      try { ctl.abort(); } catch (e) {}
+      _reportTimeout(url, o, Math.round(API_TIMEOUT_MS / 1000));
+    }, API_TIMEOUT_MS);
+    var opts = {};
+    for (var k in o) { if (Object.prototype.hasOwnProperty.call(o, k)) opts[k] = o[k]; }
+    opts.signal = ctl.signal;
+    return raw(u, opts).then(function (r) { clearTimeout(t); return r; },
+                             function (e) { clearTimeout(t); throw e; });
   };
 })();
 
@@ -1369,7 +1450,13 @@ function openGuidePreview(g) {
   const url = resolveAsset('/kb/' + encodeURI(g.path));
   let body = '';
   if (ext === 'png' || ext === 'jpg' || ext === 'jpeg') {
-    body = '<img loading="lazy" src="' + url + '" alt="' + esc(g.title) + '">';
+    // 图片类攻略：**直接加载**（用户口径 2026-10-04）。预览是用户主动点开的，懒加载
+    // 只会让大图（攻略图常见数 MB）在空弹窗里等滚动才出图；改 eager + 异步解码，
+    // 并在未就绪时给占位提示（onload/onerror 时替换/移除）。
+    body = '<div class="guide-img-tip" id="guideImgTip">图片加载中…（攻略图较大，请稍候）</div>'
+      + '<img loading="eager" decoding="async" src="' + url + '" alt="' + esc(g.title) + '"'
+      + ' onload="var t=document.getElementById(\'guideImgTip\');if(t)t.remove();"'
+      + ' onerror="var t=document.getElementById(\'guideImgTip\');if(t)t.textContent=\'图片加载失败。可点右上角「⬇ 下载」保存到本地查看。\';">';
   } else if (ext === 'docx' || ext === 'doc') {
     // 预览路由 /kb_html/ 不在 ASSET_BASE 的 /kb/ 映射内：跨域/扩展场景需显式拼 API 基址
     const _htmlBase = String(window.ARKLY_API_BASE || '').replace(/\/$/, '');
@@ -2565,6 +2652,12 @@ function openFavorForm() {
     sendChat(msg);
   });
 }
+function _ojbkBubbleHtml() {
+  return '<div class="role-tag">阿卡莉</div>服务器ojbk中。'
+    + '<div class="sticker-wrap"><img loading="lazy" class="sticker-img" src="'
+    + resolveAsset('/kb/图片素材/表情包/ojbk.png') + '" alt="ojbk"></div>';
+}
+
 async function sendChat(text) {
   // 发送消息时重新启用输入框（用户提交表单后）
   inputEl.disabled = false;
@@ -2593,6 +2686,14 @@ ${weatherData.location}实时天气：${weatherData.weather}
       
       typing.querySelector('.bubble').innerHTML = weatherReply;
     } catch (error) {
+      // 超时（全局包装已中止并自动反馈）→ 明确提示，不走"定位/失败"分支
+      if (isTimeoutError(error)) {
+        typing.querySelector('.bubble').innerHTML =
+          '<div class="role-tag">阿卡莉</div>响应过久，服务器ojbk中。'
+          + '天气查询已中止，并已自动反馈给开发者。';
+        sendBtn.disabled = false;
+        return;
+      }
       // 检查是否是定位提示
       if (error.message && error.message.includes('请允许浏览器定位权限')) {
         // 触发浏览器定位
@@ -2637,17 +2738,27 @@ ${weatherData.location}实时天气：${weatherData.weather}
       // 云端模式：用户面板存浏览器本地，随请求携带（服务器无状态、不落盘）
       const _ov = panelOverrides();
       if (_ov) _payload.panel_overrides = _ov;
+      // 超时由**全局 fetch 包装**统一兜（见文件顶部 API_TIMEOUT_MS）：到点中止 + 自动反馈
       const resp = await fetch('/api/chat', {
         method: 'POST',
         headers: _apiHeaders(),
         body: JSON.stringify(_payload)
       });
-      if (resp.status === 401) { typing.innerHTML = '<div class="role-tag">阿卡莉</div>服务器ojbk中。<div class="sticker-wrap"><img loading="lazy" class="sticker-img" src="' + resolveAsset('/kb/图片素材/表情包/ojbk.png') + '" alt="ojbk"></div>'; sendBtn.disabled = false; return; }
+      if (resp.status === 401) { typing.innerHTML = _ojbkBubbleHtml(); sendBtn.disabled = false; return; }
       const data = await resp.json();
       renderSecretaryReply(data, typing);
       checkQuotaAlert();   // 本轮消耗了 LLM 额度 → 若已跌破 10% 则自动提醒
     } catch (e) {
-      typing.querySelector('.bubble').innerHTML = '<div class="role-tag">阿卡莉</div>服务器ojbk中。<div class="sticker-wrap"><img loading="lazy" class="sticker-img" src="' + resolveAsset('/kb/图片素材/表情包/ojbk.png') + '" alt="ojbk"></div>';
+      if (isTimeoutError(e)) {
+        // 响应过久：本轮已中止，自动反馈已由全局包装发出（用户口径 2026-10-04）
+        typing.querySelector('.bubble').innerHTML =
+          '<div class="role-tag">阿卡莉</div>响应过久，服务器ojbk中。'
+          + '本轮回答已中止，并已自动反馈给开发者。'
+          + '<div class="sticker-wrap"><img loading="lazy" class="sticker-img" src="'
+          + resolveAsset('/kb/图片素材/表情包/ojbk.png') + '" alt="ojbk"></div>';
+      } else {
+        typing.querySelector('.bubble').innerHTML = _ojbkBubbleHtml();
+      }
     } finally {
       sendBtn.disabled = false;
       inputEl.focus();

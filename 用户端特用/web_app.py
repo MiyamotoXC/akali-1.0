@@ -3079,6 +3079,9 @@ async def feedback(req: Request):
             '用户输入': filter_sensitive_words(str(data.get('user_input') or ''))[:2000],
             '回答': filter_sensitive_words(str(data.get('assistant_reply') or ''))[:2000],
             '会话': str(data.get('session_id') or '')[:64],
+            # 类型（用户口径 2026-10-04）：unsatisfied=💡 手点不满意；timeout=回答超 60s
+            # 被自动中止时前端自动上报，便于开发者直接筛出"慢/卡"的问题类型。
+            '类型': str(data.get('feedback_type') or 'unsatisfied')[:32],
         }
         line = json.dumps(record, ensure_ascii=False)
 
