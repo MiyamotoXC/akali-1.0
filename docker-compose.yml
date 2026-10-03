@@ -5,13 +5,13 @@
 # 访问：http://<云主机IP>/           （网页端打开 / 或打包 android_app/ WebView APK 直连）
 # 日志：docker compose logs -f akali
 #
-# 【运行模式：本地 / 云端分开，全部由 .env 控制】
+# 【运行模式：默认云端多用户，全部由 .env 控制】
 #   本编排**不写死任何业务开关**，运行模式、监听地址、门禁、配额、链接一律读同目录 .env。
-#   上服务器前，按 .env.example 的【二】把「云端组」启用（注释掉本地组）、【三】按需填值：
-#     至少需要：AKALI_RUN_MODE=cloud / HOST=0.0.0.0 / AKALI_NO_BROWSER=1 /
-#               AKALI_PROXY_HEADERS=1 / AKALI_INVITE_CODE=<你的口令>
-#     要限额再加：FX_CLOUD_MODE=on / FX_QUOTA_BACKEND=redis / FX_REDIS_URL=redis://redis:6379/0
-#   若 .env 仍保持「本地组」（默认），容器会监听 127.0.0.1，宿主与公网都访问不到 —— 属预期行为。
+#   .env 默认即启用「云端组」（AKALI_RUN_MODE=cloud / HOST=0.0.0.0），runtime.py 在
+#   AKALI_RUN_MODE 缺省时也默认 cloud —— 无需手动切换本地/云端。
+#   上服务器前只需填好必填项（详见 .env.example / .env.cloud.example 的【二】）：
+#     至少需要：AKALI_INVITE_CODE=<你的口令>（其余云端默认值已就位）
+#     要限额再加：FX_QUOTA_BACKEND=redis / FX_REDIS_URL=redis://redis:6379/0
 #
 # 知识库二选一：① 挂载宿主机 知识库/（见下方 volume，最省事）
 #               ② 配 FX_KB_BASE_URL + FX_KB_MANIFEST_URL 走对象存储启动同步。

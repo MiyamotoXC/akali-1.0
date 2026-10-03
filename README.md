@@ -236,7 +236,7 @@ python 调试\随机测试.py --suite all            # 三类随机测试
 | 天赋查询 | 各舰灵天赋效果 | 「查约克城的天赋」 |
 | 主动提醒 | 活动日历、月初/月末资源兑换提醒 | 每次对话自动附带 |
 | 表情/头像差分 | 神态由头像差分体现（正文不写神态括号）；身体/情感话题走傲娇式关心，仅极端恶意用「嫌弃」 | 闲聊自然呈现 |
-| 多用户算力配额 | 免费 15 轮 / 月卡 0.3 元/天，超限停用 LLM、基础工具照常、次日零点恢复 | （仅 `FX_CLOUD_MODE=on` 生效） |
+| 多用户算力配额 | 免费 15 轮 / 月卡 0.3 元/天，超限停用 LLM、基础工具照常、次日零点恢复 | （默认 cloud 即生效；`AKALI_RUN_MODE=local` 或 `FX_CLOUD_MODE=off` 关闭） |
 
 ### 开发者端功能（Streamlit 8501）
 
@@ -256,7 +256,8 @@ python 调试\随机测试.py --suite all            # 三类随机测试
 ### 环境变量
 
 在根目录 `.env` 中配置。模板二选一：**本地自用** `.env.example`、**云服务器** `.env.cloud.example`
-（云端那一套及运维操作见 [`云端部署运维.md`](云端部署运维.md)）：
+（云端那一套及运维操作见 [`云端部署运维.md`](云端部署运维.md)）。
+各变量的完整说明、默认值与样例见 [`环境变量配置说明.md`](环境变量配置说明.md)。
 
 | 变量 | 必填 | 说明 |
 |------|------|------|
@@ -267,15 +268,14 @@ python 调试\随机测试.py --suite all            # 三类随机测试
 | `EMBEDDING_MODEL` | 否 | 向量模型，默认 `text-embedding-v4` |
 | `HOST` / `PORT` | 否 | 监听地址，默认 `127.0.0.1:8000` |
 | `AKALI_NO_BROWSER` | 否 | `1` 不自动打开浏览器 |
-| `AKALI_AUTO_KILL` | 否 | `1` 自动杀死占用端口的进程 |
 | `AKALI_AUTO_SHUTDOWN` | 否 | `1` 页面关闭后自动终止服务 |
-| `AKALI_HEARTBEAT_TIMEOUT` / `AKALI_HEARTBEAT_INTERVAL` | 否 | 心跳超时与间隔秒数 |
 | `AKALI_CHAT_ENABLED` | 否 | `0` 禁用聊天功能 |
-| `API_TOKEN` | 否 | 前端简易鉴权 Token（**页内输入**，不通过 URL 传参） |
 | `KNOWLEDGE_BASE_DIR` / `RAW_DATA_OUTPUT_PATH` / `DATA_OUTPUT_PATH` | 否 | 开发者数据管线路径覆盖（默认指向 `知识库/`） |
-| `FX_CLOUD_MODE` | 否 | 云端多用户模式开关（`1`/`true`/`on`/`yes` 启用；**不设则本地个人模式，行为完全不变**） |
-| `FX_USER_PLAN` | 否 | 本地模拟用户套餐（`free`/`month`，默认 `free`；仅 `FX_CLOUD_MODE=on` 且未接订阅系统时的演示用） |
-| `FX_USER_PLAN_MAP` | 否 | 本地模拟 uid→套餐 映射，JSON 字符串，如 `{"uidA":"month"}` |
+| `FX_CLOUD_MODE` | 否 | 旧版配额开关别名：未设时跟随 `AKALI_RUN_MODE`（默认 cloud，故默认即云端多用户+配额生效）；`on` 显式开启、`off` 可强制关闭配额（运行模式由 `AKALI_RUN_MODE` 决定） |
+| `FX_QUOTA_FREE` | 否 | 免费档每日 token 上限（默认 60000；设 0 = 不限量） |
+| `FX_QUOTA_PAID` | 否 | 付费档每日 token 上限（默认 200000；设 0 = 不限量） |
+| `FX_QUOTA_WHITELIST` | 否 | 白名单每日 token 上限（默认 200000；类似开发者但可调；设 0 = 不限量） |
+| `FX_QUOTA_WHITELIST_KEYS` | 否 | 白名单：逗号分隔的 IP/uid 列表，名单内走白名单额度（类似开发者，独立可调，不参与 free/paid 检测） |
 | `FX_QUOTA_BACKEND` | 否 | 配额存储后端：`memory`/`local`/`redis`（云端默认 `redis`，连不上自动降级 `memory` 并告警） |
 | `FX_QUOTA_DIR` | 否 | `local` 后端落盘目录（JSON）；空=纯内存，重启清零 |
 | `FX_REDIS_URL` | 否 | Redis 连接串（如 `redis://127.0.0.1:6379/0`），多实例共享配额状态 |
@@ -289,7 +289,7 @@ python 调试\随机测试.py --suite all            # 三类随机测试
 
 ## 多用户算力配额与云端部署
 
-项目从「本地个人使用」演进到「可云端多用户」。所有云端能力通过**环境变量开关**启用，本地默认行为完全不变。
+项目默认即为**云端多用户模式**（`AKALI_RUN_MODE=cloud`，缺省时也默认 cloud）；如需纯本地单机，显式设 `AKALI_RUN_MODE=local` 回滚（此时配额不闸控）。
 
 > 📘 **部署到云服务器 / 日常运维 → 见独立文档 [`云端部署运维.md`](云端部署运维.md)**
 >
@@ -449,4 +449,4 @@ python 调试\随机测试.py --suite all
 6. **舰名点号异体**：面板表用 `‧`(U+2027)、库内为 `·`(U+00B7)，名称匹配一律经 `canonicalize_name`，勿用字符串直配；「加改才是改造」——`太太`=列克星敦、`太太改`=列克星敦·改。
 7. **Windows 环境**：命令为 PowerShell 兼容语法；路径含中文，终端建议以 UTF-8 输出。
 8. **人设/头像系统**：神态一律由 `<<EXP:神态>>` 头像差分体现，回复正文严禁写 `（抬眼）`/`（轻哼）`/`（微微颔首）` 等神态括号；改 `知识库/llm/system_prompt.md` 即可热重载。
-9. **云端配额**：`FX_CLOUD_MODE` 未设则本地个人模式、行为不变；开启后配额状态建议用 `redis` 后端（跨实例/重启不丢），`local` 落盘也会跨重启保留。
+9. **云端配额**：运行模式默认即 `cloud`（`AKALI_RUN_MODE` 缺省也默认 cloud），`FX_CLOUD_MODE` 为旧别名——未设时配额跟随模式（cloud 即生效）；配额状态建议用 `redis` 后端（跨实例/重启不丢），`local` 落盘也会跨重启保留。

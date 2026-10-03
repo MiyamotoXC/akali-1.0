@@ -52,6 +52,8 @@ ADMIN_HTML = r"""<!DOCTYPE html>
   button:hover { background:rgba(107,140,170,.08); }
   input { font:inherit; padding:6px 10px; border:1px solid var(--line); border-radius:9px;
           background:#fff; min-width:230px; }
+  select { font:inherit; padding:6px 10px; border:1px solid var(--line); border-radius:9px;
+           background:#fff; }
   .msg { color:var(--warn); font-size:13px; }
   .empty { color:var(--soft); font-size:13px; padding:8px 0; }
   .foot { color:var(--soft); font-size:12px; margin-top:18px; }
@@ -73,7 +75,11 @@ ADMIN_HTML = r"""<!DOCTYPE html>
   </div>
 
   <div class="card">
-    <h2>今日用量 <span class="tag" id="usageMeta">每 uid 消耗</span></h2>
+    <h2>用量统计 <span class="tag" id="usageMeta">每 uid 消耗</span></h2>
+    <div class="row" style="margin-bottom:10px">
+      <label for="usageDay">查看日期：</label>
+      <select id="usageDay"><option value="">加载中…</option></select>
+    </div>
     <div id="usage"></div>
   </div>
 
@@ -145,7 +151,7 @@ ADMIN_HTML = r"""<!DOCTYPE html>
   function renderUsage(d) {
     var rows = d.rows || [];
     if (!rows.length) {
-      $('usage').innerHTML = '<div class="empty">今天还没有用量记录。（维度：' + d.dim + '，存储：' + d.backend + '）</div>';
+      $('usage').innerHTML = '<div class="empty">' + d.day + ' 还没有用量记录。（维度：' + d.dim + '，存储：' + d.backend + '）</div>';
       return;
     }
     var h = '<table><tr><th>uid</th><th>备注</th><th>套餐</th><th class="num">流量(请求)</th>'
@@ -159,7 +165,7 @@ ADMIN_HTML = r"""<!DOCTYPE html>
       h += '<tr' + (r.is_owner ? ' class="owner"' : '') + '>'
         + '<td class="mono">' + r.key + '</td>'
         + '<td>' + (r.name || '') + (r.is_owner ? ' <span class="pill on">我</span>' : '') + '</td>'
-        + '<td>' + (r.is_owner ? '开发者' : (r.plan === 'unlimited' ? '不限量' : r.plan)) + '</td>'
+        + '<td>' + (r.is_owner ? '开发者' : ({'developer':'开发者','whitelist':'白名单','paid':'付费','free':'免费','unlimited':'不限量'}[r.plan] || r.plan)) + '</td>'
         + '<td class="num">' + (r.req_count || 0) + '</td>'
         + '<td class="num">' + fmt(r.rounds) + '</td>'
         + '<td class="num">' + fmt(r.tok_in) + '</td>'
@@ -179,7 +185,7 @@ ADMIN_HTML = r"""<!DOCTYPE html>
     // 请求明细：全部请求的流水（本轮token=0 表示该请求未走 LLM，如攻略/计算）
     var rc = d.recent || [];
     h += '<div style="margin-top:12px;font-size:12px;color:var(--soft);font-weight:600">'
-       + '请求明细（最近 ' + rc.length + ' 条 · 内存保留，重启清零）</div>';
+       + '请求明细（最近 ' + rc.length + ' 条 · 按天持久化，可回看历史日）</div>';
     if (!rc.length) {
       h += '<div class="empty">暂无请求记录。</div>';
     } else {
@@ -202,9 +208,11 @@ ADMIN_HTML = r"""<!DOCTYPE html>
           + '<span class="pill">开发者 ' + d.owner_uid + '</span>'
           + '<span class="pill">下一个 uid ' + d.next_uid + '</span>'
           + '<span class="pill">管理白名单 ' + (d.admin_uids || []).join(', ') + '</span></div>';
-    h += '<table><tr><th>uid</th><th>名称</th><th>角色</th><th>状态</th><th>口令</th></tr>';
+    h += '<table><tr><th>uid</th><th>用户uid</th><th>名称</th><th>角色</th><th>状态</th><th>口令</th></tr>';
     users.forEach(function (u) {
-      h += '<tr><td class="mono">' + u.uid + '</td><td>' + (u.name || '') + '</td>'
+      h += '<tr><td class="mono">' + u.uid + '</td>'
+        + '<td class="mono">' + (u.user_uid || '') + '</td>'
+        + '<td>' + (u.name || '') + '</td>'
         + '<td>' + u.role + '</td>'
         + '<td><span class="pill ' + (u.enabled ? 'on' : 'off') + '">'
         + (u.enabled ? '启用' : '停用') + '</span></td>'
@@ -214,17 +222,41 @@ ADMIN_HTML = r"""<!DOCTYPE html>
     $('acct').innerHTML = h;
   }
 
-  function load() {
+  // 拉取并渲染某天用量；day 为空则取当天。同时用返回的 dates 填充日期选择器，
+  // 便于开发者在历史视图里随时切换查阅（历史用量永不自动清理，用户口径 2026-10-02）。
+  function loadUsage(day) {
     $('err').textContent = '';
     if (!token) { $('err').textContent = '请先填写口令，或用 /admin?token=<开发者口令> 打开（可存为书签，免每次输入）。'; return; }
-    req('/api/admin/usage').then(function (r) {
+    var url = '/api/admin/usage' + (day ? ('?day=' + encodeURIComponent(day)) : '');
+    req(url).then(function (r) {
       if (r.s === 403) { $('err').textContent = '该口令不在管理白名单内（AKALI_ADMIN_UIDS）。'; return; }
       if (r.s === 401) { $('err').textContent = '口令无效或已失效。'; return; }
-      renderUsage(r.d);
+      var d = r.d;
+      // 填充日期下拉：当前所选日期置顶，其后为所有有记录的日期（降序）
+      var sel = $('usageDay');
+      sel.innerHTML = '';
+      var opt0 = document.createElement('option');
+      opt0.value = d.day; opt0.textContent = d.day + '（当前）';
+      sel.appendChild(opt0);
+      (d.dates || []).forEach(function (dt) {
+        if (dt === d.day) return;
+        var o = document.createElement('option');
+        o.value = dt; o.textContent = dt;
+        sel.appendChild(o);
+      });
+      sel.value = d.day;
+      renderUsage(d);
       $('who').innerHTML = '<span class="pill on">已连接</span>';
     }).catch(function (e) { $('err').textContent = '请求失败：' + e; });
+  }
+
+  function load() {
+    if (!token) { $('err').textContent = '请先填写口令，或用 /admin?token=<开发者口令> 打开（可存为书签，免每次输入）。'; return; }
+    loadUsage(null);
     req('/api/admin/accounts').then(function (r) { if (r.s === 200) renderAcct(r.d); });
   }
+
+  $('usageDay').addEventListener('change', function () { loadUsage(this.value); });
 
   $('save').addEventListener('click', function () {
     token = $('tok').value.trim();

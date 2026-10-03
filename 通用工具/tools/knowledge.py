@@ -789,7 +789,9 @@ class QueryActivity(BaseTool):
                 anchor = e.get('ex_end')
             else:
                 anchor = e.get('start') or e.get('end')
-            return (pri, anchor.toordinal() if anchor else 99999999)
+            # 打捞活动恒置顶（用户口径：打捞活动排最前、颜色醒目）
+            salvage = 0 if '打捞' in ((e.get('name') or '') + (e.get('type') or '') + (e.get('notes') or '')) else 1
+            return (salvage, pri, anchor.toordinal() if anchor else 99999999)
         matched.sort(key=_sort_key)
 
         lines = []
@@ -798,7 +800,11 @@ class QueryActivity(BaseTool):
             if lines:
                 lines.append('')
             st = _event_status(e, today, now)
-            lines.extend(_format_activity(e, st, today, now))
+            blk = _format_activity(e, st, today, now)
+            # 打捞活动标题加醒目标记（前端渲染为红色高亮），配合置顶
+            if '打捞' in ((e.get('name') or '') + (e.get('type') or '') + (e.get('notes') or '')):
+                blk = ['<<SALVAGE_HL>>' + blk[0]] + blk[1:]
+            lines.extend(blk)
             g = (e.get('guide') or '').strip()
             if g and g not in guides:
                 guides.append(g)

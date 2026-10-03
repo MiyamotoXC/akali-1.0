@@ -6,7 +6,7 @@
 ① `.env`（只有服务器管理员看得到）—— 管**开关**与**开发者本人**：
        AKALI_ALLOW_OTHER_USERS=true     # 总开关：false = 只有开发者能用
        AKALI_OWNER_UID=000000           # 开发者 uid
-       AKALI_OWNER_TOKEN=<你的口令>     # 留空则回落 AKALI_INVITE_CODE / API_TOKEN
+       AKALI_OWNER_TOKEN=<你的口令>     # 留空则回落 AKALI_INVITE_CODE
 
 ② `users.json`（**项目根目录下的外层文件**）—— 管**测试用户列表**：
        {
@@ -41,8 +41,19 @@ import threading
 _LOCK = threading.RLock()
 
 OWNER_UID_DEFAULT = '000000'
-UID_WIDTH = 6
+UID_WIDTH = 6                          # 内部 uid 位数（仅用于存储/排序，用户看不到）
 TOKEN_ALPHABET = 'abcdefghijkmnpqrstuvwxyz23456789'
+
+# 用户自填 uid（网页展示的身份号）：8 位数字、首位只允许 1/3/6/8。
+# 与内部 uid 互不相干 —— 内部 uid 只负责存储与排序（用户口径 2026-10-03）。
+USER_UID_LEN = 8
+USER_UID_FIRST = ('1', '3', '6', '8')
+
+
+def valid_user_uid(v) -> bool:
+    """校验用户自填 uid：8 位 ASCII 数字、首位 ∈ {1,3,6,8}。"""
+    s = str(v or '').strip()
+    return len(s) == USER_UID_LEN and s.isascii() and s.isdigit() and s[0] in USER_UID_FIRST
 
 _CACHE = {'mtime': None, 'size': None, 'data': []}
 
@@ -53,8 +64,8 @@ def owner_uid() -> str:
 
 
 def owner_token() -> str:
-    """开发者口令：AKALI_OWNER_TOKEN 优先，兼容旧的 AKALI_INVITE_CODE / API_TOKEN。"""
-    for name in ('AKALI_OWNER_TOKEN', 'AKALI_INVITE_CODE', 'API_TOKEN'):
+    """开发者口令：AKALI_OWNER_TOKEN 优先，兼容旧的 AKALI_INVITE_CODE。"""
+    for name in ('AKALI_OWNER_TOKEN', 'AKALI_INVITE_CODE'):
         v = (os.environ.get(name) or '').strip()
         if v:
             return v
@@ -126,7 +137,8 @@ def _norm_entry(uid, raw):
         'note': str(raw.get('name') or raw.get('note') or '').strip(),
         'enabled': bool(raw.get('enabled', True)),
         'created': str(raw.get('created') or '').strip(),
-        'plan': str(raw.get('plan') or '').strip(),   # 套餐档：unlimited/free/month；留空则走默认档
+        'plan': str(raw.get('plan') or '').strip(),   # 套餐档：free/paid/unlimited（month 等同 paid）；留空 → free
+        'user_uid': str(raw.get('user_uid') or '').strip(),  # 用户自填的 8 位 uid（网页展示）
     }
 
 
@@ -206,7 +218,7 @@ def get_account(uid: str):
     if not uid:
         return None
     if uid == owner_uid():
-        return {'uid': uid, 'token': owner_token(), 'note': '开发者（本人）',
+        return {'uid': uid, 'user_uid': '', 'token': owner_token(), 'note': '开发者（本人）',
                 'enabled': True, 'role': 'owner'}
     for u in parse_users():
         if u['uid'] == uid:
@@ -219,11 +231,11 @@ def list_accounts() -> list:
     accs = []
     ot = owner_token()
     if ot:
-        accs.append({'uid': owner_uid(), 'name': '开发者（本人）', 'token': ot,
+        accs.append({'uid': owner_uid(), 'user_uid': '', 'name': '开发者（本人）', 'token': ot,
                      'note': '内置账号（.env）', 'enabled': True, 'role': 'owner'})
     for u in parse_users():
         fallback = ('ai自测 %s' % u['uid']) if _is_test_users_file() else ('测试用户 %s' % u['uid'])
-        accs.append({'uid': u['uid'], 'name': u['note'] or fallback,
+        accs.append({'uid': u['uid'], 'user_uid': u.get('user_uid') or '', 'name': u['note'] or fallback,
                      'token': u['token'], 'note': u['note'],
                      'enabled': u.get('enabled', True), 'role': 'user'})
     return accs
@@ -379,6 +391,7 @@ def _write_file(d: dict) -> None:
 
 def _public(uid, rec) -> dict:
     return {'uid': str(uid), 'name': str((rec or {}).get('name') or ''),
+            'user_uid': str((rec or {}).get('user_uid') or ''),
             'role': 'user', 'created': str((rec or {}).get('created') or '')}
 
 
@@ -398,17 +411,19 @@ def find_by_device(device_id: str):
         for uid, u in (d.get('users') or {}).items():
             if isinstance(u, dict) and str(u.get('device_id') or '').strip() == did and u.get('token'):
                 return {'uid': str(uid), 'token': u['token'], 'name': u.get('name') or '',
+                        'user_uid': str(u.get('user_uid') or ''),
                         'created': u.get('created') or '', 'enabled': bool(u.get('enabled', True))}
     return None
 
 
-def register(device_id: str = '', ip: str = '', name: str = '') -> dict:
-    """**首次打开自动注册**：按**设备标识**认人（用户口径 2026-09-25）。
+def register(device_id: str = '', ip: str = '', name: str = '', user_uid: str = '') -> dict:
+    """**首次打开注册**：按**设备标识**认人（用户口径 2026-09-25；uid 规则 2026-10-03）。
 
     返回 {'ok','created','uid','token','user','reason'}
       · 该设备已有账号 → created=False，直接返回原账号（老用户无感，不必重注册）
-      · 新设备 → 分配下一个 uid（000001 起）+ 生成口令，写回 users.json
-      · 关闭注册 → ok=False reason='register_off'
+      · 新设备 → 校验并用**用户自填的 8 位 uid**（存 user_uid 字段），
+        内部再分配一个顺序 uid（000001 起，仅存储/排序）+ 生成口令，写回 users.json
+      · 关闭注册 → reason='register_off'；uid 非法 → 'bad_uid'；uid 已占用 → 'uid_taken'
 
     认人：**只认 device_id**（稳定、一人一号）；IP 仅作记录（排障用），不参与身份识别 ——
     IP 会因切网/家宽重播而变（→ 同人反复注册），也会因同 WiFi 多人共用而撞车
@@ -418,10 +433,11 @@ def register(device_id: str = '', ip: str = '', name: str = '') -> dict:
     """
     did = str(device_id or '').strip()
     ip = str(ip or '').strip()
+    uu = str(user_uid or '').strip()
     with _LOCK:
         d = _load_file_raw()
         users = d['users']
-        # ① 设备标识命中 → 老用户直接回位
+        # ① 设备标识命中 → 老用户直接回位（不必再填 uid）
         if did:
             for uid, u in users.items():
                 if isinstance(u, dict) and str(u.get('device_id') or '').strip() == did and u.get('token'):
@@ -437,7 +453,15 @@ def register(device_id: str = '', ip: str = '', name: str = '') -> dict:
         if not allow_register():
             return {'ok': False, 'created': False, 'uid': '', 'token': '',
                     'user': None, 'reason': 'register_off'}
-        # 找下一个空位：直接用刚读到的 users 算，避免为了编号再读一次文件
+        # ③ 用户自填 uid：必填、须合法（8 位、首位 1/3/6/8）、且全局唯一
+        if not valid_user_uid(uu):
+            return {'ok': False, 'created': False, 'uid': '', 'token': '',
+                    'user': None, 'reason': 'bad_uid'}
+        for _u in users.values():
+            if isinstance(_u, dict) and str(_u.get('user_uid') or '').strip() == uu:
+                return {'ok': False, 'created': False, 'uid': '', 'token': '',
+                        'user': None, 'reason': 'uid_taken'}
+        # ④ 分配内部顺序 uid（仅存储/排序用）：直接用刚读到的 users 算，避免再读一次文件
         uid = ''
         for i in range(1, 1000000):
             k = '%0*d' % (UID_WIDTH, i)
@@ -448,18 +472,19 @@ def register(device_id: str = '', ip: str = '', name: str = '') -> dict:
             return {'ok': False, 'created': False, 'uid': '', 'token': '',
                     'user': None, 'reason': 'uid_exhausted'}
         token = new_token()
-        default_name = ('ai自测 %s' % uid) if _is_test_users_file() else ('测试用户 %s' % uid)
+        default_name = ('ai自测 %s' % uu) if _is_test_users_file() else ('测试用户 %s' % uu)
         rec = {
             'name': (name or '').strip() or default_name,
             'token': token,
             'enabled': True,
             'device_id': did,
             'ip': ip,
+            'user_uid': uu,                    # 用户自填的 8 位 uid（网页展示的身份号）
             'created': _dt.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
         }
         users[uid] = rec
         _write_file(d)
-        return {'ok': True, 'created': True, 'uid': uid, 'token': token,
+        return {'ok': True, 'created': True, 'uid': uid, 'user_uid': uu, 'token': token,
                 'user': _public(uid, rec), 'reason': 'created'}
 
 

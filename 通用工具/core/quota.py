@@ -10,7 +10,11 @@
   不受影响**、正常工作；次日零点（本地日期）自动恢复。
 
 限额口径：
-    每日 token 总量（输入 + 输出）/ IP，默认 60000（env FX_IP_DAILY_TOK 可调）。
+    每日 token 总量（输入 + 输出）/ IP。各档额度直接读 env（0 = 不限量，可随意设置）：
+        developer（开发者本人）→ 恒不限量
+        whitelist（白名单）    → FX_QUOTA_WHITELIST（默认 200000，类似开发者但可调限量）
+        paid（付费用户）       → FX_QUOTA_PAID（默认 200000）
+        free（免费用户）       → FX_QUOTA_FREE（默认 60000）
     计费换算仍照 Qwen 定价给出参考成本（仅展示，不参与闸控）：
         输入 0.0024 元/千 token；输出 0.0144 元/千 token
 
@@ -20,9 +24,8 @@
 
 限额维度与白名单：
     AKALI_QUOTA_KEY=ip|session   （默认：cloud→ip，local→session）
-    FX_USER_PLAN / FX_USER_PLAN_MAP 仍保留：可给特定 IP 更高的额度档
-        free  → FX_IP_DAILY_TOK        （默认 60000）
-        month → FX_IP_DAILY_TOK_MONTH  （默认 300000）
+    FX_QUOTA_WHITELIST_KEYS：逗号分隔的 IP/uid 白名单，名单内走 whitelist 额度（类似开发者，独立可调，
+    不参与 free/paid 检测）；其余用户按 users.json 的 plan 字段分 free / paid 两档。
 
 配额存储后端（可插拔，FX_QUOTA_BACKEND）：
     memory  → 纯内存，重启清零（默认；本地个人/单机够用）
@@ -43,28 +46,31 @@ PRICE_IN_YUAN_PER_K = 0.0024   # 元 / 千 token（输入）
 PRICE_OUT_YUAN_PER_K = 0.0144  # 元 / 千 token（输出）
 
 # ===== 限额（token 总量 / 天 / 维度键）=====
-# 默认值（可被 .env 的 FX_IP_DAILY_TOK / FX_IP_DAILY_TOK_MONTH 覆盖）。
-_TOK_LIMIT_FREE = runtime.quota_daily_tok()          # 默认 50000（取 FX_IP_DAILY_TOK）
-try:
-    _TOK_LIMIT_MONTH = max(0, int(os.getenv('FX_IP_DAILY_TOK_MONTH') or '200000'))
-except (TypeError, ValueError):
-    _TOK_LIMIT_MONTH = 200000
+# 四档额度（直接读 env；0 = 不限量，可随意设置）：
+#   developer（开发者本人）→ 恒不限量（无需配置）
+#   whitelist（白名单）    → FX_QUOTA_WHITELIST（类似开发者，独立可调限量）
+#   paid（付费用户）       → FX_QUOTA_PAID
+#   free（免费用户）       → FX_QUOTA_FREE
+def _env_int(name: str, default: int) -> int:
+    v = os.getenv(name)
+    if v in (None, ''):
+        return default
+    try:
+        return max(0, int(v))
+    except (TypeError, ValueError):
+        return default
 
-# 本地模拟用（云端部署时由 get_user_plan 接白名单/订阅系统）
-_DEFAULT_PLAN = os.getenv('FX_USER_PLAN', 'free').strip().lower()
-try:
-    _PLAN_MAP = json.loads(os.getenv('FX_USER_PLAN_MAP', '{}') or '{}')
-except Exception:
-    _PLAN_MAP = {}
+
+QUOTA_FREE = _env_int('FX_QUOTA_FREE', 60000)    # 免费档每日 token 上限（可随意设置；0=不限量）
+QUOTA_PAID = _env_int('FX_QUOTA_PAID', 200000)   # 付费档每日 token 上限（可随意设置；0=不限量）
+QUOTA_WHITELIST = _env_int('FX_QUOTA_WHITELIST', 200000)  # 白名单每日 token 上限（可随意设置；类似开发者但可调限量）
+
+# 白名单（IP/uid 列表，逗号分隔）；名单内走 whitelist 额度（类似开发者，独立可调，不参与 free/paid 检测），
+# 其余用户按 users.json 的 plan 字段分 free / paid 两档。
+_WHITELIST = {k.strip() for k in (os.getenv('FX_QUOTA_WHITELIST_KEYS') or '').split(',') if k.strip()}
+
 _QUOTA_DIR = os.getenv('FX_QUOTA_DIR', '').strip()
 _BACKEND = os.getenv('FX_QUOTA_BACKEND', '').strip().lower()
-
-# 测试模式总闸 FX_QUOTA_TEST_UNLIMITED（用户口径 2026-09-29）：
-#   · 置 1/true/yes/on → 全员不限量（get_user_plan 直接返回 unlimited，覆盖所有维度）；
-#   · 清掉该变量 → 关闭测试模式：开发者本人 + 白名单（FX_USER_PLAN_MAP / users.json 中
-#     plan=unlimited）不限量，其余按 FX_USER_PLAN 默认档限额（free=FX_IP_DAILY_TOK，
-#     month=FX_IP_DAILY_TOK_MONTH，单位 token/天）。
-_TEST_UNLIMITED = os.getenv('FX_QUOTA_TEST_UNLIMITED', '').strip().lower() in ('1', 'true', 'yes', 'on')
 
 _lock = threading.Lock()
 
@@ -75,10 +81,12 @@ def _today() -> str:
 
 # ===== 配额存储后端（可插拔）=====
 class QuotaStore:
-    """key = "date|client_key" -> {'rounds','tok_in','tok_out','cost'}。子类决定持久化方式。"""
+    """key = "date|client_key" -> {'rounds','tok_in','tok_out','cost'}。子类决定持久化方式。
+    reqlog = date -> [{'date','ts','key','tok'}...]：请求级流水，按天分桶持久化，可回看历史日。"""
     def __init__(self):
         self._lock = threading.Lock()
         self.usage: dict = {}
+        self.reqlog: dict = {}
 
     def get_entry(self, key: str) -> dict:
         with self._lock:
@@ -87,6 +95,22 @@ class QuotaStore:
                 e = {'rounds': 0, 'tok_in': 0, 'tok_out': 0, 'cost': 0.0}
                 self.usage[key] = e
             return e
+
+    def log_request(self, key: str, tok: int):
+        """把一次 /api/chat 请求记进当天的流水桶；每天最多保留 _REQLOG_MAX_PER_DAY 条。"""
+        day = _today()
+        entry = {'date': day, 'ts': datetime.now().strftime('%H:%M:%S'),
+                 'key': str(key or ''), 'tok': int(tok or 0)}
+        with self._lock:
+            lst = self.reqlog.setdefault(day, [])
+            lst.append(entry)
+            if len(lst) > _REQLOG_MAX_PER_DAY:
+                del lst[:-_REQLOG_MAX_PER_DAY]
+
+    def recent_requests(self, day: str, limit: int = 100) -> list:
+        with self._lock:
+            items = list(self.reqlog.get(day or _today(), []))
+        return items[-max(1, int(limit)):]
 
     def persist(self):
         pass
@@ -120,14 +144,27 @@ class LocalFileStore(QuotaStore):
                 self.usage.update(data)
         except Exception:
             pass
+        rp = os.path.join(self._dir, 'quota_reqlog.json')
+        if os.path.isfile(rp):
+            try:
+                with open(rp, encoding='utf-8') as f:
+                    data = json.load(f)
+                if isinstance(data, dict):
+                    with self._lock:
+                        self.reqlog.update(data)
+            except Exception:
+                pass
 
     def persist(self):
         try:
             os.makedirs(self._dir, exist_ok=True)
             with self._lock:
-                data = dict(self.usage)
+                usage = dict(self.usage)
+                reqlog = {d: list(v) for d, v in self.reqlog.items()}
             with open(os.path.join(self._dir, 'quota_usage.json'), 'w', encoding='utf-8') as f:
-                json.dump(data, f, ensure_ascii=False)
+                json.dump(usage, f, ensure_ascii=False)
+            with open(os.path.join(self._dir, 'quota_reqlog.json'), 'w', encoding='utf-8') as f:
+                json.dump(reqlog, f, ensure_ascii=False)
         except Exception:
             pass
 
@@ -138,6 +175,7 @@ class RedisStore(QuotaStore):
         import redis
         self._r = redis.from_url(url, decode_responses=True)
         self._key = 'fx:quota:usage'
+        self._reqlog_key = 'fx:quota:reqlog'
         super().__init__()
         self.load()
 
@@ -147,14 +185,20 @@ class RedisStore(QuotaStore):
             if raw:
                 with self._lock:
                     self.usage.update(json.loads(raw))
+            rraw = self._r.get(self._reqlog_key)
+            if rraw:
+                with self._lock:
+                    self.reqlog.update(json.loads(rraw))
         except Exception:
             pass
 
     def persist(self):
         try:
             with self._lock:
-                data = dict(self.usage)
-            self._r.set(self._key, json.dumps(data, ensure_ascii=False))
+                usage = dict(self.usage)
+                reqlog = {d: list(v) for d, v in self.reqlog.items()}
+            self._r.set(self._key, json.dumps(usage, ensure_ascii=False))
+            self._r.set(self._reqlog_key, json.dumps(reqlog, ensure_ascii=False))
         except Exception:
             pass
 
@@ -182,58 +226,29 @@ def _build_store() -> QuotaStore:
 STORE = _build_store()
 
 
-# ===== 客户端标识 =====
-def _client_ip(req) -> str:
-    """取真实客户端 IP：反代头优先（X-Forwarded-For 首段 → X-Real-IP），
-    再退 request.client.host。反代须透传 X-Forwarded-For（见 deploy/nginx.conf）。"""
-    headers = getattr(req, 'headers', None)
-    if headers is not None:
-        fwd = None
-        try:
-            fwd = headers.get('x-forwarded-for')
-        except Exception:
-            fwd = None
-        if fwd:
-            ip = str(fwd).split(',')[0].strip()
-            if ip:
-                return ip
-        try:
-            xri = headers.get('x-real-ip')
-        except Exception:
-            xri = None
-        if xri and str(xri).strip():
-            return str(xri).strip()
 def daily_limit(key: str) -> int:
     """某维度键的每日 token 上限（按套餐档）；**0 = 不限量**（开发者本人）。"""
-    plan = get_user_plan(key)
-    if plan == 'unlimited':
-        return 0
-    return _TOK_LIMIT_MONTH if plan == 'month' else _TOK_LIMIT_FREE
+    return _tok_limit(get_user_plan(key))
 
 
-# ===== 请求级用量明细（内存环形缓冲，重启清零；日汇总仍以 usage 记账为准）=====
-_REQLOG_MAX = 500          # 只留最近 500 条，够运营侧回看且不无界增长
-_REQLOG: list = []
-_REQLOG_LOCK = threading.Lock()
+# ===== 请求级用量明细（按天分桶持久化，可回看任意历史日；日汇总仍以 usage 记账为准）=====
+# 每请求记一条到 STORE.reqlog[date]，随用量一起落盘/入 Redis，故历史日也能查流水。
+_REQLOG_MAX_PER_DAY = 500    # 每天最多保留条数，避免无界增长
 
 
 def log_request(key: str, tok: int):
-    """记录一次 /api/chat 请求的 token 消耗（tok=0 = 本请求未走 LLM，如攻略/计算）。"""
-    # 时间记录**日期 + 时分秒**（用户口径 2026-09-26：时间要记录日期）
-    entry = {'date': _today(), 'ts': datetime.now().strftime('%H:%M:%S'),
-             'key': str(key or ''), 'tok': int(tok or 0)}
-    with _REQLOG_LOCK:
-        _REQLOG.append(entry)
-        del _REQLOG[:-_REQLOG_MAX]
+    """记录一次 /api/chat 请求的 token 消耗（tok=0 = 本请求未走 LLM，如攻略/计算）。按天持久化。"""
+    STORE.log_request(str(key or ''), int(tok or 0))
+    # 每次请求都落盘/入 Redis，保证非 LLM 请求（攻略/计算）的流水也不丢
+    try:
+        STORE.persist()
+    except Exception:
+        pass
 
 
 def recent_requests(day: Optional[str] = None, limit: int = 100) -> list:
-    """最近请求明细（仅当天有效；缓冲不跨日保留）。"""
-    if (day or _today()).strip() != _today():
-        return []
-    with _REQLOG_LOCK:
-        items = list(_REQLOG)
-    return items[-max(1, int(limit)):]
+    """某天的请求级流水（持久化保留，可回看历史日）。"""
+    return STORE.recent_requests((day or _today()).strip(), limit)
 
 
 def usage_snapshot(day: Optional[str] = None) -> list:
@@ -325,7 +340,7 @@ def _client_ip(req) -> str:
 # 现状：云端按客户端 IP、本地按 session_id（维度由 runtime.quota_key() 决定）。
 # 将来改「uid 注册 + 内部数据库」时，**只需改本文件两个函数**：
 #   ① resolve_identity(req)：改为从凭证解析 uid（查库校验）
-#   ② get_user_plan(key)：改为按 uid 查库取套餐（在 _lookup_plan_from_db 里实现）
+#   ② get_user_plan(key)：按 uid 查库取套餐；白名单走 FX_QUOTA_WHITELIST_KEYS，其余按 users.json 的 plan 分 free/paid
 # 其余（check_llm_quota / record_llm_usage / 存储后端 / 各调用方）都无需改动。
 # ============================================================================
 def resolve_identity(req) -> str:
@@ -360,50 +375,45 @@ def get_user_id(req) -> str:
     return resolve_identity(req)
 
 
-def _lookup_plan_from_db(key: str) -> str:
-    """uid → 套餐（读自 users.json 的 plan 字段，不再写死）。
+def get_user_plan(key: str) -> str:
+    """返回额度档：'developer' / 'whitelist' / 'paid' / 'free'。
 
-    账号体系下（用户口径 2026-09-29）：**开发者本人（AKALI_OWNER_UID）为 unlimited
-    （真不限量）**；测试用户（users.json 中的账号）→ 取其记录里的 `plan` 字段
-    （如 'unlimited' / 'free' / 'month'）；**未配置 plan 则返回空串**，交由
-    get_user_plan 走 FX_USER_PLAN_MAP / FX_USER_PLAN 配置档，保持向后兼容。
+    - developer：开发者本人（AKALI_OWNER_UID）或 plan=unlimited，恒不限量；
+    - whitelist：FX_QUOTA_WHITELIST_KEYS 名单内，额度 = FX_QUOTA_WHITELIST
+      （类似开发者，显式成员、不参与 free/paid 检测，但限量可调）；
+    - 其余用户按 users.json 的 plan 字段（大小写不敏感）：
+      paid / month → FX_QUOTA_PAID，unlimited → 不限量，free/未知/留空 → FX_QUOTA_FREE
+      （均可在 .env 随意设置，0=不限量）。
     """
     try:
         from core import users as _users
         if key and key == _users.owner_uid():
-            return 'unlimited'      # 开发者自己的用量不限制
+            return 'developer'
+        if key in _WHITELIST:
+            return 'whitelist'
         for u in _users.parse_users():
             if u['uid'] == key:
-                return str(u.get('plan') or '').strip()   # 套餐看 users.json，不写死
+                p = str(u.get('plan') or '').strip().lower()
+                if p in ('paid', 'month'):     # month 为旧名，等同付费档
+                    return 'paid'
+                if p == 'unlimited':           # 不限量
+                    return 'developer'
+                if p == 'free':
+                    return 'free'
     except Exception:
         pass
-    return ''
-
-
-def get_user_plan(key: str) -> str:
-    """返回额度档：'unlimited' / 'free' / 'month'。
-
-    顺序：测试模式总闸（FX_QUOTA_TEST_UNLIMITED→全员不限量）→ 账号体系
-    （users.json 的 plan 字段 / 开发者本人 unlimited）→ FX_USER_PLAN_MAP
-    （键为 IP/session，即白名单）→ FX_USER_PLAN（配置默认档）。
-    关闭总闸时：开发者 + 白名单不限量，其余按免费/月卡限额（free=5w、month=20w token/天）。
-    签名（key → 套餐）保持不变，故调用方无需随升级而改动。
-    """
-    if _TEST_UNLIMITED:
-        return 'unlimited'
-    plan = _lookup_plan_from_db(key)
-    if plan in ('unlimited', 'free', 'month'):
-        return plan
-    if key in _PLAN_MAP:
-        return _PLAN_MAP[key]
-    return _DEFAULT_PLAN if _DEFAULT_PLAN in ('free', 'month') else 'free'
+    return 'free'
 
 
 def _tok_limit(plan: str) -> int:
     """每日 token 上限；**0 表示不限量**（check_llm_quota 里以 limit > 0 判闸）。"""
-    if plan == 'unlimited':
+    if plan == 'developer':
         return 0
-    return _TOK_LIMIT_MONTH if plan == 'month' else _TOK_LIMIT_FREE
+    if plan == 'whitelist':
+        return QUOTA_WHITELIST
+    if plan == 'paid':
+        return QUOTA_PAID
+    return QUOTA_FREE   # free 及未知档位统一回落免费档
 
 
 def _get_entry(key: str) -> dict:

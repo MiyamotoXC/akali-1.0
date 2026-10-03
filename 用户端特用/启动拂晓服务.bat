@@ -9,9 +9,6 @@ rem 锁定项目 venv 解释器，避免 PATH 中其它 python（如无依赖的
 set "PY=%~dp0..\.venv\Scripts\python.exe"
 if not exist "%PY%" set "PY=python"
 
-rem 默认使用大模型 function-calling 路由；需要排障时可在启动前显式设置 legacy
-if not defined AKALI_ROUTE_MODE set "AKALI_ROUTE_MODE=agent"
-
 rem 检查 8000 端口占用（服务已启动则不重复拉起）
 set "SKIP=0"
 netstat -ano | findstr /r /c:":8000 .*LISTENING" >nul 2>&1

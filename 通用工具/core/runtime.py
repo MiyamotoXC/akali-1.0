@@ -9,7 +9,7 @@
     AKALI_RUN_MODE = cloud  ← 默认（2026-09-30 起由 local 改为 cloud，全程云端）
                    = cloud   ← 云端多用户模式
 
-兼容别名：FX_CLOUD_MODE=1/true/on/yes 等价于 AKALI_RUN_MODE=cloud
+兼容别名：老的 FX_CLOUD_MODE=1/true/on/yes 仍保留作配额开关（见 quota_enabled），但不再影响运行模式（run_mode 缺省即 cloud）。
 （老脚本/老测试继续可用）。
 
 两模式的差异一览（详见 §1 方案表）：
@@ -111,17 +111,17 @@ def quota_key() -> str:
 
 
 def quota_daily_tok() -> int:
-    """每 IP 每日 token 总量上限（输入+输出）。"""
+    """每 IP 每日 token 总量上限（输入+输出），对应免费档 FX_QUOTA_FREE。"""
     try:
-        return max(0, int(_env('FX_IP_DAILY_TOK', default='60000')))
+        return max(0, int(_env('FX_QUOTA_FREE', default='60000')))
     except (TypeError, ValueError):
         return 60000
 
 
 # ---------------- 准入（邀请口令） ----------------
 def invite_code() -> str:
-    """全局邀请口令；空 = 不校验（本地默认）。兼容旧 API_TOKEN。"""
-    return _env('AKALI_INVITE_CODE', 'API_TOKEN')
+    """全局邀请口令；空 = 不校验（本地默认）。"""
+    return _env('AKALI_INVITE_CODE')
 
 
 def auth_required() -> bool:

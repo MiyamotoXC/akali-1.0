@@ -58,21 +58,21 @@
   textarea { flex: 1; resize: none; font-size: 16px; font-family: inherit; border: 1px solid #d6dde6;
     border-radius: 12px; padding: 9px 11px; max-height: 96px; }
   .send { background: #8b5cf6; color: #fff; border: none; border-radius: 12px; padding: 10px 14px; font-size: 14px; }
-  /* 工具箱悬浮球：顶部右侧浮动，点开向下拉出菜单 */
+  /* 港区工具悬浮球：顶部右侧浮动，点开向下拉出菜单 */
   .fab-wrap { position: absolute; top: 72px; right: 12px; z-index: 60; }
   .fab-ball { width: 56px; height: 56px; border-radius: 50%; border: 2px solid #fff;
-    /* 环形进度底色：--p=剩余百分比，--ring=正常绿/不足红 */
+    /* 环形进度底色：--p=剩余百分比，--ring=三档状态色（≥30绿/10~30黄/<10红） */
     background: conic-gradient(var(--ring, #2bb673) calc(var(--p, 0) * 1%), #e9eef3 0);
     box-shadow: 0 4px 14px rgba(30,40,50,.25); position: relative;
     display: flex; align-items: center; justify-content: center; overflow: hidden; cursor: pointer; }
   /* 不足时红色光晕，醒目 */
   .fab-ball.low { box-shadow: 0 0 0 3px rgba(231,76,60,.35), 0 4px 14px rgba(30,40,50,.25); }
-  /* 内圈白底，做出环形进度 */
-  .fab-ball::after { content: ''; position: absolute; inset: 5px; border-radius: 50%; background: #fff; }
+  /* 内圈蓝底（中心空白底色为蓝色），做出环形进度 */
+  .fab-ball::after { content: ''; position: absolute; inset: 5px; border-radius: 50%; background: #2b6cd4; }
   .fab-ball-inner { position: relative; z-index: 1; text-align: center; line-height: 1.05; }
-  .fab-ball-inner .pct { font-size: 16px; font-weight: 800; color: var(--ring, #1F3A54); }
-  .fab-ball-inner .lbl { font-size: 10px; font-weight: 700; color: #1F3A54; margin-top: 1px; }
-  /* 下拉菜单：点「工具箱」向下展开 */
+  .fab-ball-inner .pct { font-size: 16px; font-weight: 800; color: #fff; }
+  .fab-ball-inner .lbl { font-size: 10px; font-weight: 700; color: #fff; margin-top: 1px; }
+  /* 下拉菜单：点「港区工具」向下展开 */
   .fab-menu { display: none; position: absolute; top: calc(100% + 10px); right: 0;
     flex-direction: column; gap: 5px; min-width: 118px;
     background: #fff; border: 1px solid #e3e8ee; border-radius: 12px; padding: 7px;
@@ -81,8 +81,6 @@
     border-left: 6px solid transparent; border-right: 6px solid transparent;
     border-bottom: 6px solid #fff; }
   .fab-wrap.open .fab-menu { display: flex; }
-  .fab-menu-title { font-size: 12px; font-weight: 600; letter-spacing: 2px; color: #fff;
-    background: #1F3A54; border-radius: 8px; padding: 5px 8px; text-align: center; }
   .fab-menu .sug-btn { width: 100%; border: none; background: #f1ecfb; color: #4a3b8c;
     border-radius: 9px; padding: 9px 10px; font-size: 14px; text-align: center; }
   .fab-menu .sug-btn.fab-help { background: #e6f4ea; color: #1f7a4d; }
@@ -127,7 +125,6 @@
   <!-- 悬浮工具菜单（默认展开） -->
   <div class="fab-wrap open" id="fabWrap">
     <div class="fab-menu" id="fabMenu">
-      <div class="fab-menu-title">港区工具</div>
       <button class="sug-btn" data-cmd="查角色">查角色</button>
       <button class="sug-btn" data-cmd="查攻略">查攻略</button>
       <button class="sug-btn" data-cmd="计算工具">计算工具</button>
@@ -136,10 +133,10 @@
       <button class="sug-btn fab-help" data-cmd="使用帮助">使用帮助</button>
       <button class="sug-btn fab-exit" data-cmd="退出应用">退出应用</button>
     </div>
-    <div class="fab-ball" id="fabBall" title="工具箱（底色环形显示剩余算力）" onclick="document.getElementById('fabWrap').classList.toggle('open')">
+    <div class="fab-ball" id="fabBall" title="港区工具（底色环形显示剩余算力）" onclick="document.getElementById('fabWrap').classList.toggle('open')">
       <div class="fab-ball-inner">
         <div class="pct" id="fabPct">62%</div>
-        <div class="lbl">工具箱</div>
+        <div class="lbl">港区工具</div>
       </div>
     </div>
   </div>
@@ -151,9 +148,12 @@
     const ball = document.getElementById('fabBall');
     const p = 62;                       // 模拟剩余算力百分比
     ball.style.setProperty('--p', p);
-    const low = p <= 20;                // 不足阈值
-    ball.style.setProperty('--ring', low ? '#e74c3c' : '#2bb673');
-    if (low) ball.classList.add('low');
+    // 环形三档：≥30% 绿，10%~30% 黄，<10% 红；中心蓝底白字
+    let ring = '#2bb673', danger = false;
+    if (p < 10) { ring = '#e74c3c'; danger = true; }
+    else if (p < 30) { ring = '#f1c40f'; }
+    ball.style.setProperty('--ring', ring);
+    ball.classList.toggle('low', danger);
     document.getElementById('fabPct').textContent = p + '%';
   })();
 

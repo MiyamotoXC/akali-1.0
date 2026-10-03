@@ -59,34 +59,40 @@
   .avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
   /* 悬浮球：默认挂在标题栏（高 72px）内右侧居中，可拖动换位；点击展开工具菜单（位置由 JS 控制） */
   .fab-wrap { position: fixed; left: calc(100vw - 64px); top: 8px; z-index: 60; }
-  .fab-ball { width: 72px; height: 72px; border-radius: 50%; overflow: hidden; cursor: grab;
+  .fab-ball { width: 72px; height: 72px; border-radius: 50%; cursor: grab;
     border: 2px solid var(--line); box-shadow: 0 4px 12px rgba(30, 40, 50, 0.18);
-    /* 环形进度底色：--p=剩余百分比，--ring=正常绿/不足红（值由 checkQuotaAlert 写入） */
-    background: conic-gradient(var(--ring, #2bb673) calc(var(--p, 0) * 1%), #e9eef3 0);
     padding: 0; transition: box-shadow .15s;
     touch-action: none; user-select: none; -webkit-user-select: none;
-    display: flex; align-items: center; justify-content: center; position: relative; }
+    position: relative;
+    /* 3D 翻转：两面做 rotateY，这里给透视；环形进度底色搬到 .fab-face-back */
+    perspective: 600px; }
   .fab-ball:active { cursor: grabbing; }
   .fab-ball:hover { box-shadow: 0 6px 16px rgba(30, 40, 50, 0.28); }
-  /* 不足阈值（≤QUOTA_ALERT_PCT）时红色光晕，醒目 */
+  /* 红色档（<10%）时红色光晕，醒目 */
   .fab-ball.low { box-shadow: 0 0 0 3px rgba(231,76,60,.35), 0 4px 12px rgba(30,40,50,.18); }
-  /* 内圈白底，做出环形进度 */
-  .fab-ball::after { content: ''; position: absolute; inset: 7px; border-radius: 50%; background: #fff; }
-  /* 前景：百分比 + 工具箱字样 */
+  /* 内圈蓝底（中心空白底色为蓝色），做出环形进度 */
+  .fab-face-back::after { content: ''; position: absolute; inset: 7px; border-radius: 50%; background: #2b6cd4; }
+  /* 前景：百分比 + 港区工具字样 */
   .fab-ball-inner { position: relative; z-index: 1; text-align: center; line-height: 1.05; }
-  .fab-ball-inner .pct { font-size: 20px; font-weight: 800; color: var(--ring, #1F3A54); }
-  .fab-ball-inner .lbl { font-size: 12px; font-weight: 700; color: #1F3A54; letter-spacing: 1px; margin-top: 1px; }
-  .fab-ball img { width: 100%; height: 100%; object-fit: cover; display: block; pointer-events: none;
-    position: absolute; inset: 0; z-index: 0; }
+  .fab-ball-inner .pct { font-size: 20px; font-weight: 800; color: #fff; }
+  .fab-ball-inner .lbl { font-size: 12px; font-weight: 700; color: #fff; letter-spacing: 1px; margin-top: 1px; }
+  /* 翻转两面：front=原图(悬浮窗.png)，back=现在工具箱(环形进度+港区工具)；
+     每 5s 自动翻转一次；采用「内层包裹 + preserve-3d」标准写法，兼容性最稳 */
+  .fab-flip { position: absolute; inset: 0; transform-style: preserve-3d; transition: transform .6s ease; }
+  .fab-face { position: absolute; inset: 0; border-radius: 50%;
+    backface-visibility: hidden; -webkit-backface-visibility: hidden; }
+  .fab-face-front { transform: rotateY(0deg);
+    background: url('/kb/图片素材/背景/悬浮窗.png') center/cover no-repeat, #cfe2f3; }
+  .fab-face-back { transform: rotateY(180deg);
+    background: conic-gradient(var(--ring, #2bb673) calc(var(--p, 0) * 1%), #e9eef3 0);
+    display: flex; align-items: center; justify-content: center; }
+  .fab-ball.flipped .fab-flip { transform: rotateY(180deg); }
   .fab-menu { display: none; position: absolute; top: calc(100% + 8px); left: 50%;
     transform: translateX(-50%);
     flex-direction: column; gap: 6px; min-width: 136px;
     background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
     padding: 8px; box-shadow: 0 8px 20px rgba(30, 40, 50, 0.22); }
   .fab-wrap.open .fab-menu { display: flex; }
-  /* 工具面板标题（参考图：右侧「港区工具」下拉菜单顶栏） */
-  .fab-menu .fab-menu-title { font-size: 12px; font-weight: 600; letter-spacing: 2px;
-    color: #fff; background: #1F3A54; border-radius: 8px; padding: 5px 8px; text-align: center; }
   .fab-menu .sug-btn { width: 100%; margin: 0; background: var(--accent-soft); }
   /* 悬浮球「退出」：与功能项分隔并加警示色，提示这是会重置对话的休眠操作 */
   .fab-menu .sug-btn.fab-exit { margin-top: 4px; padding-top: 10px; border-top: 1px solid var(--line);
@@ -171,6 +177,8 @@
   }
   .msg.secretary .bubble { background: #f8f1de; }   /* 阿卡莉气泡米黄（用户口径 2026-09-09） */
   .msg.user .bubble { background: var(--user); border-color: #2b2f36; }   /* 黑描边（--ink 同款黑） */
+  /* 打捞活动标题：醒目红字高亮（后端 <<SALVAGE_HL>> 标记渲染） */
+  .salvage-hl { color: #d4380d; font-weight: 800; background: #fff3e6; padding: 1px 6px; border-radius: 6px; }
   .bubble .role-tag { font-size: 12px; color: var(--ink-soft); margin-bottom: 4px; }
   /* ===== 节庆主题（数据驱动：2026-09-27 升级）=====
      后端 /api/ui_assets 下发 holiday.theme + holiday.palette（CSS 变量）；
@@ -637,7 +645,7 @@
     .bubble table, .bubble pre.code { max-width: 100%; }
     .sug-btn { padding: 6px 12px; font-size: 14px; }
     .fab-ball { width: 46px; height: 46px; }
-    .fab-ball::after { inset: 4px; }
+    .fab-face-back::after { inset: 4px; }
     .fab-ball-inner .pct { font-size: 13px; }
     .fab-ball-inner .lbl { font-size: 8px; letter-spacing: 0; }
     .story-modal-box { width: 94%; max-height: 86vh; }
@@ -701,14 +709,18 @@
   <!-- 悬浮球：挂在标题栏阿卡莉头像下方，点击展开工具菜单；逻辑见 JS「功能菜单（悬浮球）」区块 -->
   <!-- open：参考图要求「悬浮窗开始默认是打开的」 -->
   <div class="fab-wrap open" id="fabWrap">
-    <button class="fab-ball" id="fabBall" title="工具箱（底色环形显示剩余算力）">
-      <span class="fab-ball-inner">
-        <span class="pct" id="fabPct"></span>
-        <span class="lbl">工具箱</span>
+    <button class="fab-ball flipped" id="fabBall" title="港区工具（底色环形显示剩余算力）">
+      <span class="fab-flip">
+        <span class="fab-face fab-face-front" aria-hidden="true"></span>
+        <span class="fab-face fab-face-back">
+          <span class="fab-ball-inner">
+            <span class="pct" id="fabPct"></span>
+            <span class="lbl">港区工具</span>
+          </span>
+        </span>
       </span>
     </button>
     <div class="fab-menu" id="fabMenu">
-      <div class="fab-menu-title">港区工具</div>
       <button class="sug-btn" data-cmd="查角色">查角色</button>
       <button class="sug-btn" data-cmd="查攻略">查攻略</button>
       <button class="sug-btn" data-cmd="计算工具">计算工具</button>
@@ -1100,6 +1112,8 @@ function resolveAsset(p) {
 // 阿卡莉头像：表情差分（启动时 /api/ui_assets 提供默认头像=「常态」差分；差分为空回退底层立绘）
 const ARKLY_FALLBACK_AVATAR = resolveAsset('/kb/图片素材/阿卡莉.png');
 let ARKLY_AVATAR = ARKLY_FALLBACK_AVATAR;
+// 表情差分 名字→URL 映射（来自 /api/ui_assets 的 expression_urls），供双击头像随机切换表情
+let ARKLY_EXPR_URLS = [];
 // 指挥官（用户）头像：与秘书侧一样走图片素材（默认 指挥官头像/用户.png；
 // 独立于 表情差分 神态目录，避免污染 LLM 神态词清单导致 <<EXP:用户>> 误切秘书脸）
 // 指挥官（用户）头像：初始值作为回退；服务端 /api/ui_assets 会用带 ?v=mtime 的实时 URL 覆盖，
@@ -1181,7 +1195,7 @@ function showMyIdentity() {
   fetch('/api/me', { headers: _apiHeaders() })
     .then(function (r) { return r.ok ? r.json() : null; })
     .then(function (d) {
-      uid = (d && d.uid) || '';
+      uid = (d && (d.user_uid || d.uid)) || '';
       const el = ov.querySelector('#meUid');
       if (el && uid) el.textContent = uid;
       const cp = ov.querySelector('[data-copy=""]');
@@ -1190,8 +1204,8 @@ function showMyIdentity() {
     .catch(function () {});
 }
 
-// 触发方式：PC 双击自己的头像；手机长按（事件委托，动态消息也能命中）
-messagesEl.addEventListener('dblclick', function (e) {
+// 触发方式：PC 单击自己的头像；手机长按（事件委托，动态消息也能命中）
+messagesEl.addEventListener('click', function (e) {
   if (e.target && e.target.closest && e.target.closest('.msg.user .ava')) showMyIdentity();
 });
 var _identityLp = null;
@@ -1587,6 +1601,14 @@ function renderSecretaryReply(data, msgEl) {
   if (/&lt;&lt;STORY&gt;&gt;/.test(html)) {
     html = html.replace(/&lt;&lt;STORY&gt;&gt;([^<\n]+)/g, function (m, name) {
       return '<button class="story-btn" data-story="' + encodeURIComponent(name) + '">📖 历史上的故事</button>';
+    });
+  }
+  // 打捞活动标记 <<SALVAGE_HL>>标题：渲染为醒目红字高亮
+  // 注意：render() 已把换行转成 <br>，此处必须以 < 为边界（同 AVATAR/STORY 标记），
+  // 否则 [^\n]* 会一路吞到末尾，导致整段回复全部变红。
+  if (/&lt;&lt;SALVAGE_HL&gt;&gt;/.test(html)) {
+    html = html.replace(/&lt;&lt;SALVAGE_HL&gt;&gt;([^<\n]*)/g, function (m, t) {
+      return '<span class="salvage-hl">' + t + '</span>';
     });
   }
   // 第一步：识别到算伤害 → 渲染填空表单（不渲染按钮）
@@ -2160,7 +2182,7 @@ function renderSecretaryReply(data, msgEl) {
 
 // 发送消息到 /api/chat
 // 会话隔离：浏览器本地生成稳定 session_id（localStorage），多人/多标签互不串；
-// token 鉴权：支持 URL 带 ?token=xxx（自动记忆）或 localStorage 存 API_TOKEN
+// token 鉴权：支持 URL 带 ?token=xxx（自动记忆）或 localStorage 存口令
 function _sessionId() {
   let sid = credGet('arkly_session_id');
   if (!sid) { sid = 'web-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8); credSet('arkly_session_id', sid); }
@@ -2189,12 +2211,19 @@ function checkQuotaAlert() {
       // 移动端右上角角标：只要拿到有效百分比就常驻显示（桌面端被 CSS 隐藏）
       const fabBallEl = document.getElementById('fabBall');
       var pctTxt = isNaN(p) ? '' : Math.max(0, Math.round(p)) + '%';
-      // 悬浮球环形底色：剩余算力百分比（不足阈值标红 + 红色光晕）
+      // 悬浮球环形底色：剩余算力百分比（≥30% 绿 / 10%~30% 黄 / <10% 红，中心蓝底白字）
       if (fabBallEl) {
-        fabBallEl.style.setProperty('--p', isNaN(p) ? 0 : Math.max(0, Math.round(p)));
-        const low = !isNaN(p) && p <= QUOTA_ALERT_PCT;
-        fabBallEl.style.setProperty('--ring', low ? '#e74c3c' : '#2bb673');
-        fabBallEl.classList.toggle('low', low);
+        // 开发者/不限量模式：p 为 NaN，按"满额"处理，整圈显示绿色
+        const unlimited = isNaN(p);
+        fabBallEl.style.setProperty('--p', unlimited ? 100 : Math.max(0, Math.round(p)));
+        // 环形三档配色：≥30 绿，10~30 黄，<10 红（不限量直接绿）
+        let ring = '#2bb673', danger = false;
+        if (!unlimited) {
+          if (p < 10) { ring = '#e74c3c'; danger = true; }
+          else if (p < 30) { ring = '#f1c40f'; }
+        }
+        fabBallEl.style.setProperty('--ring', ring);
+        fabBallEl.classList.toggle('low', danger);
         const pctEl = document.getElementById('fabPct');
         if (pctEl) pctEl.textContent = pctTxt;
       }
@@ -2252,6 +2281,20 @@ function fabAlignMenu() {   // 菜单与球中心对齐；靠视口边缘时平�
 }
 function fabDefaultPos() { fabSetPos(window.innerWidth - fabSize() - FAB_PAD, FAB_DEF_TOP); }
 fabDefaultPos();
+
+// 悬浮球自动翻转：原图 ⇄ 现在工具箱，每 10s 一次；
+// 展开菜单时强制停在「现在工具箱」面并暂停翻转，收起后恢复
+var FAB_FLIP_MS = 10000;
+var fabFlipTimer = null;
+function fabFlipStart() {
+  if (fabFlipTimer) return;
+  fabFlipTimer = setInterval(function () { fabBall.classList.toggle('flipped'); }, FAB_FLIP_MS);
+}
+function fabFlipStop() { if (fabFlipTimer) { clearInterval(fabFlipTimer); fabFlipTimer = null; } }
+
+// 初始：悬浮球默认展开 → 停在工具箱面并暂停翻转；收起则每 10s 自动翻转
+fabBall.classList.toggle('flipped', fabWrap.classList.contains('open'));
+if (fabWrap.classList.contains('open')) fabFlipStop(); else fabFlipStart();
 window.addEventListener('resize', function () {
   fabSetPos(+fabWrap.dataset.x || 0, +fabWrap.dataset.y || FAB_DEF_TOP);
 });
@@ -2269,17 +2312,25 @@ fabBall.addEventListener('pointermove', function (e) {
 });
 fabBall.addEventListener('pointerup', function () {
   if (fabDrag && !fabDrag.moved) {
+    var opening = !fabWrap.classList.contains('open');
     fabWrap.classList.toggle('open');
     fabAlignMenu();
+    // 打开菜单：停在「现在工具箱」面并暂停翻转；收起后恢复每 10s 翻转
+    if (opening) { fabBall.classList.add('flipped'); fabFlipStop(); }
+    else { fabFlipStart(); }
   }
   fabDrag = null;
 });
 document.addEventListener('click', function (e) {
-  if (!fabWrap.contains(e.target)) fabWrap.classList.remove('open');
+  if (!fabWrap.contains(e.target) && fabWrap.classList.contains('open')) {
+    fabWrap.classList.remove('open');
+    fabFlipStart();   // 收起菜单后恢复每 10s 翻转
+  }
 });
 document.querySelectorAll('#fabMenu .sug-btn').forEach(function (btn) {
   btn.addEventListener('click', function () {
     fabWrap.classList.remove('open');
+    fabFlipStart();   // 选完功能后恢复每 10s 翻转
     var cmd = btn.dataset.cmd;
     if (cmd === '查角色') { openShipBrowser(); return; }   // 「查角色」直接开角色面板，不发对话
     if (cmd === '使用帮助') { openManual(); return; }       // 「使用帮助」直接弹手册，不发对话
@@ -2595,7 +2646,7 @@ function showRegisterResult(j) {
     <div style="background:var(--panel,#fff);border:1px solid var(--line,#e5e8ec);border-radius:12px;padding:28px 32px;max-width:380px;width:90%;box-shadow:0 8px 30px rgba(0,0,0,.08);text-align:center;">
       <div style="font-size:17px;font-weight:600;margin-bottom:14px;">注册成功</div>
       <div style="font-size:14px;color:var(--ink-soft,#6b7280);margin-bottom:4px;">你的账号</div>
-      <div style="font-size:22px;font-weight:700;letter-spacing:1px;margin-bottom:12px;">${esc(j.uid || '')}</div>
+      <div style="font-size:22px;font-weight:700;letter-spacing:1px;margin-bottom:12px;">${esc((j.user && j.user.user_uid) || j.user_uid || j.uid || '')}</div>
       <div style="font-size:14px;color:var(--ink-soft,#6b7280);margin-bottom:4px;">你的口令</div>
       <div style="font-size:17px;font-weight:600;font-family:ui-monospace,Consolas,monospace;word-break:break-all;background:#f6f4ee;border:1px solid var(--line,#e5e8ec);border-radius:8px;padding:9px 12px;margin-bottom:14px;">${esc(j.token || '')}</div>
       <div style="font-size:13px;color:#c0392b;line-height:1.6;margin-bottom:16px;">请截图或抄下这两项。<br>本机已自动记住，换手机/换浏览器时需要用它登录。</div>
@@ -2677,34 +2728,39 @@ function buildAuthOverlay(info) {
   const canRegister = !!(info && info.allow_register);
   const needInvite = !(info && info.need_invite === false);
   const hint = canRegister
-    ? (needInvite ? '输入邀请码开始使用' : '点下方按钮直接开始使用')
+    ? (needInvite ? '新用户：输入邀请码 + 你的 uid；已有账号：只填口令' : '新用户：填写你的 uid；已有账号：只填口令')
     : '请输入你的口令';
-  const ph = canRegister ? (needInvite ? '输入邀请码' : '（无需填写，直接开始）') : '输入口令';
+  const inpStyle = 'width:100%;padding:10px 12px;border:1px solid var(--line,#e5e8ec);border-radius:8px;font-size:15px;box-sizing:border-box;outline:none;margin-bottom:10px;';
   const ov = document.createElement('div');
   ov.id = 'auth-overlay';
   ov.style.cssText = 'position:fixed;inset:0;z-index:9999;background:var(--bg,#f4f6f8);display:flex;align-items:center;justify-content:center;';
+  const fields = canRegister
+    ? ('<input id="auth-token-input" type="text" placeholder="' + (needInvite ? '邀请码（或已有口令）' : '已有口令（没有可留空）') + '" style="' + inpStyle + '" />'
+       + '<input id="auth-uid-input" type="text" inputmode="numeric" maxlength="8" autocomplete="off" placeholder="你的 uid（8 位数字，首位 1/3/6/8）" style="' + inpStyle + '" />')
+    : ('<input id="auth-token-input" type="password" placeholder="输入口令" style="' + inpStyle + '" />');
   ov.innerHTML = `
     <div style="background:var(--panel,#fff);border:1px solid var(--line,#e5e8ec);border-radius:12px;padding:32px 36px;max-width:360px;width:90%;box-shadow:0 8px 30px rgba(0,0,0,.08);text-align:center;">
       <div style="width:44px;height:44px;border-radius:50%;background:linear-gradient(135deg,#8fa6b8,#5d7a91);color:#fff;display:flex;align-items:center;justify-content:center;font-size:19px;margin:0 auto 14px;">阿</div>
       <div style="font-size:17px;font-weight:600;margin-bottom:6px;">拂晓智能小秘书</div>
       <div style="font-size:14px;color:var(--ink-soft,#6b7280);margin-bottom:18px;">${hint}</div>
-      <input id="auth-token-input" type="password" placeholder="${ph}"
-        style="width:100%;padding:10px 12px;border:1px solid var(--line,#e5e8ec);border-radius:8px;font-size:15px;box-sizing:border-box;outline:none;" />
-      <div id="auth-err" style="color:#c0392b;font-size:13px;min-height:16px;margin-top:8px;display:none;">口令错误，请重试</div>
+      ${fields}
+      <div id="auth-err" style="color:#c0392b;font-size:13px;min-height:16px;margin-top:2px;display:none;">口令错误，请重试</div>
       <button id="auth-submit"
-        style="width:100%;margin-top:12px;padding:10px 0;background:var(--accent,#6b8caa);color:#fff;border:none;border-radius:8px;font-size:15px;cursor:pointer;">解锁</button>
+        style="width:100%;margin-top:12px;padding:10px 0;background:var(--accent,#6b8caa);color:#fff;border:none;border-radius:8px;font-size:15px;cursor:pointer;">${canRegister ? '开始使用' : '解锁'}</button>
     </div>`;
   document.body.appendChild(ov);
   const input = ov.querySelector('#auth-token-input');
+  const uidInput = ov.querySelector('#auth-uid-input');
   const err = ov.querySelector('#auth-err');
   const btn = ov.querySelector('#auth-submit');
-  // 以前输过邀请码的老用户：预填，点「解锁」即可 —— 不用再翻聊天记录找邀请码
+  // 以前输过邀请码的老用户 / URL 带码：预填邀请码，点「开始使用」即可
   if (canRegister && needInvite) {
-    const remembered = credGet('arkly_invite');
+    const remembered = credGet('arkly_invite') || (new URLSearchParams(location.search).get('invite') || '');
     if (remembered) input.value = remembered;
   }
-  // 用已有口令验证（老用户换设备登录 / 管理端口令）
-  function verifyToken(t) {
+  function validUid(u) { return /^[1368][0-9]{7}$/.test(u); }
+  // 用已有口令验证（老用户换设备登录 / 管理端口令）；failMsg 可自定义失败提示
+  function verifyToken(t, failMsg) {
     credSet('arkly_api_token', t);
     fetch('/api/auth/status', { headers: { 'X-API-Token': t } })
       .then(r => r.json())
@@ -2724,7 +2780,7 @@ function buildAuthOverlay(info) {
           inputEl.focus();
         } else {
           credDel('arkly_api_token');
-          err.textContent = (d && d.reason === 'paused') ? '服务暂未对测试用户开放' : '口令错误，请重试';
+          err.textContent = failMsg || ((d && d.reason === 'paused') ? '服务暂未对测试用户开放' : '口令错误，请重试');
           err.style.display = 'block';
           input.focus();
         }
@@ -2732,15 +2788,20 @@ function buildAuthOverlay(info) {
       .catch(() => { err.textContent = '网络错误，请稍后重试'; err.style.display = 'block'; input.focus(); });
   }
   function submit() {
-    const v = (input.value || '').trim();
-    if (!v && !canRegister) return;
     err.style.display = 'none';
-    // ① 开放注册时：先把输入当**邀请码**试注册（同 IP 老用户也会直接回位）
+    const v = (input.value || '').trim();
+    // ① 开放注册时：注册（带用户自填 uid）优先；失败再当已有口令验证
     if (canRegister) {
+      const u = uidInput ? (uidInput.value || '').trim() : '';
+      if (u && !validUid(u)) {
+        err.textContent = 'uid 须为 8 位数字、首位为 1/3/6/8';
+        err.style.display = 'block'; if (uidInput) uidInput.focus();
+        return;
+      }
       fetch('/api/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ invite: v, device_id: deviceId() })
+        body: JSON.stringify({ invite: v, device_id: deviceId(), user_uid: u })
       }).then(r => r.json()).then(j => {
         if (j && j.ok && j.token) {
           credSet('arkly_api_token', j.token);
@@ -2749,15 +2810,28 @@ function buildAuthOverlay(info) {
           location.reload();
           return;
         }
-        // ② 不是邀请码 → 当**已有口令**验证
+        const reason = (j && j.reason) || '';
+        if (reason === 'uid_taken') {
+          err.textContent = '该 uid 已被占用，请换一个';
+          err.style.display = 'block'; if (uidInput) uidInput.focus();
+          return;
+        }
+        if (reason === 'bad_uid') {
+          // 可能是新用户漏填 uid，也可能是老用户拿口令登录 → 先按口令试，失败再提示填 uid
+          verifyToken(v, '请填写你的 uid（8 位数字，首位 1/3/6/8）；已有账号请确认口令');
+          return;
+        }
+        // ② 其余（邀请码不对 / 未开放注册）→ 当**已有口令**验证
         verifyToken(v);
       }).catch(() => verifyToken(v));
       return;
     }
+    if (!v) return;
     verifyToken(v);
   }
   btn.addEventListener('click', submit);
   input.addEventListener('keydown', (e) => { if (e.key === 'Enter') submit(); });
+  if (uidInput) uidInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') submit(); });
   input.focus();
   authUnlocked = false;
 }
@@ -2885,8 +2959,47 @@ function applyFestivalTheme(hol) {
     }
     // 节庆主题（今天在法定节假日区间内才有）：换头像边框 / 气泡皮肤 / 落节庆装饰
     if (data.holiday) applyFestivalTheme(data.holiday);
+    // 表情差分映射（名字→URL）：双击阿卡莉头像随机切换表情用
+    if (Array.isArray(data.expression_urls)) ARKLY_EXPR_URLS = data.expression_urls;
   } catch (e) { /* 素材拉取失败沿用回退头像，不打断对话 */ }
 })();
+
+// ===== 双击阿卡莉头像：随机切换表情（排除「常态」「厌恶」）持续 3 秒 =====
+// 作用于标题栏头像（.avatar img）与每条秘书回复头像（.msg.secretary .ava img）。
+// 双击时随机挑一张非排出表情的差分图，3 秒后还原到切换前本来的头像。
+let _akaliExprTimer = null;
+function cycleAkaliExpression() {
+  if (!ARKLY_EXPR_URLS.length) return;
+  const EXCLUDE = new Set(['常态', '厌恶']);
+  const pool = ARKLY_EXPR_URLS.filter(e => e && e.name && !EXCLUDE.has(e.name));
+  if (!pool.length) return;
+  const pick = pool[Math.floor(Math.random() * pool.length)];
+  const url = resolveAsset(pick.url);
+  if (_akaliExprTimer) clearTimeout(_akaliExprTimer);
+  const imgs = document.querySelectorAll('.avatar img, .msg.secretary .ava img');
+  imgs.forEach(function (img) {
+    if (!img.dataset._exprPrev) img.dataset._exprPrev = img.src;
+    img.src = url;
+  });
+  _akaliExprTimer = setTimeout(function () {
+    document.querySelectorAll('.avatar img, .msg.secretary .ava img').forEach(function (img) {
+      if (img.dataset._exprPrev) { img.src = img.dataset._exprPrev; img.dataset._exprPrev = ''; }
+    });
+  }, 3000);
+}
+// 事件委托：单击阿卡莉头像任意一处即触发（标题栏 + 消息内头像，动态新增也能命中）
+// 守卫：仅当该头像当前就是「常态」时才响应 —— 覆盖 <<EXP>> 神态或随机切换中的临时表情时点击无效，
+// 切回常态（3 秒后或本就是默认）后才可再次触发（用户口径：必须是常态的时候点击才有效）。
+document.addEventListener('click', function (ev) {
+  const img = ev.target.closest('.avatar img, .msg.secretary .ava img');
+  if (!img) return;
+  ev.preventDefault();
+  // 归一化为绝对地址再比：img.src 恒为绝对 URL，而 ARKLY_AVATAR 在同源部署下是相对路径，
+  // 直接 !== 会因「绝对 vs 相对」永远不相等，导致守卫误判「非常态」而拦截全部单击。
+  const def = new URL(ARKLY_AVATAR, location.href).href;
+  if (img.src !== def) return;
+  cycleAkaliExpression();
+});
 
 // ===== 心跳与自动关闭 =====
 (function() {

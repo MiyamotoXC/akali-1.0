@@ -38,28 +38,18 @@
   }
   /* 顶栏 */
   header {
-    position: relative; z-index: 1; /* 置于聊天背景层之上，保证清晰显示 */
-    /* 顶端背景与聊天背景分开、互不重叠（用户口径 2026-09-22）：
-       此前用「半透明 + 毛玻璃」，聊天背景图（main::before，覆盖全视口）会从顶栏
-       透上来，两张图在顶栏视觉上叠在一起；现改为**不透明**淡色纯色，顶栏自成一层。
-       若 知识库/图片素材/背景/顶端.png 存在，由 JS 加 .has-top-bg 换用顶端专用图。 */
-    background-color: #f7f8fa;
+    position: relative; z-index: 1; /* 置于聊天背景层之上 */
+    /* 顶端背景 = 当前聊天背景的淡化版：透出 main::before 的聊天背景（自动跟随时段：
+       白天/清晨/黄昏/夜间），以白纱 + 毛玻璃柔化，头像与标题清晰可读，
+       并与下方聊天背景融为一体，而不是另叠一张顶端专用图。 */
+    background: rgba(255, 255, 255, 0.75);
+    backdrop-filter: blur(10px) saturate(1.05);
+    -webkit-backdrop-filter: blur(10px) saturate(1.05);
     border-bottom: 1px solid var(--line);
     padding: 12px 20px;
     display: flex;
     align-items: center;
     gap: 12px;
-  }
-  /* 顶栏淡色按时段区分（不透明；清晨暖白 / 白天灰白 / 黄昏暖橘 / 夜间冷蓝白）。
-     只写 background-color：用 background 简写会把下面的顶端图 background-image 清掉 */
-  body.bg-dawn header { background-color: #c9c4be; }
-  body.bg-evening header { background-color: #fdf0e6; }
-  body.bg-night header { background-color: #e9eef7; }
-  /* 顶端专用背景图（--top-bg 由 JS 探测 背景/顶端[_时段].png 后设置）：
-     与聊天背景分层显示、互不重叠；探测不到时回落上面的淡色纯色 */
-  header.has-top-bg {
-    background-image: var(--top-bg);
-    background-size: cover; background-position: center; background-repeat: no-repeat;
   }
   .avatar {
     width: 54px; height: 54px; border-radius: 65%;
@@ -70,13 +60,34 @@
   .avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
   /* 悬浮球：默认挂在标题栏（高 72px）内右侧居中，可拖动换位；点击展开工具菜单（位置由 JS 控制） */
   .fab-wrap { position: fixed; left: calc(100vw - 64px); top: 8px; z-index: 60; }
-  .fab-ball { width: 72px; height: 72px; border-radius: 50%; overflow: hidden; cursor: grab;
+  .fab-ball { width: 72px; height: 72px; border-radius: 50%; cursor: grab;
     border: 2px solid var(--line); box-shadow: 0 4px 12px rgba(30, 40, 50, 0.18);
-    background: var(--panel); padding: 0; transition: box-shadow .15s;
-    touch-action: none; user-select: none; -webkit-user-select: none; }
+    padding: 0; transition: box-shadow .15s;
+    touch-action: none; user-select: none; -webkit-user-select: none;
+    position: relative;
+    /* 3D 翻转：两面做 rotateY，这里给透视；环形进度底色搬到 .fab-face-back */
+    perspective: 600px; }
   .fab-ball:active { cursor: grabbing; }
   .fab-ball:hover { box-shadow: 0 6px 16px rgba(30, 40, 50, 0.28); }
-  .fab-ball img { width: 100%; height: 100%; object-fit: cover; display: block; pointer-events: none; }
+  /* 红色档（<10%）时红色光晕，醒目 */
+  .fab-ball.low { box-shadow: 0 0 0 3px rgba(231,76,60,.35), 0 4px 12px rgba(30,40,50,.18); }
+  /* 内圈蓝底（中心空白底色为蓝色），做出环形进度 */
+  .fab-face-back::after { content: ''; position: absolute; inset: 7px; border-radius: 50%; background: #2b6cd4; }
+  /* 前景：百分比 + 港区工具字样 */
+  .fab-ball-inner { position: relative; z-index: 1; text-align: center; line-height: 1.05; }
+  .fab-ball-inner .pct { font-size: 20px; font-weight: 800; color: #fff; }
+  .fab-ball-inner .lbl { font-size: 12px; font-weight: 700; color: #fff; letter-spacing: 1px; margin-top: 1px; }
+  /* 翻转两面：front=原图(悬浮窗.png)，back=现在工具箱(环形进度+港区工具)；
+     每 5s 自动翻转一次；采用「内层包裹 + preserve-3d」标准写法，兼容性最稳 */
+  .fab-flip { position: absolute; inset: 0; transform-style: preserve-3d; transition: transform .6s ease; }
+  .fab-face { position: absolute; inset: 0; border-radius: 50%;
+    backface-visibility: hidden; -webkit-backface-visibility: hidden; }
+  .fab-face-front { transform: rotateY(0deg);
+    background: url('/kb/图片素材/背景/悬浮窗.png') center/cover no-repeat, #cfe2f3; }
+  .fab-face-back { transform: rotateY(180deg);
+    background: conic-gradient(var(--ring, #2bb673) calc(var(--p, 0) * 1%), #e9eef3 0);
+    display: flex; align-items: center; justify-content: center; }
+  .fab-ball.flipped .fab-flip { transform: rotateY(180deg); }
   .fab-menu { display: none; position: absolute; top: calc(100% + 8px); left: 50%;
     transform: translateX(-50%);
     flex-direction: column; gap: 6px; min-width: 136px;
@@ -88,6 +99,9 @@
   .fab-menu .sug-btn.fab-exit { margin-top: 4px; padding-top: 10px; border-top: 1px solid var(--line);
     color: #fff; background: #c0392b; font-weight: 600; }
   .fab-menu .sug-btn.fab-exit:hover { background: #a93226; }
+  /* 悬浮球「使用帮助」：淡绿色，与功能项/退出区分，点击直接弹手册 */
+  .fab-menu .sug-btn.fab-help { background: #e6f4ea; color: #1f7a4d; border: 1px solid rgba(31,122,77,0.35); }
+  .fab-menu .sug-btn.fab-help:hover { background: #d6ecdb; }
   .title-wrap { flex: 1; }
   .title { font-size: 17px; font-weight: 600; }
   .subtitle { font-size: 13px; color: var(--ink-soft); }
@@ -630,12 +644,17 @@
     .bubble table, .bubble pre.code { max-width: 100%; }
     .sug-btn { padding: 6px 12px; font-size: 14px; }
     .fab-ball { width: 46px; height: 46px; }
-    .fab-menu { min-width: 124px; }
+    .fab-face-back::after { inset: 4px; }
+    .fab-ball-inner .pct { font-size: 13px; }
+    .fab-ball-inner .lbl { font-size: 8px; letter-spacing: 0; }
     .story-modal-box { width: 94%; max-height: 86vh; }
     .input-row { gap: 6px; }
     .input-row textarea { font-size: 17px; }   /* ≥16px 防 iOS 聚焦自动放大 */
     footer button { padding: 8px 10px; }
     .up-head, .up-actions { flex-wrap: wrap; }
+    /* 移动端：工具菜单改为贴右侧的竖向「港区工具」下拉面板（参考图），默认展开 */
+    .fab-menu { left: auto; right: 0; transform: none; min-width: 112px; gap: 5px; padding: 7px; }
+    .fab-menu .sug-btn { padding: 10px 10px; font-size: 14px; }
   }
 
   /* 反馈按钮：常显在阿卡莉气泡**外侧右下角**（用户口径 2026-09-25）。
@@ -687,9 +706,18 @@
   </header>
 
   <!-- 悬浮球：挂在标题栏阿卡莉头像下方，点击展开工具菜单；逻辑见 JS「功能菜单（悬浮球）」区块 -->
-  <div class="fab-wrap" id="fabWrap">
-    <button class="fab-ball" id="fabBall" title="工具菜单">
-      <img src="/kb/图片素材/背景/悬浮窗.png" alt="工具菜单">
+  <!-- open：参考图要求「悬浮窗开始默认是打开的」 -->
+  <div class="fab-wrap open" id="fabWrap">
+    <button class="fab-ball flipped" id="fabBall" title="港区工具（底色环形显示剩余算力）">
+      <span class="fab-flip">
+        <span class="fab-face fab-face-front" aria-hidden="true"></span>
+        <span class="fab-face fab-face-back">
+          <span class="fab-ball-inner">
+            <span class="pct" id="fabPct"></span>
+            <span class="lbl">港区工具</span>
+          </span>
+        </span>
+      </span>
     </button>
     <div class="fab-menu" id="fabMenu">
       <button class="sug-btn" data-cmd="查角色">查角色</button>
@@ -697,7 +725,8 @@
       <button class="sug-btn" data-cmd="计算工具">计算工具</button>
       <button class="sug-btn" data-cmd="活动">活动</button>
       <button class="sug-btn" data-cmd="遭遇战模拟">遭遇战模拟</button>
-      <button class="sug-btn fab-exit" data-cmd="退出" title="关闭网页">退出</button>
+      <button class="sug-btn fab-help" data-cmd="使用帮助">使用帮助</button>
+      <button class="sug-btn fab-exit" data-cmd="退出应用" title="关闭网页">退出应用</button>
     </div>
   </div>
 
@@ -715,7 +744,7 @@
         <button id="upLoad">载入面板</button>
         <button id="upRefresh">刷新列表</button>
       </div>
-      <div class="up-fields" id="upFields"><div class="up-note">输入舰名后点「载入面板」，可修改面板数值并保存。计算（遭遇战/PVP/单体）将以副本面板为基础，查询仍显示底层数据。</div></div>
+      <div class="up-fields" id="upFields"><div class="up-note">输入舰名后点「载入面板」，可改成 <b>你自己的本地副本</b>。计算（遭遇战/PVP/单体）以此副本面板为基础；<b>未保存时回落底层基础面板（默认无装备）</b>。面板<b>仅含装备属性，不含天赋/羁绊加成</b>，仅供显示与计算。</div></div>
       <div class="up-actions">
         <button id="upSaveAbs">保存（设为输入值）</button>
         <button id="upSaveDelta">保存增量（相对当前值）</button>

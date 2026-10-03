@@ -612,7 +612,7 @@ def _cd_effect_targets(attackers, idx: int, scope: dict, flagship_idx) -> List[i
             elif kind == "name":
                 ok = val in (attackers[j].name or "")
             elif kind == "ship_class":
-                ok = val in (attackers[j].name or "")   # 舰级按名称包含近似
+                ok = match_ship_class(attackers[j].name or "", val)   # 舰级按原型舰历史表比对
             if not ok:
                 break
         if ok:
@@ -726,23 +726,50 @@ def _buff_scope_targets(attackers, filters, flagship_idx=None) -> List[int]:
 
 
 def _apply_cd_effects(attackers, idx: int, slot: str, t: int,
-                      skill_next, burst_set, flagship_idx) -> None:
-    """技能释放后触发 CD 效果（重置/固定减秒），仅影响目标下一次对应技能的释放。
+                      skill_next, burst_set, support_next, flagship_idx) -> None:
+    """技能释放后触发 CD 效果（重置/固定减秒/全槽位减秒），仅影响目标下一次对应技能的释放。
 
-    - target=skill：重置 → skill_next 置为 t（下一秒即满足释放条件）；
-      减秒 → 下一轮释放提前 N 秒（不早于 t，不叠加到再下一轮）
-    - target=burst：DP 时间表上 t 之后的最近一次必杀提前 N 秒（重置则到 t+1），
-      仅一次，后续必杀节奏不变
+    - target=skill：重置 → skill_next 置为 t；减秒 → 下一轮释放提前 N 秒（不早于 t）。
+    - target=burst：DP 时间表上 t 之后的最近一次必杀提前 N 秒（重置则到 t+1），仅一次。
+    - target=all：对 scope 内每艘船的 通常技/必杀/支援 全槽位减秒 N 秒（重置则各置为 t/t+1）。
     """
     effs = getattr(attackers[idx], "cd_effects", None) or {}
     for eff in effs.get(slot, []):
         seconds = float(eff.get("seconds", 0) or 0)
-        for j in _cd_effect_targets(attackers, idx, eff.get("scope") or {}, flagship_idx):
+        action = eff.get("action")
+        targets = _cd_effect_targets(attackers, idx, eff.get("scope") or {}, flagship_idx)
+        if eff.get("target") == "all":
+            for j in targets:
+                if action == "reset":
+                    if skill_next[j] is not None:
+                        skill_next[j] = t
+                    ts = burst_set.get(j)
+                    if ts:
+                        fut = [x for x in ts if x > t]
+                        if fut:
+                            ts.discard(min(fut))
+                            ts.add(t + 1)
+                    if support_next[j] is not None:
+                        support_next[j] = t
+                else:
+                    if skill_next[j] is not None:
+                        skill_next[j] = max(t, skill_next[j] - seconds)
+                    ts = burst_set.get(j)
+                    if ts:
+                        fut = [x for x in ts if x > t]
+                        if fut:
+                            s = min(fut)
+                            ts.discard(s)
+                            ts.add(max(t + 1, s - int(seconds)))
+                    if support_next[j] is not None:
+                        support_next[j] = max(t, support_next[j] - seconds)
+            continue
+        for j in targets:
             if eff.get("target") == "skill":
                 cur = skill_next[j]
                 if cur is None:
                     continue
-                skill_next[j] = t if eff.get("action") == "reset" else max(t, cur - seconds)
+                skill_next[j] = t if action == "reset" else max(t, cur - seconds)
             elif eff.get("target") == "burst":
                 times = burst_set.get(j)
                 if not times:
@@ -752,7 +779,7 @@ def _apply_cd_effects(attackers, idx: int, slot: str, t: int,
                     continue
                 s = min(future)
                 times.discard(s)
-                times.add(t + 1 if eff.get("action") == "reset" else max(t + 1, s - int(seconds)))
+                times.add(t + 1 if action == "reset" else max(t + 1, s - int(seconds)))
 
 
 def _simulate_encounter_buff_aware(attackers, boss, day_time, course, air,
@@ -1095,7 +1122,7 @@ def _simulate_encounter_buff_aware(attackers, boss, day_time, course, air,
                             skill_release_r.add((idx, t))
                 skill_next[idx] = t + scd
                 # CD 效果（重置/固定减秒）：本技能释放后触发
-                _apply_cd_effects(base_attackers, idx, "skill", t, skill_next, burst_set, flagship_idx)
+                _apply_cd_effects(base_attackers, idx, "skill", t, skill_next, burst_set, support_next, flagship_idx)
 
             # 支援技（仅后排，按 CD 计时）：全时推进；在后排且 CD 已刷新好（next<=t）即释放。
             # 交换不停摆：交换当秒原后排照常放完（该秒仍属后排）；原前排若 CD 恰在交换发起秒到点，
@@ -1108,7 +1135,7 @@ def _simulate_encounter_buff_aware(attackers, boss, day_time, course, air,
                     pending.append({"idx": idx, "kind": "support", "wi": None, "release_t": t, "delay": 1})
                 support_next[idx] = t + spcd
                 # CD 效果（重置/固定减秒）：本技能释放后触发
-                _apply_cd_effects(base_attackers, idx, "support", t, skill_next, burst_set, flagship_idx)
+                _apply_cd_effects(base_attackers, idx, "support", t, skill_next, burst_set, support_next, flagship_idx)
 
             # 必杀技（仅前排，按 DP 时间表）：所有伤害统一延后 1s 结算（含航空类必杀，
             # 已去掉「航母类伤害延后 2s」的旧机制，不再叠加）。
@@ -1118,7 +1145,7 @@ def _simulate_encounter_buff_aware(attackers, boss, day_time, course, air,
                     pending.append({"idx": idx, "kind": "burst", "wi": None,
                                     "release_t": t, "delay": 1})
                     # CD 效果（重置/固定减秒）：本技能释放后触发
-                    _apply_cd_effects(base_attackers, idx, "burst", t, skill_next, burst_set, flagship_idx)
+                    _apply_cd_effects(base_attackers, idx, "burst", t, skill_next, burst_set, support_next, flagship_idx)
 
     # 收尾：结算因延迟而落在主循环外（release_t+delay == total_time）的延迟伤害
     if pending:

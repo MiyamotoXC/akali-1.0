@@ -369,6 +369,13 @@ def _parse_filters(clause: str, ref: dict) -> list:
     for st in sorted(ref.get("ship_types", ())):
         if st and st in clause:
             filters.append({"kind": SCOPE_KIND_SHIP_TYPE, "value": st})
+    # 若同时指定了舰级，剔除被舰级词包含的舰名子串（如"约克城级"误带出名字"约克"），
+    # 否则 name 过滤会把同级的其它船（企业/大黄蜂）错误排除，只命中约克城一艘。
+    _classes = [f["value"] for f in filters if f["kind"] == SCOPE_KIND_SHIP_CLASS]
+    if _classes:
+        filters = [f for f in filters
+                   if not (f["kind"] == SCOPE_KIND_NAME
+                           and any(f["value"] in c for c in _classes))]
     return filters
 
 
@@ -1261,6 +1268,7 @@ def extract_raguz_bonus(skills: Dict) -> float:
 _CD_TARGET_MAP = {
     "通常技": "skill", "必杀技": "burst",
     "炮击、雷击技能": "skill", "炮击技能": "skill", "雷击技能": "skill",
+    "航空技能": "all",
 }
 # 条件触发关键词（暴击/几率/命中后/若目标是X）：确定性时间轴不模拟随机触发，整条跳过
 _CD_CONDITIONAL_KEYWORDS = ("暴击", "几率", "机率", "命中后", "若目标")
@@ -1268,8 +1276,9 @@ _CD_CONDITIONAL_KEYWORDS = ("暴击", "几率", "机率", "命中后", "若目�
 _CD_RESET_RE = re.compile(r'重置(?:自身)?(通常技|该技能)(?:的)?冷却时间?')
 # 固定减秒：「必杀技的技能冷却时间减少2秒」「炮击、雷击技能冷却时间减少2秒」
 # 目标与"冷却时间减少"之间允许 的/技能/，等连接文字（不跨【】与换行）
+# "减少"与"缩短"同义；"航空技能"为航母技能统称（映射为 all：减其所有技能槽 CD）
 _CD_REDUCE_RE = re.compile(
-    r'(通常技|必杀技|炮击、雷击技能|炮击技能|雷击技能)[^【】\n]*?冷却时间减少(\d+)秒')
+    r'(通常技|必杀技|炮击、雷击技能|炮击技能|雷击技能|航空技能)[^【】\n]*?冷却时间(?:减少|缩短)(\d+)秒')
 
 
 def _cd_effect_clause(text: str, match_start: int, match_end: int = 0) -> str:
@@ -1338,8 +1347,9 @@ def extract_cd_effects(skills: Dict) -> Dict[str, List[dict]]:
     """从技能描述提取无条件的 CD 效果（重置/固定减秒）→ CombatData.cd_effects。
 
     结构：{slot: [效果]}，slot 为释放源技能（skill/burst/support），
-    效果 = {"action": "reset"|"reduce", "target": "skill"|"burst",
+    效果 = {"action": "reset"|"reduce", "target": "skill"|"burst"|"all",
             "scope": {...}, 可选 "seconds": N}
+    target=all：一次性对 scope 内每艘船的 通常技/必杀/支援 全槽位减秒
     条件触发（暴击/几率/命中后/若目标是X）不模拟 → 跳过；
     目标为支援技的效果不存在，不产出。
     """

@@ -813,7 +813,7 @@ app = FastAPI(title="拂晓只能小秘书")
 
 
 # ==================== 可选 API Token 鉴权（部署对外时启用） ====================
-# 在 .env 配置 AKALI_INVITE_CODE（或旧名 API_TOKEN）后：外部访问的 API 请求
+# 在 .env 配置 AKALI_INVITE_CODE 后：外部访问的 API 请求
 # 须带请求头 X-API-Token: xxxx（或 ?token=xxxx），否则 401。
 # 页面本体与静态资源（/、/kb/、/avatar/）放行——让用户能直接打开隧道 URL 看到登录界面，
 # 在页面内输入 token 后（前端存 localStorage、后续请求带 header）解锁。
@@ -821,7 +821,7 @@ app = FastAPI(title="拂晓只能小秘书")
 # 云端模式一律校验（见下方 _LOOPBACK_HOSTS 说明）。
 # 口令留空（默认）则不鉴权（本地个人使用）。
 from core import users as _users   # 账号体系：uid / 口令 / 准入总开关，全部由 .env 控制
-_API_TOKEN = _users.owner_token()   # 优先级 AKALI_OWNER_TOKEN → AKALI_INVITE_CODE → API_TOKEN
+_API_TOKEN = _users.owner_token()   # 优先级 AKALI_OWNER_TOKEN → AKALI_INVITE_CODE
 
 # 放行路径：页面 / 静态资源 / 认证状态探测（前端据此决定是否弹 token 输入框）
 _AUTH_PUBLIC_PREFIXES = ("/kb/", "/avatar/", "/icons/", "/manual-imgs/")
@@ -969,11 +969,18 @@ async def admin_usage(request: Request, day: Optional[str] = None):
     _require_admin(request)
     from core import quota as _quota
     rows = _quota.usage_snapshot(day)
+    # 日期下拉：用量或请求流水里出现过的日期都算（用户口径 2026-10-02：可回看任意历史日）
+    dates = sorted(
+        {k.split('|', 1)[0] for k in _quota.STORE.usage.keys()
+         if isinstance(k, str) and '|' in k}
+        | {d for d in _quota.STORE.reqlog.keys() if isinstance(d, str)},
+        reverse=True,
+    )
     # 把 uid 对应的人名补上，便于一眼看出是谁在用
     name_of = {u['uid']: u.get('name') or '' for u in _users.list_accounts()}
     # 流量口径 = 请求数：按 uid 统计今天 /api/chat 请求次数（含未走 LLM 的工具类请求）
     req_cnt = {}
-    for e in _quota.recent_requests(day):
+    for e in _quota.recent_requests(day, 500):
         req_cnt[e['key']] = req_cnt.get(e['key'], 0) + 1
     owner = _users.owner_uid()
     owner_seen = False
@@ -989,17 +996,17 @@ async def admin_usage(request: Request, day: Optional[str] = None):
     if not owner_seen:
         rows.insert(0, {'key': owner, 'name': name_of.get(owner, '开发者本人'),
                         'req_count': 0, 'rounds': 0, 'tok_in': 0, 'tok_out': 0,
-                        'tok_total': 0, 'cost': 0.0, 'plan': 'unlimited',
+                        'tok_total': 0, 'cost': 0.0, 'plan': 'developer',
                         'limit': 0, 'is_owner': True})
     total = sum(r['tok_total'] for r in rows)
     cost = round(sum(r['cost'] for r in rows), 4)
-    # 请求级明细（最近 100 条，token=0 表示该请求未走 LLM）：供控制台「请求明细」表
-    recent = _quota.recent_requests(day)
+    # 请求级明细（按天持久化，token=0 表示该请求未走 LLM）：供控制台「请求明细」表
+    recent = _quota.recent_requests(day, 500)
     for e in recent:
         e['name'] = name_of.get(e['key'], '')
     return {'ok': True, 'day': day or _quota._today(), 'dim': runtime.quota_key(),
             'rows': rows, 'total_tok': total, 'total_cost': cost, 'recent': recent,
-            'backend': type(_quota.STORE).__name__}
+            'backend': type(_quota.STORE).__name__, 'dates': dates}
 
 
 @app.post("/api/register")
@@ -1009,7 +1016,8 @@ async def register(request: Request):
     免鉴权：它本来就是用来"换取口令"的入口。流程 ——
       ① 若该请求 device_id 已有账号 → 直接返回原账号（老用户/老设备无感，不必重注册）
       ② 否则：注册开关须打开，且（配了邀请码时）邀请码须正确
-      ③ 通过后分配下一个 uid（000001 起）+ 生成个人口令，写回 users.json
+      ③ 用户须自填 8 位 uid（请求体 {"user_uid": "..."}，首位 1/3/6/8、全局唯一）；
+         通过后**存 user_uid** + 分配内部顺序 uid（000001 起，仅存储/排序）+ 生成口令，写回 users.json
     邀请码来源：请求体 {"invite": "..."} 或 URL ?invite=...（便于发带码的链接）。
     """
     body = {}
@@ -1020,6 +1028,7 @@ async def register(request: Request):
     invite = str(body.get('invite') or request.query_params.get('invite') or '').strip()
     name = str(body.get('name') or '').strip()
     device_id = str(body.get('device_id') or '').strip()
+    user_uid = str(body.get('user_uid') or '').strip()   # 用户自填的 8 位 uid（新设备必填）
     from core import quota as _quota
     ip = _quota._client_ip(request)        # 仅记录，不参与身份识别
 
@@ -1037,11 +1046,16 @@ async def register(request: Request):
             return JSONResponse({'ok': False, 'reason': 'bad_invite',
                                  'detail': '邀请码无效'}, status_code=403)
 
-    res = _users.register(device_id, ip, name)
+    res = _users.register(device_id, ip, name, user_uid)
     if not res.get('ok'):
         from fastapi.responses import JSONResponse
+        _detail = {
+            'bad_uid': '请填写 8 位数字的 uid（首位须为 1/3/6/8）',
+            'uid_taken': '该 uid 已被占用，请换一个',
+            'register_off': '暂未开放注册，请联系管理员',
+        }.get(res.get('reason'), '注册失败')
         return JSONResponse({'ok': False, 'reason': res.get('reason') or 'error',
-                             'detail': '注册失败'}, status_code=403)
+                             'detail': _detail}, status_code=403)
     return res
 
 
@@ -1066,8 +1080,10 @@ async def my_profile(request: Request):
     if not uid:
         raise HTTPException(status_code=401, detail='需要口令才能使用')
     from core import quota as _quota
+    _acct = _users.get_account(uid) or {}
     return {'ok': True, 'readonly': True, 'uid': uid,
-            'name': (_users.get_account(uid) or {}).get('note') or '',
+            'user_uid': _acct.get('user_uid') or '',
+            'name': _acct.get('note') or '',
             'role': 'owner' if uid == _users.owner_uid() else 'user',
             'is_admin': _users.is_admin(uid),
             'allow_other_users': _users.allow_other_users(),
@@ -2418,31 +2434,13 @@ def chat(req: ChatRequest, request: Request):
     return resp
 
 
-# ===== 悬浮球“活动”按钮：从活动日历取打捞活动周期 + 对应攻略合集 =====
-# 数据来源为 知识库/活动/活动日历.xlsx（归一化后含 开始/结束/兑换 与 攻略 关键词），
-# 改完活动日历即生效（mtime 感知），无需重启。
-def _handle_salvage_event() -> dict:
-    from tools.knowledge import load_events_normalized, _format_activity, _event_status
-    today = datetime.date.today()
-    now = datetime.datetime.now()
-    events = load_events_normalized()
-    # 打捞识别口径（用户口径 2026-09-25）：活动日历**备注里写了「打捞」**的就是打捞活动；
-    # 名称/类型里带「打捞」的也照旧认（备注列为日历改动的正式标注位，其余为兜底措辞）。
-    salvage = [e for e in events
-               if '打捞' in ((e.get('name') or '') + (e.get('type') or '') + (e.get('notes') or ''))]
-    if not salvage:
-        return {'reply': '指挥官，活动日历里暂时没有进行中的打捞活动哟～有新打捞我第一时间告诉你。',
-                'tool_outputs': [], 'suggestions': [], 'fill_form': [],
-                'encounter_form': [], 'guide_files': [], 'guide_lib': '打捞活动', 'ok': True, 'bye': False}
-    _order = {'进行中': 0, '兑换中': 1, '未开始': 2, '已结束': 3}
-    salvage.sort(key=lambda e: _order.get(_event_status(e, today, now), 9))
-    e = salvage[0]
-    lines = _format_activity(e, _event_status(e, today, now), today, now)
-    reply = chr(10).join(lines)
-    guide = (e.get('guide') or '').strip()
+# ===== 悬浮球“活动”按钮：列出活动日历里全部未结束的活动（含活动期结束但兑换期未结束的）=====
+# 数据来源为 知识库/活动/活动日历.xlsx，每次查询实时读盘（改完活动日历即生效），无需重启。
+def _handle_activity_list() -> dict:
+    from tools.knowledge import QueryActivity
+    reply = QueryActivity().call({})
     return {'reply': reply, 'tool_outputs': [], 'suggestions': [], 'fill_form': [],
-            'encounter_form': [], 'guide_files': [], 'guide_lib': guide or '打捞活动',
-            'ok': True, 'bye': False}
+            'encounter_form': [], 'guide_files': [], 'guide_lib': '', 'ok': True, 'bye': False}
 
 
 def _chat_impl(req: ChatRequest):
@@ -2536,11 +2534,11 @@ def _chat_impl(req: ChatRequest):
         # 只有 calc_state / favor_pending 等已明确启动的结构化工具状态会续接下一步。
         # AKALI_ROUTE_MODE=agent(默认,function calling) | legacy(故障回退)
         # 分发层在 agent 模式懒加载 LangChain，异常自动回落 legacy，见 core/route_dispatch.py
-        # 顶层路由 1c0-2：悬浮球「活动」按钮（精确匹配单字『活动』）→ 打捞活动周期 + 空攻略合集。
+        # 顶层路由 1c0-2：悬浮球「活动」按钮（精确匹配单字『活动』）→ 列出活动日历全部未结束活动。
         # 自由文本里的「活动」（如「活动什么时候结束」「查活动攻略」）仍交 route_work 处理；
         # 仅菜单按钮的精确『活动』走这里（用户口径 2026-09-25）。
         if (req.message or '').strip() == '活动':
-            return _handle_salvage_event()
+            return _handle_activity_list()
 
         from core.route_dispatch import route_work_dispatch as route_work
         work_tools = build_tools(agent.app, sover, location_ref=agent)
@@ -2604,7 +2602,7 @@ def _chat_impl(req: ChatRequest):
                     "encounter_form": [], "guide_files": [], "guide_lib": "", "ok": True, "sticker": None}
         # 路由不到 → 本轮作为纯闲聊/调情处理，不锁定下一轮。
 
-        # ===== 多用户算力配额（环境开关 FX_CLOUD_MODE 控制；本地模式不限制）=====
+        # ===== 多用户算力配额（cloud 默认启用；AKALI_RUN_MODE=local 或 FX_CLOUD_MODE=off 时不闸控）=====
         # 仅拦截「走 LLM 的闲聊」（工作类已在上面 route_work 分支正常返回、不受影响）。
         # 超限额 → 停用 LLM，返回固定提示；基础工具（查询/计算/攻略）仍可用，次日零点恢复。
         from core.quota import (get_client_key as _q_key, get_user_plan as _q_plan,
@@ -2945,58 +2943,24 @@ def _chat_impl(req: ChatRequest):
         req_ctx.reset_panel_overrides(_panel_tok)
 
 
-def _sanitize_conversation(raw):
-    """把前端传来的 conversation（[{user, assistant}]）做脱敏 + 截断 + 封顶（30 轮）。
-
-    用于反馈「自上一个结束/中断进程之后的完整向量对话轮次」——含最初提问与
-    后续所有连续追问，而非仅最后单轮。非 list / 非 dict 条目一律丢弃。
-    """
-    if not isinstance(raw, list):
-        return []
-    try:
-        from core.sensitive_filter import filter_sensitive_words
-    except Exception:
-        def filter_sensitive_words(s):
-            return s
-    out = []
-    for turn in raw[:30]:
-        if not isinstance(turn, dict):
-            continue
-        out.append({
-            'user': filter_sensitive_words(str(turn.get('user') or ''))[:2000],
-            'assistant': filter_sensitive_words(str(turn.get('assistant') or ''))[:2000],
-        })
-    return out
-
-
 @app.post("/api/feedback")
 async def feedback(req: Request):
-    """接收用户反馈，连问答上下文一起存云端（用户口径 2026-09-25）。
+    """接收用户反馈（用户口径 2026-09-25），落盘为 JSON 一行一条。
 
-    反馈按钮只在「向量库 QA 检索类回复」（from_kb 标记）上出现，因此每条反馈
-    都天然携带可复盘的问答上下文。云端模式写 Redis（列表 akali:feedback，
-    保留最近 2000 条，跨重启不丢）；本地模式落盘 反馈信息/反馈收集/反馈收集.txt。
+    每条记录仅含三个字段：
+      - 时间：服务端接收时间（%Y-%m-%d %H:%M:%S）
+      - 用户uid：提交反馈的用户标识
+      - 内容：反馈对应的用户提问（前端在知识库问答回复上点反馈时上报）
+    云端模式写 Redis 列表 akali:feedback（保留最近 2000 条，跨重启不丢）；
+    本地模式追加落盘 反馈信息/反馈收集/反馈收集.txt（同样为 JSON 一行一条）。
     """
     try:
         data = await req.json()
-        required_fields = ['session_id', 'message_id', 'user_input', 'assistant_reply', 'timestamp', 'feedback_type']
-        for f in required_fields:
-            if f not in data:
-                return {"ok": False, "error": f"Missing field: {f}"}
-
-        # 脱敏处理：移除敏感词、模糊角色名
         from core.sensitive_filter import filter_sensitive_words
         record = {
-            'time': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-            'session_id': str(data.get('session_id') or ''),
-            'message_id': str(data.get('message_id') or ''),
-            'feedback_type': str(data.get('feedback_type') or ''),
-            'from_kb': bool(data.get('from_kb')),
-            'user_input': filter_sensitive_words(str(data.get('user_input') or ''))[:2000],
-            'assistant_reply': filter_sensitive_words(str(data.get('assistant_reply') or ''))[:2000],
-            'conversation': _sanitize_conversation(data.get('conversation')),
-            'client_time': str(data.get('timestamp') or ''),
-            'uid': str(getattr(req.state, 'uid', '') or ''),
+            '时间': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            '用户uid': str(getattr(req.state, 'uid', '') or ''),
+            '内容': filter_sensitive_words(str(data.get('user_input') or ''))[:2000],
         }
         line = json.dumps(record, ensure_ascii=False)
 
@@ -3011,8 +2975,7 @@ async def feedback(req: Request):
             with open(os.path.join(feedback_dir, "反馈收集.txt"), "a", encoding="utf-8") as f:
                 f.write(line + "\n")
 
-        print("[FEEDBACK] %s -> %s (uid=%s)" % (record['session_id'], record['feedback_type'], record['uid']),
-              flush=True)
+        print("[FEEDBACK] %s -> %s" % (record['用户uid'], record['内容'][:40]), flush=True)
         return {"ok": True}
     except Exception as e:
         print(f"[FEEDBACK ERROR] {_mask(e, _API_TOKEN)}", flush=True)
@@ -3368,8 +3331,14 @@ def get_ui_assets():
     前端据此给头像套边框、气泡换皮肤、落节庆装饰；非节庆日 holiday=None，界面完全不变。
     """
     stems = [os.path.splitext(f)[0] for f in _list_expression_files()]
+    # 表情差分 名字→URL 映射：供前端「双击头像随机切换表情」直接取用（排除逻辑在前端做）
+    expr_urls = []
+    for s in stems:
+        u = _resolve_expression_url(s)
+        if u:
+            expr_urls.append({"name": s, "url": u})
     return {"default_avatar": _default_expression_url(), "expressions": stems,
-            "holiday": _festival_of_today()}
+            "expression_urls": expr_urls, "holiday": _festival_of_today()}
 
 
 @app.post("/api/clear")
@@ -3604,25 +3573,6 @@ def _take_over_stale_server(host: str, port: int) -> bool:
         return False
 
 
-def _heartbeat_watcher(interval=30, timeout=120):
-    """后台线程：监控心跳，超时则触发关闭。
-    
-    Args:
-        interval: 检查间隔（秒）
-        timeout: 无心跳超时时间（秒），超过则自动关闭
-    """
-    global _last_heartbeat, _server_should_shutdown
-    _last_heartbeat = time.time()
-    print(f"[心跳监控] 已启动，超时时间 {timeout} 秒")
-    while not _shutdown_event.is_set():
-        _shutdown_event.wait(interval)
-        if _server_should_shutdown:
-            print("[心跳监控] 收到关闭信号，准备退出...")
-            break
-        if _last_heartbeat and (time.time() - _last_heartbeat > timeout):
-            print(f"[心跳监控] {timeout} 秒内无心跳，准备自动退出...")
-            _server_should_shutdown = True
-            break
 
 
 if __name__ == "__main__":
@@ -3697,31 +3647,6 @@ if __name__ == "__main__":
 
         threading.Thread(target=_open_browser, daemon=True).start()
 
-    # 心跳监控配置
-    _heartbeat_timeout = int(os.environ.get('AKALI_HEARTBEAT_TIMEOUT') or '120')
-    _heartbeat_interval = int(os.environ.get('AKALI_HEARTBEAT_INTERVAL') or '30')
-    # 自动关闭默认关闭（用户不希望有待机时间限制）；本地可设 AKALI_AUTO_SHUTDOWN=1 启用；云端恒关
-    _auto_shutdown = runtime.auto_shutdown()
-
-    # 启动心跳监控线程（仅当用户显式启用自动关闭时）
-    if _auto_shutdown:
-        def _watcher_with_exit(interval, timeout):
-            """带强制退出的心跳监控"""
-            _heartbeat_watcher(interval, timeout)
-            # 心跳监控结束（超时或收到信号），强制退出
-            if _server_should_shutdown:
-                print("[服务] 正在自动退出...")
-                import os
-                os._exit(0)
-        
-        _heartbeat_thread = threading.Thread(
-            target=_watcher_with_exit,
-            args=(_heartbeat_interval, _heartbeat_timeout),
-            daemon=True,
-            name='heartbeat-watcher'
-        )
-        _heartbeat_thread.start()
-
     print(f"阿卡莉智能体启动中...")
     print(f"运行模式: {runtime.run_mode()}  | 面板存储: {runtime.panel_store()}  | 限额维度: {runtime.quota_key()}")
     print(f"地址: {_url}")
@@ -3730,10 +3655,6 @@ if __name__ == "__main__":
               "请在 .env 设 HOST=0.0.0.0")
     if not _no_browser:
         print(f"浏览器将自动打开，如需禁用请设置环境变量 AKALI_NO_BROWSER=1")
-    if _auto_shutdown:
-        print(f"关闭页面后 {_heartbeat_timeout} 秒无心跳将自动退出")
-    else:
-        print(f"自动关闭已禁用（默认），如需启用请设置环境变量 AKALI_AUTO_SHUTDOWN=1")
     print(f"按 Ctrl+C 或关闭此窗口即可停止服务")
 
     # 启动 uvicorn

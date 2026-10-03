@@ -96,7 +96,7 @@ function upRenderFields(data) {
   upState.curDef = data.cur_def || {};
   upState.baseAtk = data.base_atk || {};
   upState.baseDef = data.base_def || {};
-  let html = '<div class="up-field"><label>攻击</label><span style="color:#64748b">（下方输入=副本当前值，灰字=底层基础值）</span></div>';
+  let html = '<div class="up-field"><label>攻击</label><span style="color:#64748b">（输入=你的副本当前值；灰字=底层基础值·默认无装备；仅装备属性，不含天赋/羁绊）</span></div>';
   UP_ATK_FIELDS.forEach(function (f) {
     const cur = upState.curAtk[f] || 0;
     const base = upState.baseAtk[f] || 0;
@@ -462,6 +462,25 @@ function openGuidePreview(g) {
     document.body.appendChild(a); a.click(); a.remove();
   });
   mask.addEventListener('click', (e) => { if (e.target === mask) mask.remove(); });
+}
+
+// 使用者手册弹窗：首次注册成功 / 聊天「想看说明」意图触发，复用 .sb-mask 风格，
+// 内含 iframe 载入 /manual，底部「确认/关闭」。onClose 为关闭后回调（首次注册用于进应用）。
+function openManual(onClose) {
+  if (document.getElementById('manual-mask')) return;
+  const mask = document.createElement('div');
+  mask.id = 'manual-mask';
+  mask.className = 'sb-mask';
+  mask.innerHTML =
+    '<div class="sb-box" style="height:min(82vh,720px);">'
+    + '<div class="sb-head"><b>使用说明</b>'
+    + '<button id="manualClose" style="border:none;background:var(--accent,#6b8caa);color:#fff;border-radius:8px;padding:6px 14px;font-size:14px;cursor:pointer;">确认/关闭</button></div>'
+    + '<iframe src="/manual" style="flex:1;border:0;width:100%;background:#fff;"></iframe>'
+    + '</div>';
+  document.body.appendChild(mask);
+  const close = () => { mask.remove(); if (typeof onClose === 'function') onClose(); };
+  mask.querySelector('#manualClose').addEventListener('click', close);
+  mask.addEventListener('click', e => { if (e.target === mask) close(); });
 }
 
 // 攻略库面板：fetch 索引 → 渲染列表。
@@ -1365,7 +1384,7 @@ function renderSecretaryReply(data, msgEl) {
 
 // 发送消息到 /api/chat
 // 会话隔离：浏览器本地生成稳定 session_id（localStorage），多人/多标签互不串；
-// token 鉴权：支持 URL 带 ?token=xxx（自动记忆）或 localStorage 存 API_TOKEN
+// token 鉴权：支持 URL 带 ?token=xxx（自动记忆）或 localStorage 存口令
 function _sessionId() {
   let sid = credGet('arkly_session_id');
   if (!sid) { sid = 'web-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8); credSet('arkly_session_id', sid); }
@@ -1391,6 +1410,25 @@ function checkQuotaAlert() {
     .then(r => (r.ok ? r.json() : null))
     .then(d => {
       const p = (d && !d.unlimited && d.cloud_mode !== false) ? Number(d.remain_percent) : NaN;
+      // 移动端右上角角标：只要拿到有效百分比就常驻显示（桌面端被 CSS 隐藏）
+      const fabBallEl = document.getElementById('fabBall');
+      var pctTxt = isNaN(p) ? '' : Math.max(0, Math.round(p)) + '%';
+      // 悬浮球环形底色：剩余算力百分比（≥30% 绿 / 10%~30% 黄 / <10% 红，中心蓝底白字）
+      if (fabBallEl) {
+        // 开发者/不限量模式：p 为 NaN，按"满额"处理，整圈显示绿色
+        const unlimited = isNaN(p);
+        fabBallEl.style.setProperty('--p', unlimited ? 100 : Math.max(0, Math.round(p)));
+        // 环形三档配色：≥30 绿，10~30 黄，<10 红（不限量直接绿）
+        let ring = '#2bb673', danger = false;
+        if (!unlimited) {
+          if (p < 10) { ring = '#e74c3c'; danger = true; }
+          else if (p < 30) { ring = '#f1c40f'; }
+        }
+        fabBallEl.style.setProperty('--ring', ring);
+        fabBallEl.classList.toggle('low', danger);
+        const pctEl = document.getElementById('fabPct');
+        if (pctEl) pctEl.textContent = pctTxt;
+      }
       if (isNaN(p) || p > QUOTA_ALERT_PCT) { if (bar) bar.style.display = 'none'; return; }
       const msg = '今日系统算力不足' + QUOTA_ALERT_PCT + '%';
       if (bar && txt) { txt.textContent = msg + '（基础功能不受影响，明日零点自动恢复）'; bar.style.display = ''; }
@@ -1429,6 +1467,12 @@ function fabSetPos(x, y) {
   fabWrap.dataset.y = c[1];
 }
 function fabAlignMenu() {   // 菜单与球中心对齐；靠视口边缘时平移防溢出
+  if (window.matchMedia('(max-width: 640px)').matches) {   // 手机端：贴右侧竖向面板，无需水平校正
+    fabMenu.style.left = 'auto';
+    fabMenu.style.right = '0';
+    fabMenu.style.transform = 'none';
+    return;
+  }
   fabMenu.style.left = '50%';
   fabMenu.style.transform = 'translateX(-50%)';
   var r = fabMenu.getBoundingClientRect();
@@ -1439,6 +1483,20 @@ function fabAlignMenu() {   // 菜单与球中心对齐；靠视口边缘时平�
 }
 function fabDefaultPos() { fabSetPos(window.innerWidth - fabSize() - FAB_PAD, FAB_DEF_TOP); }
 fabDefaultPos();
+
+// 悬浮球自动翻转：原图 ⇄ 现在工具箱，每 10s 一次；
+// 展开菜单时强制停在「现在工具箱」面并暂停翻转，收起后恢复
+var FAB_FLIP_MS = 5000;
+var fabFlipTimer = null;
+function fabFlipStart() {
+  if (fabFlipTimer) return;
+  fabFlipTimer = setInterval(function () { fabBall.classList.toggle('flipped'); }, FAB_FLIP_MS);
+}
+function fabFlipStop() { if (fabFlipTimer) { clearInterval(fabFlipTimer); fabFlipTimer = null; } }
+
+// 初始：悬浮球默认展开 → 停在工具箱面、不自动翻转
+fabBall.classList.toggle('flipped', fabWrap.classList.contains('open'));
+fabFlipStart();   // 无论是否展开都自动翻转（每 5s），解决默认展开时不翻转的问题
 window.addEventListener('resize', function () {
   fabSetPos(+fabWrap.dataset.x || 0, +fabWrap.dataset.y || FAB_DEF_TOP);
 });
@@ -1456,20 +1514,26 @@ fabBall.addEventListener('pointermove', function (e) {
 });
 fabBall.addEventListener('pointerup', function () {
   if (fabDrag && !fabDrag.moved) {
+    var opening = !fabWrap.classList.contains('open');
     fabWrap.classList.toggle('open');
     fabAlignMenu();
+    // 展开时停在「现在工具箱」面并暂停翻转；收起后恢复每 10s 翻转
+    if (opening) fabBall.classList.add('flipped');   // 打开瞬间停在工具箱面，翻转不暂停
   }
   fabDrag = null;
 });
 document.addEventListener('click', function (e) {
-  if (!fabWrap.contains(e.target)) fabWrap.classList.remove('open');
+  if (!fabWrap.contains(e.target) && fabWrap.classList.contains('open')) {
+    fabWrap.classList.remove('open');
+  }
 });
 document.querySelectorAll('#fabMenu .sug-btn').forEach(function (btn) {
   btn.addEventListener('click', function () {
     fabWrap.classList.remove('open');
     var cmd = btn.dataset.cmd;
     if (cmd === '查角色') { openShipBrowser(); return; }   // 「查角色」直接开角色面板，不发对话
-    if (cmd === '退出') { requestExit(); return; }          // 「退出」关闭网页，不触发后端退出/清记忆
+    if (cmd === '使用帮助') { openManual(); return; }       // 「使用帮助」直接弹手册，不发对话
+    if (cmd === '退出应用') { requestExit(); return; }      // 「退出应用」关闭网页，不触发后端退出/清记忆
     sendChat(cmd);   // 查攻略/计算工具/遭遇战模拟 → 发对应指令，后端按路由展开
   });
 });
@@ -1648,10 +1712,56 @@ ${weatherData.location}实时天气：${weatherData.weather}
   }
 }
 
+// 弹手册的「意图」判定：整句话是在索要使用说明/帮助才弹，而非句中恰好带「帮助」二字。
+// 例如「请帮助我算伤害」「这个帮助很大」不应触发——前者是计算请求、后者只是顺带提到。
+// 做法：剥掉首尾语气/引导词后，若剩余内容可被「帮助类核心词」完全解释，则判为意图成立。
+function wantManual(text) {
+  if (!text) return false;
+  let s = text.toLowerCase().replace(/[\s　]/g, '');
+  // 帮助类「核心词」（整词匹配，避免「使用赤城」误触发）
+  const CORE = ['使用说明', '使用帮助', '使用手册', '使用指引', '操作说明', '操作指南',
+                '玩法说明', '说明', '帮助', 'help', 'manual', '手册', '指南', '指引',
+                '教程', '怎么用', '如何使用', '不会用', '怎么玩', '怎么操作', '如何操作', '怎么使用'];
+  // 可出现在首尾的语气/引导词（忽略后不影响「要帮助」意图判断）
+  const FILL = ['我想', '我要', '我看', '看下', '看看', '看一', '打开', '给我', '来个', '要个',
+                '需要', '麻烦', '请', '想', '要', '看', '的', '了', '吗', '呢', '吧', '啊',
+                '哦', '嗯', '嘛', '你', '您', '我', '它', '这', '那', '下', '一', '个', '帮', 'me'];
+  // 反复剥首尾 filler，直到稳定
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const f of FILL) {
+      if (s.startsWith(f)) { s = s.slice(f.length); changed = true; }
+      else if (s.endsWith(f)) { s = s.slice(0, s.length - f.length); changed = true; }
+    }
+  }
+  // 剥掉所有帮助核心词；再清标点与首尾 filler；若最终清空 → 整句即「要帮助」意图
+  let left = s;
+  for (const c of CORE) left = left.split(c).join('');
+  left = left.replace(/[，。、！？!?.,~·\-_'"「」『』""''()（）]/g, '');
+  changed = true;
+  while (changed) {
+    changed = false;
+    for (const f of FILL) {
+      if (left.startsWith(f)) { left = left.slice(f.length); changed = true; }
+      else if (left.endsWith(f)) { left = left.slice(0, left.length - f.length); changed = true; }
+    }
+  }
+  return left.length === 0;
+}
+
 // 发送按钮
 function send() {
   const text = inputEl.value.trim();
   if (!text) return;
+  // 聊天里表达「想看使用说明/帮助」的**意图**才弹手册（不把该元指令发往后端）；
+  // 用意图而非关键字：避免「请帮助我算伤害」「这个帮助很大」这类请求误触发。
+  if (wantManual(text)) {
+    openManual();
+    inputEl.value = '';
+    inputEl.style.height = 'auto';
+    return;
+  }
   sendChat(text);
 }
 
@@ -1742,9 +1852,27 @@ function showRegisterResult(j) {
       <button id="reg-go" style="width:100%;padding:11px;border:none;border-radius:9px;background:var(--accent,#6b8caa);color:#fff;font-size:15px;cursor:pointer;">开始使用</button>
     </div>`;
   document.body.appendChild(ov);
-  const go = () => { location.reload(); };
+  const enter = () => { location.reload(); };
+  // 进入应用前，先移除残留的「邀请码遮罩」(auth-overlay, z9999) 与本成功遮罩(register-result, z10000)，
+  // 否则随后弹出的手册(.sb-mask, z9998)会被压在下面、看不到也关不掉 → 表现为「开始使用」点了没反应。
+  const cleanup = () => {
+    ['auth-overlay', 'register-result'].forEach(function (id) {
+      const el = document.getElementById(id);
+      if (el) el.remove();   // 含本成功层(ov)一并移除，否则手册(.sb-mask,z9998)会被压在下面
+    });
+    ov.remove();
+  };
+  const go = () => {
+    // 首次注册：进入应用前自动弹一次手册（底部「确认/关闭」），仅弹一次
+    if (!localStorage.getItem('akali_manual_seen')) {
+      cleanup();   // 先清掉自己与邀请码遮罩，让手册成为最上层
+      openManual(function () { localStorage.setItem('akali_manual_seen', '1'); enter(); });
+    } else {
+      enter();
+    }
+  };
   ov.querySelector('#reg-go').addEventListener('click', go);
-  setTimeout(go, 8000);   // 不点也会自动进（避免用户以为卡住）
+  setTimeout(go, 8000);   // 不点也会自动弹手册（首次）/ 直接进（非首次）
 }
 
 // 设备标识：浏览器生成一次并持久化，作为"我是谁"的主标识传给服务端。
@@ -1949,48 +2077,8 @@ function bgPeriod() {
   apply();
   setInterval(apply, 60 * 1000);
 })();
-// 顶端背景图（用户口径 2026-09-22：顶端背景与聊天背景分开、不重叠）：
-//   约定 知识库/图片素材/背景/ 下放 顶端.png 即作为顶栏背景（可按时段细分
-//   顶端_清晨.png / 顶端_黄昏.png / 顶端_夜晚.png，存在则优先于通用 顶端.png）；
-//   探测不到就保持 CSS 的不透明淡色纯色（body.bg-* header），不再透出聊天背景图。
-//   放图后刷新页面生效；同一时段内不重复探测。
-(function initTopBg() {
-  const header = document.querySelector('header');
-  if (!header) return;
-  // 顶端图目录：跨域/扩展场景走 ASSET_BASE（'http://主机/kb'）；同源时等价于原来的 '/kb'
-  const BASE = (window.ASSET_BASE || '/kb') + '/图片素材/背景/';
-  const SUFFIX = { dawn: '_清晨', evening: '_黄昏', night: '_夜晚', day: '' };
-  const okCache = {};   // url → 是否存在（避免重复网络探测）
-  function probe(url) {
-    if (url in okCache) return Promise.resolve(okCache[url]);
-    return new Promise(resolve => {
-      const img = new Image();
-      img.onload = () => { okCache[url] = true; resolve(true); };
-      img.onerror = () => { okCache[url] = false; resolve(false); };
-      img.src = url;
-    });
-  }
-  let lastPeriod = null;
-  async function apply() {
-    const period = bgPeriod();
-    if (lastPeriod === period) return;
-    lastPeriod = period;
-    const suf = SUFFIX[period] || '';
-    const cands = [];
-    if (suf) cands.push(BASE + '顶端' + suf + '.png');   // 时段专用图优先
-    cands.push(BASE + '顶端.png');                        // 通用顶端图兜底
-    for (const url of cands) {
-      if (await probe(url)) {
-        header.style.setProperty('--top-bg', "url('" + url + "')");
-        header.classList.add('has-top-bg');
-        return;
-      }
-    }
-    header.classList.remove('has-top-bg');   // 无顶端图 → 用 CSS 淡色纯色
-  }
-  apply();
-  setInterval(apply, 60 * 1000);
-})();
+// 顶端背景：现由 CSS 的 header 直接以「当前聊天背景的淡化版」呈现（白纱 + 毛玻璃透出
+//   main::before，自动跟随时段）；原先「顶端.png 专用顶栏图」逻辑已停用（has-top-bg 不再有样式）。
 
 // 节庆主题（数据驱动：2026-09-27 升级）。后端 /api/ui_assets 下发 holiday：
 // { theme, assets:{bubble, fall:[{file,size,speed,rotate}]}, palette:{cssVar:value} }。
@@ -2174,6 +2262,15 @@ function applyFestivalTheme(hol) {
   }
 })();
 
+// 提取气泡正文：克隆后剔除角色标签（阿卡莉）与反馈按钮本身，避免污染上报文本
+function _fbBubbleText(node) {
+  const bubble = (node && node.querySelector) ? node.querySelector('.bubble') : null;
+  if (!bubble) return '';
+  const clone = bubble.cloneNode(true);
+  clone.querySelectorAll('.role-tag, .feedback-btn').forEach(function (el) { el.remove(); });
+  return (clone.textContent || '').trim();
+}
+
 // 反馈按钮功能
 function initFeedbackButtons() {
   // 在 renderSecretaryReply 函数中注入反馈按钮
@@ -2197,6 +2294,7 @@ function initFeedbackButtons() {
       const msgEl2 = target;
       const msgId = 'msg-' + Date.now() + '-' + Math.random().toString(36).substr(2, 6);
       msgEl2.setAttribute('data-msg-id', msgId);
+      msgEl2.setAttribute('data-from-kb', data.from_kb ? '1' : '0');
       const bubble = msgEl2.querySelector('.bubble');
       if (bubble) {
         const btn = document.createElement('button');
@@ -2207,17 +2305,44 @@ function initFeedbackButtons() {
         btn.setAttribute('aria-label', '反馈此答复');
         btn.addEventListener('click', function() {
           if (btn.classList.contains('done')) return;   // 已提交过，避免重复上报
-          const userMsg = messagesEl.querySelector('.msg.user:last-of-type');
-          const userText = userMsg ? userMsg.querySelector('.bubble').textContent.trim() : '';
-          const replyText = data.reply || '';
+
+          // —— 采集「自上一个结束/中断进程之后」的完整向量对话轮次 ——
+          // 从当前被反馈的秘书消息向前回溯，连续收集 data-from-kb="1" 的
+          // (用户问, 阿卡莉答) 配对；遇到非 kb 秘书消息（进程结束/中断回复、
+          // 欢迎语、工具输出等）即停——该边界天然对应「上一个结束或中断的进程」。
+          const conv = [];
+          let node = msgEl2;
+          while (node && node.classList && node.classList.contains('secretary')) {
+            if (!node.getAttribute('data-from-kb')) break;   // 进程边界
+            // 找紧邻的上一条用户消息作为「提问」
+            let u = node.previousElementSibling;
+            let userText = '';
+            while (u) {
+              if (u.classList && u.classList.contains('user')) { userText = _fbBubbleText(u); break; }
+              if (u.classList && u.classList.contains('secretary')) break;  // 无对应用户提问
+              u = u.previousElementSibling;
+            }
+            conv.unshift({ user: userText, assistant: _fbBubbleText(node) });   // 保持时间正序
+            // 跳到上一条秘书消息继续回溯
+            let p = node.previousElementSibling;
+            while (p && !(p.classList && p.classList.contains('secretary'))) p = p.previousElementSibling;
+            node = p;
+          }
+
+          // 单轮字段：取本轮的最后一问一答（修复原 `.msg.user:last-of-type` 取不到
+          // 导致 user_input 恒为空的问题；向后兼容既有读取脚本）
+          const lastPair = conv.length ? conv[conv.length - 1] : null;
+          const singleUser = lastPair ? lastPair.user : '';
+          const singleReply = lastPair ? lastPair.assistant : (data.reply || '');
           const payload = {
             session_id: _sessionId(),
             message_id: msgId,
-            user_input: userText,
-            assistant_reply: replyText,
+            user_input: singleUser,
+            assistant_reply: singleReply,
             timestamp: new Date().toISOString(),
             feedback_type: 'unsatisfied',
-            from_kb: !!data.from_kb
+            from_kb: !!data.from_kb,
+            conversation: conv.slice(-30)   // 封顶 30 轮，防止异常膨胀
           };
           // 提交后把按钮改成绿勾（不再弹 alert 打断对话；失败则还原并提示一次）
           fetch('/api/feedback', {
