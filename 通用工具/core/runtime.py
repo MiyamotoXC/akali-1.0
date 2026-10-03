@@ -68,7 +68,7 @@ def _flag(v: str) -> bool:
 
 # ---------------- .env 实时读取（改文件即生效，无需重建/重启容器） ----------------
 # 背景：docker 的 env_file 只在**容器创建时**注入 os.environ —— 之后改宿主机 .env，
-#       已有进程里的 os.environ 不会变；而「每日算力额度上限」这类配置要求改完立即生效。
+#       已有进程里的 os.environ 不会变；而「算力额度上限」这类配置要求改完立即生效。
 # 做法：直接读 .env 文件（compose 已把宿主机 ./.env 只读挂载到容器 /app/.env）；
 #       按 mtime+size 缓存，只有文件真的变了才重新解析，避免每请求都读盘。
 _ENV_FILE_CACHE: dict = {}
@@ -185,11 +185,11 @@ def quota_key() -> str:
 
 
 def quota_daily_tok() -> int:
-    """每 IP 每日 token 总量上限（输入+输出），对应免费档 FX_QUOTA_FREE（**实时读 .env**）。"""
+    """每 IP 每周期（周四→下周四）token 总量上限（输入+输出），对应免费档 FX_QUOTA_FREE（**实时读 .env**）。"""
     try:
-        return max(0, int(live_env('FX_QUOTA_FREE', default='60000')))
+        return max(0, int(live_env('FX_QUOTA_FREE', default='300000')))
     except (TypeError, ValueError):
-        return 60000
+        return 300000
 
 
 # ---------------- 准入（邀请口令） ----------------

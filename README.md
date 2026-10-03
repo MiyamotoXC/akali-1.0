@@ -236,7 +236,7 @@ python 调试\随机测试.py --suite all            # 三类随机测试
 | 天赋查询 | 各舰灵天赋效果 | 「查约克城的天赋」 |
 | 主动提醒 | 活动日历、月初/月末资源兑换提醒 | 每次对话自动附带 |
 | 表情/头像差分 | 神态由头像差分体现（正文不写神态括号）；身体/情感话题走傲娇式关心，仅极端恶意用「嫌弃」 | 闲聊自然呈现 |
-| 多用户算力配额 | 免费 15 轮 / 月卡 0.3 元/天，超限停用 LLM、基础工具照常、次日零点恢复 | （默认 cloud 即生效；`AKALI_RUN_MODE=local` 或 `FX_CLOUD_MODE=off` 关闭） |
+| 多用户算力配额 | 按 **token 计量**、**每周期（周四 00:00 → 下周四 00:00）** 刷新：各档上限 `FX_QUOTA_FREE/PAID/WHITELIST`（默认均 30w token）；超限停用 LLM、基础工具（查询/计算/攻略）照常、**下周四零点自动恢复** | （默认 cloud 即生效；`AKALI_RUN_MODE=local` 或 `FX_CLOUD_MODE=off` 关闭） |
 
 ### 开发者端功能（Streamlit 8501）
 
@@ -272,9 +272,9 @@ python 调试\随机测试.py --suite all            # 三类随机测试
 | `AKALI_CHAT_ENABLED` | 否 | `0` 禁用聊天功能 |
 | `KNOWLEDGE_BASE_DIR` / `RAW_DATA_OUTPUT_PATH` / `DATA_OUTPUT_PATH` | 否 | 开发者数据管线路径覆盖（默认指向 `知识库/`） |
 | `FX_CLOUD_MODE` | 否 | 旧版配额开关别名：未设时跟随 `AKALI_RUN_MODE`（默认 cloud，故默认即云端多用户+配额生效）；`on` 显式开启、`off` 可强制关闭配额（运行模式由 `AKALI_RUN_MODE` 决定） |
-| `FX_QUOTA_FREE` | 否 | 免费档每日 token 上限（默认 60000；设 0 = 不限量） |
-| `FX_QUOTA_PAID` | 否 | 付费档每日 token 上限（默认 200000；设 0 = 不限量） |
-| `FX_QUOTA_WHITELIST` | 否 | 白名单每日 token 上限（默认 200000；类似开发者但可调；设 0 = 不限量） |
+| `FX_QUOTA_FREE` | 否 | 免费档每周期（周四→下周四）token 上限（默认 300000＝30w；设 0 = 不限量） |
+| `FX_QUOTA_PAID` | 否 | 付费档每周期（周四→下周四）token 上限（默认 300000＝30w；设 0 = 不限量） |
+| `FX_QUOTA_WHITELIST` | 否 | 白名单每周期（周四→下周四）token 上限（默认 300000＝30w；类似开发者但可调；设 0 = 不限量） |
 | `FX_QUOTA_WHITELIST_KEYS` | 否 | 白名单：逗号分隔的 IP/uid 列表，名单内走白名单额度（类似开发者，独立可调，不参与 free/paid 检测） |
 | `FX_QUOTA_BACKEND` | 否 | 配额存储后端：`memory`/`local`/`redis`（云端默认 `redis`，连不上自动降级 `memory` 并告警） |
 | `FX_QUOTA_DIR` | 否 | `local` 后端落盘目录（JSON）；空=纯内存，重启清零 |

@@ -2650,7 +2650,7 @@ def _chat_impl(req: ChatRequest):
 
         # ===== 多用户算力配额（cloud 默认启用；AKALI_RUN_MODE=local 或 FX_CLOUD_MODE=off 时不闸控）=====
         # 仅拦截「走 LLM 的闲聊」（工作类已在上面 route_work 分支正常返回、不受影响）。
-        # 超限额 → 停用 LLM，返回固定提示；基础工具（查询/计算/攻略）仍可用，次日零点恢复。
+        # 超限额 → 停用 LLM，返回固定提示；基础工具（查询/计算/攻略）仍可用，下周四零点恢复。
         from core.quota import (get_client_key as _q_key, get_user_plan as _q_plan,
                                 check_llm_quota as _q_check,
                                 quota_prompt as _q_prompt)

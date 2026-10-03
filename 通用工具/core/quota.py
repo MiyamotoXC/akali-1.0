@@ -13,9 +13,9 @@
 限额口径：
     每个周期（周四 → 下周四）token 总量（输入 + 输出）/ IP。各档额度直接读 env（0 = 不限量，可随意设置）：
         developer（开发者本人）→ 恒不限量
-        whitelist（白名单）    → FX_QUOTA_WHITELIST（默认 200000，类似开发者但可调限量）
-        paid（付费用户）       → FX_QUOTA_PAID（默认 200000）
-        free（免费用户）       → FX_QUOTA_FREE（默认 60000）
+        whitelist（白名单）    → FX_QUOTA_WHITELIST（默认 300000＝30w，类似开发者但可调限量）
+        paid（付费用户）       → FX_QUOTA_PAID（默认 300000＝30w）
+        free（免费用户）       → FX_QUOTA_FREE（默认 300000＝30w）
     计费换算仍照 Qwen 定价给出参考成本（仅展示，不参与闸控）：
         输入 0.0024 元/千 token；输出 0.0144 元/千 token
 
@@ -80,18 +80,18 @@ def _env_int_live(name: str, default: int) -> int:
 
 
 def quota_free() -> int:
-    """免费档每周期（周四→下周四）token 上限（实时；默认 60000；0 = 不限量）。"""
-    return _env_int_live('FX_QUOTA_FREE', 60000)
+    """免费档每周期（周四→下周四）token 上限（实时；默认 300000＝30w；0 = 不限量）。"""
+    return _env_int_live('FX_QUOTA_FREE', 300000)
 
 
 def quota_paid() -> int:
-    """付费档每周期 token 上限（实时；默认 200000；0 = 不限量）。"""
-    return _env_int_live('FX_QUOTA_PAID', 200000)
+    """付费档每周期 token 上限（实时；默认 300000＝30w；0 = 不限量）。"""
+    return _env_int_live('FX_QUOTA_PAID', 300000)
 
 
 def quota_whitelist() -> int:
-    """白名单每周期 token 上限（实时；默认 200000；0 = 不限量）。"""
-    return _env_int_live('FX_QUOTA_WHITELIST', 200000)
+    """白名单每周期 token 上限（实时；默认 300000＝30w；0 = 不限量）。"""
+    return _env_int_live('FX_QUOTA_WHITELIST', 300000)
 
 
 def whitelist_keys() -> set:
@@ -463,7 +463,7 @@ def _get_entry(key: str) -> dict:
 
 
 def check_llm_quota(key: str, plan: str = None) -> dict:
-    """返回该维度键今日是否还能调用 LLM。
+    """返回该维度键**本周期（周四→下周四）**是否还能调用 LLM。
     返回 {'allowed','reason','rounds','tok','tok_limit','cost','plan'}
     非云端模式（本地个人）恒 allowed=True（统计仍照常）。"""
     if plan is None:
