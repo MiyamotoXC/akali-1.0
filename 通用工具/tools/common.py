@@ -732,7 +732,7 @@ def _fetch_weather(lat: float, lon: float):
 
 def _normalize_ship_input(name, app=None):
     """用户输入角色名 → 正规名（底层统一识别）。
-    匹配顺序：①昵称/别名硬映射（name_service，昵称/谐音/错别字命中立即返回，最高优先级）
+    匹配顺序：①昵称/别名硬映射（name_service，昵称/错别字命中立即返回，最高优先级）
     → ②app.get_raw_ship（精确→X改→NameMatcher 模糊）。
     不堆口语尾词正则——"口罩拉菲呢/是"等由末级 LLM 意图分析兜底。
     识别不到返回原串（如自定义角色名/非角色词）。"""

@@ -671,41 +671,44 @@
     .fab-menu .sug-btn { padding: 10px 10px; font-size: 14px; }
   }
 
-  /* 反馈按钮：常显在阿卡莉气泡**外侧右下角**（用户口径 2026-09-25）。
-     此前是 opacity:0，只在 PC 悬停气泡 / 移动端长按 2 秒才出现 —— 用户实际反馈
-     「按钮好像没了」。现改为常显，并加大尺寸、白底 + 主题色描边 + 投影，
-     保证压在背景立绘上也足够醒目。 */
-  .feedback-btn {
-    position: absolute; right: -30px; bottom: -8px;
-    width: 44px; height: 44px; border-radius: 50%;
-    background: #fff;
-    color: #4a7297; border: 2px solid rgba(74, 114, 151, .45);
-    font-size: 30px; line-height: 1; cursor: pointer; padding: 0;
-    display: flex; align-items: center; justify-content: center;
-    box-shadow: 0 4px 14px rgba(31, 58, 84, .42), 0 0 0 3px rgba(255, 255, 255, .32);
-    transition: transform .15s, box-shadow .15s, filter .15s, background .2s;
-    z-index: 6;
-  }
-  .feedback-btn:hover {
-    transform: scale(1.08); filter: brightness(1.06);
-    box-shadow: 0 6px 18px rgba(31, 58, 84, .5), 0 0 0 4px rgba(255, 255, 255, .5);
-  }
-  .feedback-btn:active { transform: scale(.96); }
-  /* 提交成功后的短暂反馈态（不再弹 alert 打断对话） */
-  .feedback-btn.done {
-    background: #fff; color: #3f7a4f; border-color: rgba(63, 122, 79, .5); cursor: default;
-  }
-  /* 气泡定位修复 */
+  /* 反馈互动（用户口径 2026-10-04 改版）：不再用常显按钮；改为**长按阿卡莉回复**弹出
+     表情面板（🍬 / 🐷），选中的表情以小徽章显示在该条回复下方。仅「可反馈路由」
+     （后端 from_kb 标记 data-from-kb="1"）的消息长按才生效；同一轮只反馈一次。 */
   .bubble {
     position: relative;
   }
-  /* 移动端：气泡外侧留白有限，按钮贴回气泡右下角内缩一点，避免超出屏幕 */
-  @media (max-width: 640px) {
-    .feedback-btn { right: -4px; bottom: -10px; width: 38px; height: 38px; font-size: 26px; }
+  /* 长按 = 反馈入口：关掉系统长按菜单/选择，避免与表情面板打架（仅阿卡莉回复） */
+  .msg.secretary .bubble { -webkit-touch-callout: none; }
+  /* 长按进行中的轻微高亮 */
+  .msg.secretary.fb-pressing .bubble { box-shadow: 0 0 0 2px rgba(74, 114, 151, .35); }
+  /* 表情选择面板：body 固定层，跟随气泡定位（避免被消息区裁剪） */
+  .fb-picker {
+    position: fixed; z-index: 60;
+    display: flex; gap: 6px; padding: 6px 8px;
+    background: #fff; border: 1px solid var(--line);
+    border-radius: 999px;
+    box-shadow: 0 8px 24px rgba(31, 58, 84, .28);
+    animation: fbPickerIn .12s ease-out;
   }
-  /* 节庆主题下按钮描边呼应主题环色（数据驱动，2026-09-27） */
-  body.festival-on .feedback-btn {
-    background: #fff; border-color: var(--fest-user-border, rgba(0, 0, 0, .1));
+  @keyframes fbPickerIn { from { opacity: 0; transform: scale(.9); } to { opacity: 1; transform: scale(1); } }
+  .fb-picker button {
+    width: 40px; height: 40px; border-radius: 50%; border: none; padding: 0;
+    background: #f4f6f8; font-size: 24px; line-height: 1; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    transition: transform .12s, background .12s;
+  }
+  .fb-picker button:hover { transform: scale(1.12); background: #eef3f8; }
+  .fb-picker button:active { transform: scale(.94); }
+  /* 已选表情徽章：贴在回复下方（气泡底部右对齐） */
+  .fb-reaction {
+    margin-top: 6px; display: flex; justify-content: flex-end;
+    font-size: 18px; line-height: 1;
+    user-select: none; -webkit-user-select: none;
+  }
+  .fb-reaction span {
+    padding: 1px 7px; border-radius: 999px;
+    background: rgba(255, 255, 255, .85); border: 1px solid var(--line);
+    box-shadow: 0 1px 3px rgba(31, 58, 84, .12);
   }
 </style>
 </head>
@@ -746,7 +749,7 @@
 
   <!-- 温馨提示横幅：固定常驻文案，磨砂轻底（样式见 .warm-tip）；
        事务提醒（后端按占位注释注入 tip-item）与温馨提示共用此横幅，滚动轮播切换 -->
-  <div class="warm-tip" id="warmTip"><span class="tip-item">提示：指挥官可对不满意的答复反馈，帮助阿卡莉进步</span><!--AFFAIR_TIP--></div>
+  <div class="warm-tip" id="warmTip"><span class="tip-item">提示：长按不满意的答复、选个表情反馈，帮助阿卡莉进步</span><!--AFFAIR_TIP--></div>
 
   <!-- 我的舰船·装备面板（本地副本）：可折叠；逻辑由下方 JS「用户本地副本管理」区块
        （up* 系列函数）控制——载入角色/改面板值/保存或删增量/刷新已改列表 -->
@@ -821,7 +824,7 @@ window.AKALI_BOOT_ID = '__AKALI_BOOT_ID__';
 // ===== 全局 API 超时保护（用户口径 2026-10-04：**所有回复**都算，不止对话）=====
 // 任何 /api/ 请求超过 API_TIMEOUT_MS 仍未返回 → 直接 abort（调用方 catch 到超时错误，
 // 给「系统超时，可以换个问法或者重启服务器试试」提示），并**自动反馈**一次（提问随包上报，开发者不必
-// 等用户手点 💡）。覆盖对话 / 天气 / 面板备份 / 名录 等一切接口 —— 不再只保护对话。
+// 等用户长按反馈）。覆盖对话 / 天气 / 面板备份 / 名录 等一切接口 —— 不再只保护对话。
 // 可调（排障/自测）：URL 带 ?chat_timeout_ms=1234，或 window.ARKLY_API_TIMEOUT_MS /
 // ARKLY_CHAT_TIMEOUT_MS；设 0 关闭。
 var API_TIMEOUT_MS = (function () {
@@ -843,7 +846,7 @@ function isTimeoutError(e) {
   return !!(e && (e.name === 'AbortError' || /abort/i.test(String(e.message || ''))));
 }
 
-// 超时自动反馈：与 💡 按钮同一接口（/api/feedback），类型 timeout
+// 超时自动反馈：与长按表情反馈同一接口（/api/feedback），类型 timeout
 function _reportTimeout(url, opts, secs) {
   if (String(url || '').indexOf('/api/feedback') >= 0) return;   // 防自身递归
   var q = '';
@@ -3429,135 +3432,218 @@ document.addEventListener('click', function (ev) {
   }
 })();
 
-// 提取气泡正文：克隆后剔除角色标签（阿卡莉）与反馈按钮本身，避免污染上报文本
+// ===== 反馈互动（用户口径 2026-10-04 改版）=====
+// 旧版：知识库问答回复右下角常显 💡 按钮，点一下上报。
+// 新版：**长按任意阿卡莉回复**弹出表情面板（🍬 / 🐷），选中的表情显示在该条回复下方；
+//   效果与旧按钮等价（POST /api/feedback，feedback_type=unsatisfied）。长按对**所有回复**
+//   都可触发，但只有「可反馈路由」（后端 from_kb 标记 data-from-kb="1"）的消息才真正生效；
+//   同一轮对话（自上一个进程边界起、连续的 kb 回复）只上报一次，重复选择不再重复提交。
+
+// 提取气泡正文：克隆后剔除角色标签、表情徽章，避免污染上报文本
 function _fbBubbleText(node) {
   const bubble = (node && node.querySelector) ? node.querySelector('.bubble') : null;
   if (!bubble) return '';
   const clone = bubble.cloneNode(true);
-  clone.querySelectorAll('.role-tag, .feedback-btn').forEach(function (el) { el.remove(); });
+  clone.querySelectorAll('.role-tag, .fb-reaction, .feedback-btn').forEach(function (el) { el.remove(); });
   return (clone.textContent || '').trim();
 }
 
-// 反馈按钮功能
-function initFeedbackButtons() {
-  // 在 renderSecretaryReply 函数中注入反馈按钮
-  const originalRenderSecretaryReply = window.renderSecretaryReply;
-  
-  window.renderSecretaryReply = function(data, msgEl) {
-    // 调用原始函数
-    const result = originalRenderSecretaryReply.apply(this, arguments);
+// 本轮对话的消息节点：从目标消息向前，连续收集 data-from-kb="1" 的秘书消息（遇进程边界即止），
+// 时间正序返回。
+function _fbRoundNodes(msgEl) {
+  const nodes = [];
+  let node = msgEl;
+  while (node && node.classList && node.classList.contains('secretary')) {
+    if (node.getAttribute('data-from-kb') !== '1') break;   // 进程边界 / 非可反馈回复
+    nodes.unshift(node);
+    let p = node.previousElementSibling;
+    while (p && !(p.classList && p.classList.contains('secretary'))) p = p.previousElementSibling;
+    node = p;
+  }
+  return nodes;
+}
 
-    // 反馈按钮挂在**刚渲染的那条**消息上：优先用调用方传入的 msgEl（比"取最后一条"
-    // 可靠 —— 用户消息与秘书消息并发渲染时不会挂错）；未传时退回最后一条秘书消息。
+// 组装上报用的 (用户问, 阿卡莉答) 配对（沿用旧逻辑，保证反馈内容不变）
+function _fbCollectConversation(msgEl) {
+  return _fbRoundNodes(msgEl).map(function (node) {
+    let u = node.previousElementSibling, userText = '';
+    while (u) {
+      if (u.classList && u.classList.contains('user')) { userText = _fbBubbleText(u); break; }
+      if (u.classList && u.classList.contains('secretary')) break;   // 无对应用户提问
+      u = u.previousElementSibling;
+    }
+    return { user: userText, assistant: _fbBubbleText(node) };
+  });
+}
+
+// 同一轮是否已上报过（同一轮只反馈一次）
+function _fbRoundDone(msgEl) {
+  return _fbRoundNodes(msgEl).some(function (n) { return n.getAttribute('data-fb-done') === '1'; });
+}
+function _fbMarkRoundDone(msgEl) {
+  _fbRoundNodes(msgEl).forEach(function (n) { n.setAttribute('data-fb-done', '1'); });
+}
+
+// 在回复下方显示已选表情
+function _fbShowReaction(msgEl, emoji) {
+  const bubble = msgEl.querySelector('.bubble');
+  if (!bubble) return;
+  let box = bubble.querySelector('.fb-reaction');
+  if (!box) { box = document.createElement('div'); box.className = 'fb-reaction'; bubble.appendChild(box); }
+  box.innerHTML = '<span>' + emoji + '</span>';
+}
+
+// 提交一次反馈（等价旧 💡：POST /api/feedback，feedback_type=unsatisfied）
+function _fbSubmit(msgEl, emoji) {
+  const conv = _fbCollectConversation(msgEl);
+  const lastPair = conv.length ? conv[conv.length - 1] : null;
+  const payload = {
+    session_id: _sessionId(),
+    message_id: msgEl.getAttribute('data-msg-id') || '',
+    user_input: lastPair ? lastPair.user : '',
+    assistant_reply: lastPair ? lastPair.assistant : _fbBubbleText(msgEl),
+    timestamp: new Date().toISOString(),
+    feedback_type: 'unsatisfied',
+    from_kb: msgEl.getAttribute('data-from-kb') === '1',
+    conversation: conv.slice(-30)   // 封顶 30 轮，防止异常膨胀
+  };
+  return fetch('/api/feedback', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ..._apiHeaders() },
+    credentials: 'include',
+    body: JSON.stringify(payload)
+  }).then(function (r) { return r.json(); });
+}
+
+// —— 长按 → 表情面板（🍬 / 🐷）——
+let _fbPickerEl = null;
+let _fbLastFire = 0;
+
+function _fbClosePicker() {
+  if (_fbPickerEl && _fbPickerEl.parentNode) _fbPickerEl.parentNode.removeChild(_fbPickerEl);
+  _fbPickerEl = null;
+}
+
+// 选中表情：先显示在回复下方；同一轮已反馈过则不再重复提交
+function _fbPick(msgEl, emoji) {
+  _fbShowReaction(msgEl, emoji);
+  if (_fbRoundDone(msgEl)) return;   // 本轮已反馈 → 只显示，不再提交
+  _fbSubmit(msgEl, emoji).then(function (d) {
+    if (d && d.ok) { _fbMarkRoundDone(msgEl); }
+  }).catch(function () { /* 静默：本地已显示，不打断对话 */ });
+}
+
+function _fbOpenPicker(msgEl) {
+  _fbClosePicker();
+  const bubble = msgEl.querySelector('.bubble');
+  if (!bubble) return;
+  const picker = document.createElement('div');
+  picker.className = 'fb-picker';
+  ['🍬', '🐷'].forEach(function (emoji) {
+    const btn = document.createElement('button');
+    btn.type = 'button'; btn.textContent = emoji;
+    btn.setAttribute('aria-label', '反馈 ' + emoji);
+    btn.addEventListener('click', function (ev) {
+      ev.stopPropagation();
+      _fbClosePicker();
+      _fbPick(msgEl, emoji);
+    });
+    picker.appendChild(btn);
+  });
+  document.body.appendChild(picker);
+  // 定位在气泡正上方居中；上方空间不足则落到下方
+  const r = bubble.getBoundingClientRect();
+  const pw = picker.offsetWidth, ph = picker.offsetHeight;
+  let left = Math.max(8, Math.min(r.left + r.width / 2 - pw / 2, window.innerWidth - pw - 8));
+  let top = r.top - ph - 8;
+  if (top < 8) top = r.bottom + 8;
+  picker.style.left = left + 'px';
+  picker.style.top = top + 'px';
+  _fbPickerEl = picker;
+}
+
+// 长按检测（触摸 + 鼠标）：所有阿卡莉回复都可长按，仅「可反馈路由」弹面板
+(function initLongPressFeedback() {
+  const HOLD_MS = 500;
+  let timer = null, holdEl = null, startX = 0, startY = 0;
+
+  function cancel() {
+    if (timer) { clearTimeout(timer); timer = null; }
+    if (holdEl) holdEl.classList.remove('fb-pressing');
+    holdEl = null;
+  }
+
+  function onDown(e) {
+    if (e.button != null && e.button !== 0) return;   // 仅左键 / 触摸
+    const msgEl = (e.target && e.target.closest) ? e.target.closest('.msg.secretary') : null;
+    if (!msgEl) return;
+    _fbClosePicker();
+    cancel();
+    holdEl = msgEl;
+    const pt = e.touches ? e.touches[0] : e;
+    startX = pt.clientX || 0; startY = pt.clientY || 0;
+    msgEl.classList.add('fb-pressing');
+    timer = setTimeout(function () {
+      timer = null;
+      const el = holdEl;
+      if (el) el.classList.remove('fb-pressing');
+      holdEl = null;
+      // 只有「可反馈路由」才弹面板；也只有此时才吞掉随后的 click
+      if (el && el.getAttribute('data-from-kb') === '1') {
+        _fbLastFire = Date.now();
+        _fbOpenPicker(el);
+      }
+    }, HOLD_MS);
+  }
+
+  function onMove(e) {
+    if (!timer) return;
+    const pt = e.touches ? e.touches[0] : e;
+    if (Math.abs((pt.clientX || 0) - startX) > 12 || Math.abs((pt.clientY || 0) - startY) > 12) cancel();
+  }
+
+  document.addEventListener('touchstart', onDown, { passive: true });
+  document.addEventListener('touchmove', onMove, { passive: true });
+  document.addEventListener('touchend', cancel, { passive: true });
+  document.addEventListener('touchcancel', cancel, { passive: true });
+  document.addEventListener('mousedown', onDown);
+  document.addEventListener('mousemove', onMove);
+  document.addEventListener('mouseup', cancel);
+  // 长按已触发时，吞掉随后的一次 click，避免误触回复内按钮（表情面板自身的点击放行）
+  document.addEventListener('click', function (e) {
+    if (e.target && e.target.closest && e.target.closest('.fb-picker')) return;
+    if (Date.now() - _fbLastFire < 800) { _fbLastFire = 0; e.stopPropagation(); e.preventDefault(); }
+  }, true);
+  // 滚动 / 缩放 / 点别处 → 关面板
+  document.addEventListener('scroll', _fbClosePicker, true);
+  window.addEventListener('resize', _fbClosePicker);
+  document.addEventListener('mousedown', function (e) {
+    if (_fbPickerEl && !(e.target && e.target.closest && e.target.closest('.fb-picker'))) _fbClosePicker();
+  }, true);
+})();
+
+// 每条阿卡莉回复都打上「可反馈」标记（data-from-kb="1"）与 msg-id，供长按面板使用。
+// 只有「向量库 QA 检索类回复」（后端 from_kb）才是可反馈路由 —— 固定话术/计算面板等
+// 长按不生效（没有可反馈的问答价值，避免污染收集数据）。
+function initFeedbackButtons() {
+  const originalRenderSecretaryReply = window.renderSecretaryReply;
+  window.renderSecretaryReply = function(data, msgEl) {
+    const result = originalRenderSecretaryReply.apply(this, arguments);
     const messagesEl = document.getElementById('messages');
     let target = (msgEl && msgEl.classList && msgEl.classList.contains('secretary')) ? msgEl : null;
     if (!target) {
       const last = messagesEl ? messagesEl.lastElementChild : null;
       target = (last && last.classList && last.classList.contains('secretary')) ? last : null;
     }
-    // 只有「向量库 QA 检索类回复」（后端 from_kb 标记）才挂反馈按钮（用户口径 2026-09-25）：
-    // 固定话术/计算面板等回复没有可反馈的问答价值，反馈会污染收集数据。
-    if (target && data.from_kb && !target.querySelector('.feedback-btn')) {
-      const msgEl2 = target;
-      const msgId = 'msg-' + Date.now() + '-' + Math.random().toString(36).substr(2, 6);
-      msgEl2.setAttribute('data-msg-id', msgId);
-      msgEl2.setAttribute('data-from-kb', data.from_kb ? '1' : '0');
-      const bubble = msgEl2.querySelector('.bubble');
-      if (bubble) {
-        const btn = document.createElement('button');
-        btn.className = 'feedback-btn';
-        btn.type = 'button';
-        btn.innerHTML = '💡';
-        btn.title = '这条回答不满意？点这里反馈给开发者';
-        btn.setAttribute('aria-label', '反馈此答复');
-        btn.addEventListener('click', function() {
-          if (btn.classList.contains('done')) return;   // 已提交过，避免重复上报
-
-          // —— 采集「自上一个结束/中断进程之后」的完整向量对话轮次 ——
-          // 从当前被反馈的秘书消息向前回溯，连续收集 data-from-kb="1" 的
-          // (用户问, 阿卡莉答) 配对；遇到非 kb 秘书消息（进程结束/中断回复、
-          // 欢迎语、工具输出等）即停——该边界天然对应「上一个结束或中断的进程」。
-          const conv = [];
-          let node = msgEl2;
-          while (node && node.classList && node.classList.contains('secretary')) {
-            if (!node.getAttribute('data-from-kb')) break;   // 进程边界
-            // 找紧邻的上一条用户消息作为「提问」
-            let u = node.previousElementSibling;
-            let userText = '';
-            while (u) {
-              if (u.classList && u.classList.contains('user')) { userText = _fbBubbleText(u); break; }
-              if (u.classList && u.classList.contains('secretary')) break;  // 无对应用户提问
-              u = u.previousElementSibling;
-            }
-            conv.unshift({ user: userText, assistant: _fbBubbleText(node) });   // 保持时间正序
-            // 跳到上一条秘书消息继续回溯
-            let p = node.previousElementSibling;
-            while (p && !(p.classList && p.classList.contains('secretary'))) p = p.previousElementSibling;
-            node = p;
-          }
-
-          // 单轮字段：取本轮的最后一问一答（修复原 `.msg.user:last-of-type` 取不到
-          // 导致 user_input 恒为空的问题；向后兼容既有读取脚本）
-          const lastPair = conv.length ? conv[conv.length - 1] : null;
-          const singleUser = lastPair ? lastPair.user : '';
-          const singleReply = lastPair ? lastPair.assistant : (data.reply || '');
-          const payload = {
-            session_id: _sessionId(),
-            message_id: msgId,
-            user_input: singleUser,
-            assistant_reply: singleReply,
-            timestamp: new Date().toISOString(),
-            feedback_type: 'unsatisfied',
-            from_kb: !!data.from_kb,
-            conversation: conv.slice(-30)   // 封顶 30 轮，防止异常膨胀
-          };
-          // 提交后把按钮改成绿勾（不再弹 alert 打断对话；失败则还原并提示一次）
-          fetch('/api/feedback', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', ..._apiHeaders() },
-            credentials: 'include',
-            body: JSON.stringify(payload)
-          }).then(r => r.json()).then(d => {
-            if (d && d.ok) {
-              btn.classList.add('done');
-              btn.innerHTML = '✓';
-              btn.title = '已反馈，谢谢指挥官';
-            } else {
-              btn.innerHTML = '！';
-              btn.title = d && d.error ? ('提交失败：' + d.error) : '提交失败，请稍后重试';
-              setTimeout(() => { btn.innerHTML = '💡'; btn.title = '这条回答不满意？点这里反馈给开发者'; }, 2000);
-            }
-          }).catch(() => {
-            btn.innerHTML = '！';
-            btn.title = '网络错误，请稍后重试';
-            setTimeout(() => { btn.innerHTML = '💡'; btn.title = '这条回答不满意？点这里反馈给开发者'; }, 2000);
-          });
-        });
-        bubble.appendChild(btn);
-      }
+    if (target && !target.getAttribute('data-msg-id')) {
+      target.setAttribute('data-msg-id', 'msg-' + Date.now() + '-' + Math.random().toString(36).substr(2, 6));
+      target.setAttribute('data-from-kb', data.from_kb ? '1' : '0');
     }
-    
     return result;
   };
 }
 
-// 移动端长按检测（全局）
-let touchStartTime = 0;
-document.addEventListener('touchstart', (e) => {
-  if (e.target.closest('.msg.secretary')) {
-    touchStartTime = Date.now();
-  }
-}, { passive: false });
-document.addEventListener('touchend', (e) => {
-  if (e.target.closest('.msg.secretary') && Date.now() - touchStartTime > 800) {
-    e.target.closest('.msg.secretary').classList.add('longpress');
-    setTimeout(() => {
-      e.target.closest('.msg.secretary').classList.remove('longpress');
-    }, 2000);
-  }
-}, { passive: false });
-
-// 初始化反馈按钮
+// 初始化反馈互动
 initFeedbackButtons();
 
 // 天气查询功能

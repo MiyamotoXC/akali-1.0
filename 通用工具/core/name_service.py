@@ -129,14 +129,6 @@ def _to_halfwidth(s: str) -> str:
     return s.translate(_FW_TABLE)
 
 
-def _pinyin_key(s: str) -> str:
-    """无调拼音键（汉字转拼音、非汉字原样保留、整体小写），用于谐音匹配"""
-    if not s:
-        return ''
-    from pypinyin import lazy_pinyin
-    return ''.join(lazy_pinyin(s)).lower()
-
-
 def _levenshtein(a: str, b: str) -> int:
     """编辑距离（DP 实现）"""
     if a == b:
@@ -161,9 +153,12 @@ class NameMatcher:
     1. 精确匹配：query == ship_name
     2. 归一化匹配：全角→半角、去间隔号/空格/括号 + 转小写后等值
     3. 别名表匹配：query 命中 ship_nicknames.json 的某个别名
-    4. 拼音匹配：无调拼音等值（谐音识别，如 艾塞克斯→埃塞克斯）
-    5. 子串匹配：query 是某个 ship_name 的子串（唯一命中时直接返回）
-    6. 编辑距离匹配：Levenshtein（字符与拼音双通道取小，短名 <=1，长名 <=2），取最小者
+    4. 子串匹配：query 是某个 ship_name 的子串（唯一命中时直接返回）
+    5. 编辑距离匹配：Levenshtein **字符**通道（短名 <=1，长名 <=2），取最小者
+
+    口径变更（2026-10-04）：**移除全部「拼音」通道（谐音）** —— 同音/近音匹配只看
+    音不看字形，会把「想喝」(xianghe) 误纠成「翔鹤」(xianghe) 这类日常词。
+    现只保留字形层面的别名、子串、字符编辑距离（**错字**）匹配。
     """
 
     def __init__(self, all_names: List[str], nicknames_path: str = None):
@@ -184,26 +179,6 @@ class NameMatcher:
         for std, aliases in self.nicknames.items():
             for a in aliases:
                 self._alias_index.setdefault(_normalize(a), std)
-        # 拼音索引 {pinyin_key: ship_name 或别名对应正规名}，含正规名与别名；
-        # 碰撞时同样保留更短的本名
-        self._pinyin_index = {}
-        for n in self.all_names:
-            pk = _pinyin_key(_normalize(n))
-            if not pk:
-                continue
-            old = self._pinyin_index.get(pk)
-            if old is None or len(n) < len(old):
-                self._pinyin_index[pk] = n
-        for std, aliases in self.nicknames.items():
-            if std not in self.all_names:
-                continue
-            for a in aliases:
-                pk = _pinyin_key(_normalize(a))
-                if not pk:
-                    continue
-                old = self._pinyin_index.get(pk)
-                if old is None or len(std) < len(old):
-                    self._pinyin_index[pk] = std
 
     def _load_nicknames(self, path: str) -> dict:
         if not path or not os.path.exists(path):
@@ -255,22 +230,12 @@ class NameMatcher:
             nstd = _normalize(std)
             if nstd in self._norm_index:
                 return self._norm_index[nstd]
-        # 4. 拼音匹配（无调拼音等值，谐音识别；单字查询不参与防止误配）
-        pq = _pinyin_key(nq)
-        if len(nq) >= 2:
-            hit = self._pinyin_index.get(pq)
-            if hit:
-                if hit in self.all_names:
-                    return hit
-                nstd = _normalize(hit)
-                if nstd in self._norm_index:
-                    return self._norm_index[nstd]
-        # 5. 子串匹配（唯一命中时返回）
+        # 4. 子串匹配（唯一命中时返回）
         candidates = [n for n in self.all_names if nq in _normalize(n)]
         if len(candidates) == 1:
             return candidates[0]
-        # 6. 编辑距离匹配：字符通道 + 拼音通道取距离小者，
-        #    兼容 谐音/近音错别字（如 士→斯）与普通错别字混合输入
+        # 5. 编辑距离匹配：仅 **字符** 通道（错字纠正），不做拼音（谐音）。
+        #    全部拼音通道已移除：见类文档（同音/近音会把「想喝」误纠「翔鹤」等）。
         best, best_d = None, None
         for n in self.all_names:
             nn = _normalize(n)
@@ -278,15 +243,6 @@ class NameMatcher:
                 continue
             d = _levenshtein(nq, nn)
             threshold = 1 if max(len(nq), len(nn)) <= 4 else 2
-            pn = _pinyin_key(nn)
-            if pq and pn:
-                dp = _levenshtein(pq, pn)
-                # 拼音通道阈值收紧（2026-09-13）：原先 max>4 就给 2，导致「紫菜」(zicai)
-                # 与「Z1·改」(z1gai) 距离 2 被误配成舰名（用户口径：不准确就别硬凑）。
-                # 6 以内一律只容 1 个音差，长名（>6）才放宽到 2。
-                tp = 1 if max(len(pq), len(pn)) <= 6 else 2
-                if dp < d:
-                    d, threshold = dp, tp
             if d <= threshold and (best_d is None or d < best_d
                                    or (d == best_d and len(n) < len(best))):
                 best, best_d = n, d

@@ -120,7 +120,7 @@ class App:
 
     def _load_ship_name_map(self) -> dict:
         """舰名映射（别名/昵称 → 正规名）：已合并进 ship_nicknames.json，
-        由 name_service.build_hard_map 统一提供（含昵称/谐音/错别字全量硬映射）。"""
+        由 name_service.build_hard_map 统一提供（含昵称/错别字全量硬映射）。"""
         if self._ship_name_map_cache is not None:
             return self._ship_name_map_cache
         from core.name_service import build_hard_map
@@ -129,12 +129,12 @@ class App:
 
     def get_raw_ship(self, name):
         """从原始信息表查询：返回 (正规名, raw_data) 或 (None, None)。
-        匹配顺序：①昵称/别名硬映射（ship_nicknames.json，昵称/谐音/错别字最高优先级）→
+        匹配顺序：①昵称/别名硬映射（ship_nicknames.json，昵称/错别字最高优先级）→
         ②精确名（含括号编号，如 拉菲(DD-459)，避免被归一化去括号误配）→
         ③X改→X·改 → ④模糊匹配（NameMatcher 子串/编辑距离）。"""
         if not name or not self.raw_name_matcher:
             return None, None
-        # ① 昵称/别名硬映射：命中昵称/谐音/错别字立即返回对应角色
+        # ① 昵称/别名硬映射：命中昵称/错别字立即返回对应角色
         # （统一由 name_service 提供；原 ship_name_map 的 雪风改→丹阳 等已并入）
         from core.name_service import build_hard_map, nick_variant
         _hard = build_hard_map()

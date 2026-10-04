@@ -2560,7 +2560,7 @@ def _chat_impl(req: ChatRequest):
     """对话接口：返回秘书回复 + 工具原始输出（含计算结果明细）。
     按 session_id 隔离对话状态（chat_history / session_overrides），多人调用互不串。
     用同步 def，FastAPI 自动放入线程池执行，避免 run_nonstream 阻塞事件循环。"""
-    # 【输入预处理·先于一切】昵称/名字标准映射：舰名/BOSS 的 昵称·谐音·错字 → 正规名。
+    # 【输入预处理·先于一切】昵称/名字标准映射：舰名/BOSS 的 昵称·错字 → 正规名。
     # 先于所有判定（其他游戏拦截 / 再见 / 节假日 / 路由 / 语境分类 / 生成后审查）执行，统一输入口径。
     try:
         from core.entity_norm import standardize
@@ -3079,9 +3079,9 @@ async def feedback(req: Request):
             '用户输入': filter_sensitive_words(str(data.get('user_input') or ''))[:2000],
             '回答': filter_sensitive_words(str(data.get('assistant_reply') or ''))[:2000],
             '会话': str(data.get('session_id') or '')[:64],
-            # 类型（用户口径 2026-10-04）：unsatisfied=💡 手点不满意；timeout=回答超时
-            # （默认 90s，见 index.html 的 API_TIMEOUT_MS）被自动中止时前端自动上报，
-            # 便于开发者直接筛出"慢/卡"的问题类型。
+            # 类型（用户口径 2026-10-04）：unsatisfied=长按回复选表情（🍬/🐷）不满意；
+            # timeout=回答超时（默认 90s，见 index.html 的 API_TIMEOUT_MS）被自动中止时
+            # 前端自动上报，便于开发者直接筛出"慢/卡"的问题类型。
             '类型': str(data.get('feedback_type') or 'unsatisfied')[:32],
         }
         line = json.dumps(record, ensure_ascii=False)

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""用户输入实体标准化（检索前预处理）：舰名 / BOSS 名的 昵称·谐音·错字 → 正规名。
+"""用户输入实体标准化（检索前预处理）：舰名 / BOSS 名的 昵称·错字 → 正规名。
 
 问题背景
 --------
@@ -14,16 +14,14 @@
 --------------------------------------------
 1. 硬别名表（ship_nicknames.json + boss_nicknames.json）→ 无条件替换为正规名；
 2. 已是正规名 → 原样保留（不产生改写）；
-3. 拼音【精确等值】（同音字，如 丝/斯 均为 sī）：
-     · BOSS：允许（仅 11 个罕见名，碰撞风险极低）；
-     · 舰名：仅当拼音长度 ≥ _SHIP_PINYIN_MIN（长名罕用；短名如「大凤」与常见词
-       「大风」同音，盲目纠正会误改正常语句）；
-4. 拼音【编辑距离 ≤ 阈值】（近音错字，如 亚/阿）：
-     · 仅 BOSS；舰名不做（同上的误改风险）。
+3. 字符【编辑距离 ≤ 1】的**错字**纠正（舰名 + BOSS 统一，要求同长度且字形高度接近）。
 
-环境开关
---------
-    AKALI_ENTITY_FUZZY_SHIP=0   关闭舰名的同音纠正（只保留硬别名）
+口径变更（2026-10-04）
+--------------------
+**移除全部「拼音」通道（含精确等值与拼音编辑距离）**：拼音匹配只看同音、不看字形，
+会把日常词按音误纠成实体名 —— 如「我想喝奶」的窗口「想喝」(xianghe) 与舰名
+「翔鹤」(xianghe) 拼音等值被误纠；又如同音编辑距离把「塞克斯」纠成 BOSS「沙克斯」。
+现只保留**字符编辑距离 ≤ 1** 的错字纠正（字形高度接近），不再「同音即换」。
 
 用法
 ----
@@ -41,7 +39,7 @@ from typing import List, Optional, Tuple
 if __package__ in (None, ''):
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from core.name_service import _levenshtein, _normalize, _pinyin_key, load_nicknames
+from core.name_service import _levenshtein, _normalize, load_nicknames
 
 __all__ = ["standardize", "canonical_terms", "scan", "EntityNormalizer",
            "build_matcher", "boss_names"]
@@ -53,8 +51,6 @@ _BOSS_JSON = os.path.join(_SRC_DIR, '拉古兹.json')
 _BOSS_NICK_JSON = os.path.join(_SRC_DIR, 'boss_nicknames.json')
 _SHIP_NICK_JSON = os.path.join(_SRC_DIR, 'ship_nicknames.json')
 
-# 舰名同音纠正的最小拼音长度（低于此不纠正，避开常见词误改）
-_SHIP_PINYIN_MIN = 7
 # 单字不参与（项目既有口径：单字昵称/单字名在长句里极易误命中）
 _MIN_LEN = 2
 
@@ -67,13 +63,6 @@ def _mtime(p: str) -> float:
         return os.path.getmtime(p)
     except OSError:
         return 0.0
-
-
-def _flag(name: str, default: bool = True) -> bool:
-    v = (os.environ.get(name) or '').strip().lower()
-    if not v:
-        return default
-    return v in ('1', 'true', 'on', 'yes')
 
 
 def _load_ship_names() -> List[str]:
@@ -110,12 +99,11 @@ class EntityNormalizer:
     """舰名 + BOSS 名 的实体标准化器（最长优先 + 从左到右扫描）。"""
 
     def __init__(self, ships: List[str], bosses: List[str],
-                 ship_alias: dict, boss_alias: dict, fuzzy_ship: bool = True):
+                 ship_alias: dict, boss_alias: dict):
         self.ships = list(dict.fromkeys(ships))
         self.bosses = list(dict.fromkeys(bosses))
         self.ship_set = set(self.ships)
         self.boss_set = set(self.bosses)
-        self.fuzzy_ship = fuzzy_ship
 
         # 硬别名：归一化别名 → 正规名（先塞舰名，再塞 BOSS；setdefault 保舰名优先）
         self.alias: dict = {}
@@ -128,19 +116,13 @@ class EntityNormalizer:
             if na:
                 self.alias.setdefault(na, std)
 
-        # 拼音精确索引：拼音键 → 正规名（collision 时保留更短的本名）
-        self.pin: dict = {}
+        # 同长度索引（错字/字符编辑距离通道用，避免每次窗口重算）：
+        # {归一化长度: [(正规名, 归一化名), …]}
+        self.by_len: dict = {}
         for n in self.ships + self.bosses:
-            k = _pinyin_key(_normalize(n))
-            if not k:
-                continue
-            old = self.pin.get(k)
-            if old is None or len(n) < len(old):
-                self.pin[k] = n
-
-        # BOSS 拼音预计算（编辑距离通道用，避免每次窗口重算）
-        self.boss_pin = [(b, _pinyin_key(_normalize(b))) for b in self.bosses]
-        self.boss_pin = [(b, p) for b, p in self.boss_pin if p]
+            nn = _normalize(n)
+            if nn:
+                self.by_len.setdefault(len(nn), []).append((n, nn))
 
         self.maxlen = max([len(n) for n in self.ships + self.bosses] + [_MIN_LEN])
 
@@ -157,31 +139,20 @@ class EntityNormalizer:
         # 1) 硬别名
         if nw in self.alias:
             return self.alias[nw]
-        pk = _pinyin_key(nw)
-        if not pk:
-            return None
-        # 2) 拼音精确等值（同音字）
-        hit = self.pin.get(pk)
-        if hit:
-            if hit in self.boss_set:
-                return hit
-            if hit in self.ship_set and self.fuzzy_ship and len(pk) >= _SHIP_PINYIN_MIN:
-                return hit
-        # 3) 拼音编辑距离（仅 BOSS）。两道硬约束防误配：
-        #    ① 长度必须相等 —— 否则「夕茉莉大」会因"删 2 字只花 2 代价"被吞成「夕茉莉」；
-        #    ② 窗口须 ≥3 字 —— 2 字窗口拼音仅 5~6 长，编辑距离 1 噪声过大
-        #       （实测「光荣与梦想」的「与梦」yumeng 会误配 雅蒙 yameng）。
+        # 2) 字符编辑距离（**错字**通道，舰名 + BOSS 统一）—— 唯一的模糊通道。
+        #    全部拼音（谐音）通道已移除：只看同音不看字形会把「想喝」(xianghe) 误纠
+        #    舰名「翔鹤」(xianghe)、把「塞克斯」误纠 BOSS「沙克斯」。三道硬约束防误配：
+        #    ① 窗口须 ≥3 字 —— 2 字常见词（大风/想喝）噪声过大；
+        #    ② 长度必须相等 —— 否则「夕茉莉大」会因"删 2 字只花 2 代价"被吞成「夕茉莉」；
+        #    ③ 字形距离 ≤1 —— 只认真·错字（如 丝/斯、艾/埃、阿/亚）。
         if len(nw) < 3:
             return None
         best, best_d = None, None
-        for b, pn in self.boss_pin:
-            if len(b) != len(nw):
-                continue
-            d = _levenshtein(pk, pn)
-            tp = 1 if max(len(pk), len(pn)) <= 6 else 2
-            if d <= tp and (best_d is None or d < best_d
-                            or (d == best_d and best is not None and len(b) < len(best))):
-                best, best_d = b, d
+        for n, nn in self.by_len.get(len(nw), ()):
+            d = _levenshtein(nw, nn)
+            if d <= 1 and (best_d is None or d < best_d
+                           or (d == best_d and len(n) < len(best))):
+                best, best_d = n, d
         return best
 
     def scan(self, text: str) -> Tuple[str, List[Tuple[str, str]]]:
@@ -222,8 +193,7 @@ def _build() -> EntityNormalizer:
     boss_alias = {a: std for std, al in _load_alias_map(_BOSS_NICK_JSON).items()
                   for a in (al or []) if str(a).strip()}
     norm = EntityNormalizer(_load_ship_names(), _load_boss_names(),
-                            ship_alias, boss_alias,
-                            fuzzy_ship=_flag('AKALI_ENTITY_FUZZY_SHIP', True))
+                            ship_alias, boss_alias)
     _cache_key, _cache_norm = key, norm
     return norm
 
@@ -239,7 +209,7 @@ def scan(text: str) -> Tuple[str, List[Tuple[str, str]]]:
 
 
 def standardize(text: str) -> str:
-    """把输入里的 舰名/BOSS 名 昵称·谐音·错字 替换为正规名；无命中则原样返回。"""
+    """把输入里的 舰名/BOSS 名 昵称·错字 替换为正规名；无命中则原样返回。"""
     return scan(text)[0]
 
 

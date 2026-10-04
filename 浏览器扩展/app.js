@@ -16,7 +16,7 @@ window.AKALI_BOOT_ID = '__AKALI_BOOT_ID__';
 // ===== 全局 API 超时保护（用户口径 2026-10-04：**所有回复**都算，不止对话）=====
 // 任何 /api/ 请求超过 API_TIMEOUT_MS 仍未返回 → 直接 abort（调用方 catch 到超时错误，
 // 给「系统超时，可以换个问法或者重启服务器试试」提示），并**自动反馈**一次（提问随包上报，开发者不必
-// 等用户手点 💡）。覆盖对话 / 天气 / 面板备份 / 名录 等一切接口 —— 不再只保护对话。
+// 等用户长按反馈）。覆盖对话 / 天气 / 面板备份 / 名录 等一切接口 —— 不再只保护对话。
 // 可调（排障/自测）：URL 带 ?chat_timeout_ms=1234，或 window.ARKLY_API_TIMEOUT_MS /
 // ARKLY_CHAT_TIMEOUT_MS；设 0 关闭。
 var API_TIMEOUT_MS = (function () {
@@ -38,7 +38,7 @@ function isTimeoutError(e) {
   return !!(e && (e.name === 'AbortError' || /abort/i.test(String(e.message || ''))));
 }
 
-// 超时自动反馈：与 💡 按钮同一接口（/api/feedback），类型 timeout
+// 超时自动反馈：与长按表情反馈同一接口（/api/feedback），类型 timeout
 function _reportTimeout(url, opts, secs) {
   if (String(url || '').indexOf('/api/feedback') >= 0) return;   // 防自身递归
   var q = '';
@@ -2624,135 +2624,218 @@ document.addEventListener('click', function (ev) {
   }
 })();
 
-// 提取气泡正文：克隆后剔除角色标签（阿卡莉）与反馈按钮本身，避免污染上报文本
+// ===== 反馈互动（用户口径 2026-10-04 改版）=====
+// 旧版：知识库问答回复右下角常显 💡 按钮，点一下上报。
+// 新版：**长按任意阿卡莉回复**弹出表情面板（🍬 / 🐷），选中的表情显示在该条回复下方；
+//   效果与旧按钮等价（POST /api/feedback，feedback_type=unsatisfied）。长按对**所有回复**
+//   都可触发，但只有「可反馈路由」（后端 from_kb 标记 data-from-kb="1"）的消息才真正生效；
+//   同一轮对话（自上一个进程边界起、连续的 kb 回复）只上报一次，重复选择不再重复提交。
+
+// 提取气泡正文：克隆后剔除角色标签、表情徽章，避免污染上报文本
 function _fbBubbleText(node) {
   const bubble = (node && node.querySelector) ? node.querySelector('.bubble') : null;
   if (!bubble) return '';
   const clone = bubble.cloneNode(true);
-  clone.querySelectorAll('.role-tag, .feedback-btn').forEach(function (el) { el.remove(); });
+  clone.querySelectorAll('.role-tag, .fb-reaction, .feedback-btn').forEach(function (el) { el.remove(); });
   return (clone.textContent || '').trim();
 }
 
-// 反馈按钮功能
-function initFeedbackButtons() {
-  // 在 renderSecretaryReply 函数中注入反馈按钮
-  const originalRenderSecretaryReply = window.renderSecretaryReply;
-  
-  window.renderSecretaryReply = function(data, msgEl) {
-    // 调用原始函数
-    const result = originalRenderSecretaryReply.apply(this, arguments);
+// 本轮对话的消息节点：从目标消息向前，连续收集 data-from-kb="1" 的秘书消息（遇进程边界即止），
+// 时间正序返回。
+function _fbRoundNodes(msgEl) {
+  const nodes = [];
+  let node = msgEl;
+  while (node && node.classList && node.classList.contains('secretary')) {
+    if (node.getAttribute('data-from-kb') !== '1') break;   // 进程边界 / 非可反馈回复
+    nodes.unshift(node);
+    let p = node.previousElementSibling;
+    while (p && !(p.classList && p.classList.contains('secretary'))) p = p.previousElementSibling;
+    node = p;
+  }
+  return nodes;
+}
 
-    // 反馈按钮挂在**刚渲染的那条**消息上：优先用调用方传入的 msgEl（比"取最后一条"
-    // 可靠 —— 用户消息与秘书消息并发渲染时不会挂错）；未传时退回最后一条秘书消息。
+// 组装上报用的 (用户问, 阿卡莉答) 配对（沿用旧逻辑，保证反馈内容不变）
+function _fbCollectConversation(msgEl) {
+  return _fbRoundNodes(msgEl).map(function (node) {
+    let u = node.previousElementSibling, userText = '';
+    while (u) {
+      if (u.classList && u.classList.contains('user')) { userText = _fbBubbleText(u); break; }
+      if (u.classList && u.classList.contains('secretary')) break;   // 无对应用户提问
+      u = u.previousElementSibling;
+    }
+    return { user: userText, assistant: _fbBubbleText(node) };
+  });
+}
+
+// 同一轮是否已上报过（同一轮只反馈一次）
+function _fbRoundDone(msgEl) {
+  return _fbRoundNodes(msgEl).some(function (n) { return n.getAttribute('data-fb-done') === '1'; });
+}
+function _fbMarkRoundDone(msgEl) {
+  _fbRoundNodes(msgEl).forEach(function (n) { n.setAttribute('data-fb-done', '1'); });
+}
+
+// 在回复下方显示已选表情
+function _fbShowReaction(msgEl, emoji) {
+  const bubble = msgEl.querySelector('.bubble');
+  if (!bubble) return;
+  let box = bubble.querySelector('.fb-reaction');
+  if (!box) { box = document.createElement('div'); box.className = 'fb-reaction'; bubble.appendChild(box); }
+  box.innerHTML = '<span>' + emoji + '</span>';
+}
+
+// 提交一次反馈（等价旧 💡：POST /api/feedback，feedback_type=unsatisfied）
+function _fbSubmit(msgEl, emoji) {
+  const conv = _fbCollectConversation(msgEl);
+  const lastPair = conv.length ? conv[conv.length - 1] : null;
+  const payload = {
+    session_id: _sessionId(),
+    message_id: msgEl.getAttribute('data-msg-id') || '',
+    user_input: lastPair ? lastPair.user : '',
+    assistant_reply: lastPair ? lastPair.assistant : _fbBubbleText(msgEl),
+    timestamp: new Date().toISOString(),
+    feedback_type: 'unsatisfied',
+    from_kb: msgEl.getAttribute('data-from-kb') === '1',
+    conversation: conv.slice(-30)   // 封顶 30 轮，防止异常膨胀
+  };
+  return fetch('/api/feedback', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ..._apiHeaders() },
+    credentials: 'include',
+    body: JSON.stringify(payload)
+  }).then(function (r) { return r.json(); });
+}
+
+// —— 长按 → 表情面板（🍬 / 🐷）——
+let _fbPickerEl = null;
+let _fbLastFire = 0;
+
+function _fbClosePicker() {
+  if (_fbPickerEl && _fbPickerEl.parentNode) _fbPickerEl.parentNode.removeChild(_fbPickerEl);
+  _fbPickerEl = null;
+}
+
+// 选中表情：先显示在回复下方；同一轮已反馈过则不再重复提交
+function _fbPick(msgEl, emoji) {
+  _fbShowReaction(msgEl, emoji);
+  if (_fbRoundDone(msgEl)) return;   // 本轮已反馈 → 只显示，不再提交
+  _fbSubmit(msgEl, emoji).then(function (d) {
+    if (d && d.ok) { _fbMarkRoundDone(msgEl); }
+  }).catch(function () { /* 静默：本地已显示，不打断对话 */ });
+}
+
+function _fbOpenPicker(msgEl) {
+  _fbClosePicker();
+  const bubble = msgEl.querySelector('.bubble');
+  if (!bubble) return;
+  const picker = document.createElement('div');
+  picker.className = 'fb-picker';
+  ['🍬', '🐷'].forEach(function (emoji) {
+    const btn = document.createElement('button');
+    btn.type = 'button'; btn.textContent = emoji;
+    btn.setAttribute('aria-label', '反馈 ' + emoji);
+    btn.addEventListener('click', function (ev) {
+      ev.stopPropagation();
+      _fbClosePicker();
+      _fbPick(msgEl, emoji);
+    });
+    picker.appendChild(btn);
+  });
+  document.body.appendChild(picker);
+  // 定位在气泡正上方居中；上方空间不足则落到下方
+  const r = bubble.getBoundingClientRect();
+  const pw = picker.offsetWidth, ph = picker.offsetHeight;
+  let left = Math.max(8, Math.min(r.left + r.width / 2 - pw / 2, window.innerWidth - pw - 8));
+  let top = r.top - ph - 8;
+  if (top < 8) top = r.bottom + 8;
+  picker.style.left = left + 'px';
+  picker.style.top = top + 'px';
+  _fbPickerEl = picker;
+}
+
+// 长按检测（触摸 + 鼠标）：所有阿卡莉回复都可长按，仅「可反馈路由」弹面板
+(function initLongPressFeedback() {
+  const HOLD_MS = 500;
+  let timer = null, holdEl = null, startX = 0, startY = 0;
+
+  function cancel() {
+    if (timer) { clearTimeout(timer); timer = null; }
+    if (holdEl) holdEl.classList.remove('fb-pressing');
+    holdEl = null;
+  }
+
+  function onDown(e) {
+    if (e.button != null && e.button !== 0) return;   // 仅左键 / 触摸
+    const msgEl = (e.target && e.target.closest) ? e.target.closest('.msg.secretary') : null;
+    if (!msgEl) return;
+    _fbClosePicker();
+    cancel();
+    holdEl = msgEl;
+    const pt = e.touches ? e.touches[0] : e;
+    startX = pt.clientX || 0; startY = pt.clientY || 0;
+    msgEl.classList.add('fb-pressing');
+    timer = setTimeout(function () {
+      timer = null;
+      const el = holdEl;
+      if (el) el.classList.remove('fb-pressing');
+      holdEl = null;
+      // 只有「可反馈路由」才弹面板；也只有此时才吞掉随后的 click
+      if (el && el.getAttribute('data-from-kb') === '1') {
+        _fbLastFire = Date.now();
+        _fbOpenPicker(el);
+      }
+    }, HOLD_MS);
+  }
+
+  function onMove(e) {
+    if (!timer) return;
+    const pt = e.touches ? e.touches[0] : e;
+    if (Math.abs((pt.clientX || 0) - startX) > 12 || Math.abs((pt.clientY || 0) - startY) > 12) cancel();
+  }
+
+  document.addEventListener('touchstart', onDown, { passive: true });
+  document.addEventListener('touchmove', onMove, { passive: true });
+  document.addEventListener('touchend', cancel, { passive: true });
+  document.addEventListener('touchcancel', cancel, { passive: true });
+  document.addEventListener('mousedown', onDown);
+  document.addEventListener('mousemove', onMove);
+  document.addEventListener('mouseup', cancel);
+  // 长按已触发时，吞掉随后的一次 click，避免误触回复内按钮（表情面板自身的点击放行）
+  document.addEventListener('click', function (e) {
+    if (e.target && e.target.closest && e.target.closest('.fb-picker')) return;
+    if (Date.now() - _fbLastFire < 800) { _fbLastFire = 0; e.stopPropagation(); e.preventDefault(); }
+  }, true);
+  // 滚动 / 缩放 / 点别处 → 关面板
+  document.addEventListener('scroll', _fbClosePicker, true);
+  window.addEventListener('resize', _fbClosePicker);
+  document.addEventListener('mousedown', function (e) {
+    if (_fbPickerEl && !(e.target && e.target.closest && e.target.closest('.fb-picker'))) _fbClosePicker();
+  }, true);
+})();
+
+// 每条阿卡莉回复都打上「可反馈」标记（data-from-kb="1"）与 msg-id，供长按面板使用。
+// 只有「向量库 QA 检索类回复」（后端 from_kb）才是可反馈路由 —— 固定话术/计算面板等
+// 长按不生效（没有可反馈的问答价值，避免污染收集数据）。
+function initFeedbackButtons() {
+  const originalRenderSecretaryReply = window.renderSecretaryReply;
+  window.renderSecretaryReply = function(data, msgEl) {
+    const result = originalRenderSecretaryReply.apply(this, arguments);
     const messagesEl = document.getElementById('messages');
     let target = (msgEl && msgEl.classList && msgEl.classList.contains('secretary')) ? msgEl : null;
     if (!target) {
       const last = messagesEl ? messagesEl.lastElementChild : null;
       target = (last && last.classList && last.classList.contains('secretary')) ? last : null;
     }
-    // 只有「向量库 QA 检索类回复」（后端 from_kb 标记）才挂反馈按钮（用户口径 2026-09-25）：
-    // 固定话术/计算面板等回复没有可反馈的问答价值，反馈会污染收集数据。
-    if (target && data.from_kb && !target.querySelector('.feedback-btn')) {
-      const msgEl2 = target;
-      const msgId = 'msg-' + Date.now() + '-' + Math.random().toString(36).substr(2, 6);
-      msgEl2.setAttribute('data-msg-id', msgId);
-      msgEl2.setAttribute('data-from-kb', data.from_kb ? '1' : '0');
-      const bubble = msgEl2.querySelector('.bubble');
-      if (bubble) {
-        const btn = document.createElement('button');
-        btn.className = 'feedback-btn';
-        btn.type = 'button';
-        btn.innerHTML = '💡';
-        btn.title = '这条回答不满意？点这里反馈给开发者';
-        btn.setAttribute('aria-label', '反馈此答复');
-        btn.addEventListener('click', function() {
-          if (btn.classList.contains('done')) return;   // 已提交过，避免重复上报
-
-          // —— 采集「自上一个结束/中断进程之后」的完整向量对话轮次 ——
-          // 从当前被反馈的秘书消息向前回溯，连续收集 data-from-kb="1" 的
-          // (用户问, 阿卡莉答) 配对；遇到非 kb 秘书消息（进程结束/中断回复、
-          // 欢迎语、工具输出等）即停——该边界天然对应「上一个结束或中断的进程」。
-          const conv = [];
-          let node = msgEl2;
-          while (node && node.classList && node.classList.contains('secretary')) {
-            if (!node.getAttribute('data-from-kb')) break;   // 进程边界
-            // 找紧邻的上一条用户消息作为「提问」
-            let u = node.previousElementSibling;
-            let userText = '';
-            while (u) {
-              if (u.classList && u.classList.contains('user')) { userText = _fbBubbleText(u); break; }
-              if (u.classList && u.classList.contains('secretary')) break;  // 无对应用户提问
-              u = u.previousElementSibling;
-            }
-            conv.unshift({ user: userText, assistant: _fbBubbleText(node) });   // 保持时间正序
-            // 跳到上一条秘书消息继续回溯
-            let p = node.previousElementSibling;
-            while (p && !(p.classList && p.classList.contains('secretary'))) p = p.previousElementSibling;
-            node = p;
-          }
-
-          // 单轮字段：取本轮的最后一问一答（修复原 `.msg.user:last-of-type` 取不到
-          // 导致 user_input 恒为空的问题；向后兼容既有读取脚本）
-          const lastPair = conv.length ? conv[conv.length - 1] : null;
-          const singleUser = lastPair ? lastPair.user : '';
-          const singleReply = lastPair ? lastPair.assistant : (data.reply || '');
-          const payload = {
-            session_id: _sessionId(),
-            message_id: msgId,
-            user_input: singleUser,
-            assistant_reply: singleReply,
-            timestamp: new Date().toISOString(),
-            feedback_type: 'unsatisfied',
-            from_kb: !!data.from_kb,
-            conversation: conv.slice(-30)   // 封顶 30 轮，防止异常膨胀
-          };
-          // 提交后把按钮改成绿勾（不再弹 alert 打断对话；失败则还原并提示一次）
-          fetch('/api/feedback', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', ..._apiHeaders() },
-            credentials: 'include',
-            body: JSON.stringify(payload)
-          }).then(r => r.json()).then(d => {
-            if (d && d.ok) {
-              btn.classList.add('done');
-              btn.innerHTML = '✓';
-              btn.title = '已反馈，谢谢指挥官';
-            } else {
-              btn.innerHTML = '！';
-              btn.title = d && d.error ? ('提交失败：' + d.error) : '提交失败，请稍后重试';
-              setTimeout(() => { btn.innerHTML = '💡'; btn.title = '这条回答不满意？点这里反馈给开发者'; }, 2000);
-            }
-          }).catch(() => {
-            btn.innerHTML = '！';
-            btn.title = '网络错误，请稍后重试';
-            setTimeout(() => { btn.innerHTML = '💡'; btn.title = '这条回答不满意？点这里反馈给开发者'; }, 2000);
-          });
-        });
-        bubble.appendChild(btn);
-      }
+    if (target && !target.getAttribute('data-msg-id')) {
+      target.setAttribute('data-msg-id', 'msg-' + Date.now() + '-' + Math.random().toString(36).substr(2, 6));
+      target.setAttribute('data-from-kb', data.from_kb ? '1' : '0');
     }
-    
     return result;
   };
 }
 
-// 移动端长按检测（全局）
-let touchStartTime = 0;
-document.addEventListener('touchstart', (e) => {
-  if (e.target.closest('.msg.secretary')) {
-    touchStartTime = Date.now();
-  }
-}, { passive: false });
-document.addEventListener('touchend', (e) => {
-  if (e.target.closest('.msg.secretary') && Date.now() - touchStartTime > 800) {
-    e.target.closest('.msg.secretary').classList.add('longpress');
-    setTimeout(() => {
-      e.target.closest('.msg.secretary').classList.remove('longpress');
-    }, 2000);
-  }
-}, { passive: false });
-
-// 初始化反馈按钮
+// 初始化反馈互动
 initFeedbackButtons();
 
 // 天气查询功能

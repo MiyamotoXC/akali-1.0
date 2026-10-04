@@ -2212,7 +2212,7 @@ def _handle_ship_use(tools, msg: str):
     """
     if not msg or not _SHIP_USE_RE.search(msg):
         return None
-    # 舰名解析：先把昵称/谐音/错字换成正规名（standardize 返回的是**整句替换后文本**），
+    # 舰名解析：先把昵称/错字换成正规名（standardize 返回的是**整句替换后文本**），
     # 再拿 App 里的正规舰名做子串匹配、取最长的那个（吹雪·改 优先于 吹雪）。
     # 用 App 的舰名表天然排除 BOSS（嘉波等不在 storage 里）→「嘉波配什么队」会交回遭遇战链路。
     try:
@@ -2429,7 +2429,7 @@ def _handle_talent_ask(tools, msg: str):
             break
     if app is None or not getattr(app, 'storage', None):
         return None
-    # 舰名：昵称/谐音先归一，再取最长的正规名（与「就业」同一套解析，天然排除 BOSS）
+    # 舰名：昵称/错字先归一，再取最长的正规名（与「就业」同一套解析，天然排除 BOSS）
     try:
         from core.entity_norm import standardize
         _std = str(standardize(m) or m)
@@ -4268,7 +4268,7 @@ def _cmp_strip_noise(seg: str) -> str:
 def _extract_compare_entities(msg: str, app) -> list:
     """从「对比A和B」类输入中拆出**全部**实体（正规名，按原文出现位置保序、去重）。
 
-    顺序：① 逐段剥噪声后走 `get_raw_ship`——昵称/别名/谐音/错字全覆盖
+    顺序：① 逐段剥噪声后走 `get_raw_ship`——昵称/别名/错字全覆盖
              （780→齐柏林伯爵、太太→列克星敦、雪风改→丹阳）；
           ② 昵称子串兜底（未带分隔符的整句，如「口罩拉菲」）；
           ③ 通用多实体抽取补漏（如「丹阳+女灶神」式写法）。

@@ -90,7 +90,7 @@ class SetCalcContext(BaseTool):
     parameters = {
         'type': 'object',
         'properties': {
-            'attacker_name': {'type': 'string', 'description': '攻击方角色名（支持昵称/简称/谐音）'},
+            'attacker_name': {'type': 'string', 'description': '攻击方角色名（支持昵称/简称/错字）'},
             'enemy_name': {'type': 'string', 'description': '敌方角色名（可空，不填则输出原始伤害）'},
             'course': {'type': 'string', 'description': '航向：同航/反航/T优势/T劣势（默认同航）'},
             'air': {'type': 'string', 'description': '制空状态：确保/优势/均势/劣势/丧失（默认均势）'},

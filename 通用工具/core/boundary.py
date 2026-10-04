@@ -57,7 +57,7 @@ ILLEGAL_EXPR = '嫌弃'
 
 
 def mentions_ship(text) -> bool:
-    """文本里是否出现某个角色（别名/谐音/错字/正规名都能识别）。"""
+    """文本里是否出现某个角色（别名/错字/正规名都能识别）。"""
     try:
         from core.entity_norm import scan, build_matcher
         std, hits = scan(text or '')

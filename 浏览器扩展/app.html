@@ -672,41 +672,44 @@
     .fab-menu .sug-btn { padding: 10px 10px; font-size: 14px; }
   }
 
-  /* 反馈按钮：常显在阿卡莉气泡**外侧右下角**（用户口径 2026-09-25）。
-     此前是 opacity:0，只在 PC 悬停气泡 / 移动端长按 2 秒才出现 —— 用户实际反馈
-     「按钮好像没了」。现改为常显，并加大尺寸、白底 + 主题色描边 + 投影，
-     保证压在背景立绘上也足够醒目。 */
-  .feedback-btn {
-    position: absolute; right: -30px; bottom: -8px;
-    width: 44px; height: 44px; border-radius: 50%;
-    background: #fff;
-    color: #4a7297; border: 2px solid rgba(74, 114, 151, .45);
-    font-size: 30px; line-height: 1; cursor: pointer; padding: 0;
-    display: flex; align-items: center; justify-content: center;
-    box-shadow: 0 4px 14px rgba(31, 58, 84, .42), 0 0 0 3px rgba(255, 255, 255, .32);
-    transition: transform .15s, box-shadow .15s, filter .15s, background .2s;
-    z-index: 6;
-  }
-  .feedback-btn:hover {
-    transform: scale(1.08); filter: brightness(1.06);
-    box-shadow: 0 6px 18px rgba(31, 58, 84, .5), 0 0 0 4px rgba(255, 255, 255, .5);
-  }
-  .feedback-btn:active { transform: scale(.96); }
-  /* 提交成功后的短暂反馈态（不再弹 alert 打断对话） */
-  .feedback-btn.done {
-    background: #fff; color: #3f7a4f; border-color: rgba(63, 122, 79, .5); cursor: default;
-  }
-  /* 气泡定位修复 */
+  /* 反馈互动（用户口径 2026-10-04 改版）：不再用常显按钮；改为**长按阿卡莉回复**弹出
+     表情面板（🍬 / 🐷），选中的表情以小徽章显示在该条回复下方。仅「可反馈路由」
+     （后端 from_kb 标记 data-from-kb="1"）的消息长按才生效；同一轮只反馈一次。 */
   .bubble {
     position: relative;
   }
-  /* 移动端：气泡外侧留白有限，按钮贴回气泡右下角内缩一点，避免超出屏幕 */
-  @media (max-width: 640px) {
-    .feedback-btn { right: -4px; bottom: -10px; width: 38px; height: 38px; font-size: 26px; }
+  /* 长按 = 反馈入口：关掉系统长按菜单/选择，避免与表情面板打架（仅阿卡莉回复） */
+  .msg.secretary .bubble { -webkit-touch-callout: none; }
+  /* 长按进行中的轻微高亮 */
+  .msg.secretary.fb-pressing .bubble { box-shadow: 0 0 0 2px rgba(74, 114, 151, .35); }
+  /* 表情选择面板：body 固定层，跟随气泡定位（避免被消息区裁剪） */
+  .fb-picker {
+    position: fixed; z-index: 60;
+    display: flex; gap: 6px; padding: 6px 8px;
+    background: #fff; border: 1px solid var(--line);
+    border-radius: 999px;
+    box-shadow: 0 8px 24px rgba(31, 58, 84, .28);
+    animation: fbPickerIn .12s ease-out;
   }
-  /* 节庆主题下按钮描边呼应主题环色（数据驱动，2026-09-27） */
-  body.festival-on .feedback-btn {
-    background: #fff; border-color: var(--fest-user-border, rgba(0, 0, 0, .1));
+  @keyframes fbPickerIn { from { opacity: 0; transform: scale(.9); } to { opacity: 1; transform: scale(1); } }
+  .fb-picker button {
+    width: 40px; height: 40px; border-radius: 50%; border: none; padding: 0;
+    background: #f4f6f8; font-size: 24px; line-height: 1; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    transition: transform .12s, background .12s;
+  }
+  .fb-picker button:hover { transform: scale(1.12); background: #eef3f8; }
+  .fb-picker button:active { transform: scale(.94); }
+  /* 已选表情徽章：贴在回复下方（气泡底部右对齐） */
+  .fb-reaction {
+    margin-top: 6px; display: flex; justify-content: flex-end;
+    font-size: 18px; line-height: 1;
+    user-select: none; -webkit-user-select: none;
+  }
+  .fb-reaction span {
+    padding: 1px 7px; border-radius: 999px;
+    background: rgba(255, 255, 255, .85); border: 1px solid var(--line);
+    box-shadow: 0 1px 3px rgba(31, 58, 84, .12);
   }
 </style>
 </head>
@@ -747,7 +750,7 @@
 
   <!-- 温馨提示横幅：固定常驻文案，磨砂轻底（样式见 .warm-tip）；
        事务提醒（后端按占位注释注入 tip-item）与温馨提示共用此横幅，滚动轮播切换 -->
-  <div class="warm-tip" id="warmTip"><span class="tip-item">提示：指挥官可对不满意的答复反馈，帮助阿卡莉进步</span><!--AFFAIR_TIP--></div>
+  <div class="warm-tip" id="warmTip"><span class="tip-item">提示：长按不满意的答复、选个表情反馈，帮助阿卡莉进步</span><!--AFFAIR_TIP--></div>
 
   <!-- 我的舰船·装备面板（本地副本）：可折叠；逻辑由下方 JS「用户本地副本管理」区块
        （up* 系列函数）控制——载入角色/改面板值/保存或删增量/刷新已改列表 -->

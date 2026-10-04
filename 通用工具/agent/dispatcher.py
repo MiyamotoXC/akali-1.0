@@ -331,7 +331,7 @@ def _execute(tool_calls, tools, overrides=None):
 
 
 def _ships_in_text(text: str):
-    """文本里出现的角色（别名/谐音/错字/正规名都能识别；去重保序）。"""
+    """文本里出现的角色（别名/错字/正规名都能识别；去重保序）。"""
     try:
         from core.entity_norm import scan, build_matcher
         std, hits = scan(text or '')
@@ -372,7 +372,7 @@ def _context_resolve(msg, overrides, history=None):
 
 def route_work_agent(tools, overrides, msg, agent=None, history=None):
     """返回固定回复 dict，或 None（交回 web_app 闲聊链路）。异常由 route_dispatch 兜底回落。"""
-    # 【输入预处理·先于一切】昵称/名字标准映射：舰名·BOSS 的 昵称/谐音/错字 → 正规名。
+    # 【输入预处理·先于一切】昵称/名字标准映射：舰名·BOSS 的 昵称/错字 → 正规名。
     # 先于 guard 与所有判定（剧情/按钮/前置闸/LLM 元路由/工具参数）执行；幂等，可安全重复调用。
     try:
         from core.entity_norm import standardize

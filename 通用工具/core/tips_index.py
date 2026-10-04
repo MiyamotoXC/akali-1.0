@@ -4,7 +4,7 @@
 定位
 ----
 攻略检索的分层（本项目口径）：
-    ① 归一化（core.entity_norm：舰名/BOSS 谐音错字 → 正规名）
+    ① 归一化（core.entity_norm：舰名/BOSS 错字 → 正规名）
     ② 结构化确定命中（**本模块**：小技巧键命中 → 原文直出）
     ③ 语义召回兜底（tools.knowledge 攻略QA库 RAG）
     ④ 攻略面板兜底
@@ -132,7 +132,7 @@ def categories() -> List[str]:
 
 
 def _normalize_query(query: str) -> str:
-    """查询归一：实体标准化（舰名/BOSS 谐音错字 → 正规名），失败则原样。"""
+    """查询归一：实体标准化（舰名/BOSS 错字 → 正规名），失败则原样。"""
     q = str(query or '')
     try:
         from core.entity_norm import standardize
