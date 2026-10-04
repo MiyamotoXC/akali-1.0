@@ -15,7 +15,7 @@ window.AKALI_BOOT_ID = '__AKALI_BOOT_ID__';
 
 // ===== 全局 API 超时保护（用户口径 2026-10-04：**所有回复**都算，不止对话）=====
 // 任何 /api/ 请求超过 API_TIMEOUT_MS 仍未返回 → 直接 abort（调用方 catch 到超时错误，
-// 给「响应过久，服务器ojbk中」提示），并**自动反馈**一次（提问随包上报，开发者不必
+// 给「系统超时，可以换个问法或者重启服务器试试」提示），并**自动反馈**一次（提问随包上报，开发者不必
 // 等用户手点 💡）。覆盖对话 / 天气 / 面板备份 / 名录 等一切接口 —— 不再只保护对话。
 // 可调（排障/自测）：URL 带 ?chat_timeout_ms=1234，或 window.ARKLY_API_TIMEOUT_MS /
 // ARKLY_CHAT_TIMEOUT_MS；设 0 关闭。
@@ -1887,9 +1887,7 @@ ${weatherData.location}实时天气：${weatherData.weather}
       // 超时（全局包装已中止并自动反馈）→ 明确提示，不走"定位/失败"分支
       if (isTimeoutError(error)) {
         typing.querySelector('.bubble').innerHTML =
-          '<div class="role-tag">阿卡莉</div>响应过久，服务器ojbk中。'
-          + '天气查询已中止，并已自动反馈给开发者。'
-          + '（可稍后重试。）';
+          '<div class="role-tag">阿卡莉</div>系统超时，可以换个问法或者重启服务器试试';
         sendBtn.disabled = false;
         return;
       }
@@ -1932,15 +1930,14 @@ ${weatherData.location}实时天气：${weatherData.weather}
       : '（面无表情地思考中…）';
     const typing = addMsg('secretary', _placeholder);
     if (_isEncounter) typing.classList.add('computing');
-    // 慢响应进度提示（用户口径 2026-10-04-D）：超过 15s 还没回，气泡里补一句"还在算"，
-    // 免得用户以为卡死；拿到响应 / 超时中止后由 finally 清掉。
+    // 慢响应提示（用户口径 2026-10-04）：超过 40s 还没回，气泡给出等待提示；
+    // 拿到响应 / 超时中止后由 finally 清掉计时器（不会串到下一轮）。
     let _slowTimer = setTimeout(function () {
       try {
         typing.querySelector('.bubble').innerHTML =
-          '<div class="role-tag">阿卡莉</div>还在算，指挥官稍等…'
-          + '（这类问题要走检索 → 生成 → 校对，常见 20~60 秒）';
+          '<div class="role-tag">阿卡莉</div>系统努力ing...请指挥官耐心等候一会儿';
       } catch (e) {}
-    }, 15000);
+    }, 40000);
     try {
       const _payload = { message: text, session_id: _sessionId() };
       // 云端模式：用户面板存浏览器本地，随请求携带（服务器无状态、不落盘）
@@ -1960,9 +1957,7 @@ ${weatherData.location}实时天气：${weatherData.weather}
       if (isTimeoutError(e)) {
         // 响应过久：本轮已中止，自动反馈已由全局包装发出（用户口径 2026-10-04）
         typing.querySelector('.bubble').innerHTML =
-          '<div class="role-tag">阿卡莉</div>响应过久，服务器ojbk中。'
-          + '本轮回答已中止，并已自动反馈给开发者。'
-          + '（这类问题较慢，可稍后重试或换个问法。）'
+          '<div class="role-tag">阿卡莉</div>系统超时，可以换个问法或者重启服务器试试'
           + '<div class="sticker-wrap"><img loading="lazy" class="sticker-img" src="'
           + resolveAsset('/kb/图片素材/表情包/ojbk.png') + '" alt="ojbk"></div>';
       } else {
