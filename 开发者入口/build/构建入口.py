@@ -69,6 +69,15 @@ XLSX_SOURCES = [
     ("舰灵数值（整理版）.xlsx", "拂晓舰灵普攻倍率cd1.1.xlsx", "CharSkillInfoLv10 260728.xlsx")
     if os.path.exists(os.path.join(SRC_DIR, f))
 ]
+# PVP 天赋推荐表也是源表（生成 talent_pvp.json）：文件名带日期，动态匹配；
+# 否则「只改了这张表」时套A 不会判定需要重建。
+if os.path.isdir(SRC_DIR):
+    XLSX_SOURCES += [
+        os.path.join(SRC_DIR, f) for f in sorted(os.listdir(SRC_DIR))
+        if f.lower().endswith('.xlsx') and not f.startswith('~$')
+        and ('pvp' in f.lower() or '天赋表' in f)
+        and os.path.join(SRC_DIR, f) not in XLSX_SOURCES
+    ]
 
 
 def _mtime(path):

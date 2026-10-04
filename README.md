@@ -353,6 +353,8 @@ git push
 | `拉古兹.json` | 遭遇战 Boss 定义（`enemies` 11 个 + 伤害公式引用） | 遭遇战 |
 | `mappings.json` | 克制/点燃/击穿等查表常量 | 公式层 |
 | `ship_nicknames.json` / `原型舰历史.json` / `装备.xlsx` | 昵称映射 / 原型历史 / 装备数据 | 查询 |
+| `天赋表pvp*.xlsx` | PVP 天赋推荐（每格 `原名/昵称`，可同格写本体+改造名；一格可能给两种点法） | talent_pvp（PVP 推荐） |
+| `skill_text_overrides.json` | 技能原文手动覆盖（`{舰名: {技能字段: 文案}}`）：源表尚未同步的人工确认稿，合表时**最后应用** | 覆盖层 |
 
 > 注意：普攻的唯一权威源是 `数值自动化表.xlsx → 普攻列表` sheet（旧表 `拂晓舰灵普攻倍率cd1.1.xlsx` 已删除，全量重建链路不可再依赖 `extract_normal_attacks`）。该文件用 openpyxl 解析会崩，读取必须走 `build/src/xlsx_std.py`（纯标准库）。
 

@@ -3069,8 +3069,15 @@ async def feedback(req: Request):
     云端模式**双写**：Redis 列表 akali:feedback（快速回溯，保留最近 2000 条）
       + 落盘 反馈信息/反馈收集/反馈收集.txt（绑定挂载到宿主机，重建容器不丢）；
     本地模式只落盘同一份文件。均为 JSON 一行一条。
+
+    **开发者模式不生效**（用户口径 2026-10-04）：本地运行（AKALI_RUN_MODE=local）或
+    开发者/owner 身份（AKALI_ADMIN_UIDS 白名单内）提交的反馈**直接丢弃**（仍返回 ok，
+    且不落盘、不写 Redis），前端界面照常显示表情徽章 —— 避免开发者自测污染用户反馈收集。
     """
     try:
+        # 开发者模式：反馈不生效（界面照常，只是不落库）
+        if runtime.is_local() or _users.is_admin(str(getattr(req.state, 'uid', '') or '')):
+            return {"ok": True, "skipped": "developer_mode"}
         data = await req.json()
         from core.sensitive_filter import filter_sensitive_words
         record = {

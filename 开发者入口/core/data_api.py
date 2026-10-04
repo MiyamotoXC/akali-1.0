@@ -1476,12 +1476,18 @@ def _clean_skill_value(v):
 
 
 def _merge_to_raw(store, panel_by_key, normal_by_key, skill_by_key, talent_by_key=None,
-                       skip_prune: bool = False):
+                  skip_prune: bool = False, skill_overrides=None):
     """以面板表为基准合并四源数据。
     全量导入时各源键应为面板表子集，行为与旧逻辑一致；
     定向导入（无面板源）时遍历四源并集：无面板的角色沿用库内旧面板，
-    库中不存在且无面板数据的新角色跳过（新角色必须由面板表引入），且不做 prune 清理。"""
+    库中不存在且无面板数据的新角色跳过（新角色必须由面板表引入），且不做 prune 清理。
+    skill_overrides：技能原文手动覆盖（源表未同步的人工确认稿），合表后最后应用。"""
     talent_by_key = talent_by_key or {}
+    if skill_overrides is None:
+        try:
+            skill_overrides = _build_module()._load_skill_overrides()
+        except Exception:
+            skill_overrides = {}
     updated = 0
 
     def _name_of(mk):
@@ -1527,6 +1533,11 @@ def _merge_to_raw(store, panel_by_key, normal_by_key, skill_by_key, talent_by_ke
                 ocv = _clean_skill_value(old_skills.get(sk))
                 if ocv is not None:
                     cleaned_skills[sk] = ocv
+        # 技能原文手动覆盖：源表未同步的人工确认稿，最后应用（优先级最高）
+        for _f, _v in (skill_overrides or {}).get(name, {}).items():
+            if _f in ('LeaderSkill', 'SupportSkill', 'BattleSkill1', 'BattleSkill2') \
+                    and isinstance(_v, str) and _v.strip():
+                cleaned_skills[_f] = _v
         if mk in talent_by_key:
             talents = talent_by_key[mk][1]
         else:
@@ -1600,70 +1611,24 @@ def _fill_kai_talents(store):
         store.save()
 
 
-def _generate_talent_pvp(raw_path: str, raw_storage: dict):
-    """生成 talent_pvp.json。"""
-    try:
-        from src.文件提取 import extract_talent_pvp
-    except ImportError:
-        return
-    # raw_path 位于 产物/；天赋表 xlsx 源在同级 源文件/
-    raw_dir = os.path.dirname(raw_path)
-    search_dirs = [raw_dir, os.path.join(os.path.dirname(raw_dir), '源文件')]
-    pvp_file = None
-    for d in search_dirs:
-        if not os.path.isdir(d):
-            continue
-        for fn in os.listdir(d):
-            if fn.startswith('~$') or not fn.lower().endswith('.xlsx'):
-                continue
-            if 'pvp' in fn.lower() or '天赋表' in fn:
-                pvp_file = os.path.join(d, fn)
-                break
-        if pvp_file:
-            break
-    if not pvp_file:
-        return
-    try:
-        raw_pairs = extract_talent_pvp(pvp_file)
-    except Exception:
-        return
-    from src.舰船命名 import normalize_ship_name
+def _build_module():
+    """惰性导入 CLI 构建模块（`开发者入口/build/角色数据构建.py`）。
 
-    def norm(table_name):
-        rn = normalize_ship_name(table_name, raw_storage)
-        if rn:
-            return rn
-        manual = {
-            '拉菲DD459/萨罗蒙': '拉菲', '拉菲DD724/破空者': '拉菲(DD-724)',
-            '加里波第': '朱塞佩·加里波第', '北上改/木田神改': '北上·改',
-            '大井改/多多改': '大井·改', '列克星敦CV2/灰夫人': '列克星敦',
-            '列克星敦CV16/蓝女士': '列克星敦·改', '提尔皮茨/北之女王': '提尔比茨',
-            '卡约杜伊利奥/伊莉欧星语': '卡约·杜伊利奥', '朱利奥凯撒/尤莉娅西撒': '朱利奥·凯撒',
-            '甘谷特': '甘古特', '日向改/乌螯改': '日向·改', '伊势改/乌鳌改': '伊势·改',
-        }
-        return manual.get(table_name)
+    与 `build/规则补全.py` 同样的做法：**规则只保留一份**，GUI 侧委托 CLI 实现，
+    避免两套 `_generate_talent_pvp` / 技能覆盖规则漂移。
+    """
+    import sys as _sys
+    _bd = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'build')
+    if os.path.isdir(_bd) and _bd not in _sys.path:
+        _sys.path.insert(0, _bd)
+    import 角色数据构建 as _m
+    return _m
 
-    import re as _re
-    result = {}
-    for table_name, codes in raw_pairs.items():
-        rn = norm(table_name)
-        if not rn:
-            continue
-        m = _re.match(r'(\d{4})', codes[0])
-        if m:
-            result[rn] = m.group(1)
-    for n in raw_storage:
-        if n.endswith('·改') and n not in result:
-            base = n[:-2]
-            if base in result:
-                result[n] = result[base]
-    if '拉菲·改' in raw_storage and '拉菲·改' not in result and '拉菲(DD-724)' in result:
-        result['拉菲·改'] = result['拉菲(DD-724)']
 
-    pvp_path = os.path.join(kb_dir, 'talent_pvp.json')
+def _generate_talent_pvp(raw_path: str, raw_storage: dict, kb_dir: str = None):
+    """生成 talent_pvp.json（委托 CLI 实现：读源表 + 一格多名字 + 双点法取增伤那种）。"""
     try:
-        with open(pvp_path, 'w', encoding='utf-8') as f:
-            json.dump(result, f, ensure_ascii=False, indent=2)
+        _build_module()._generate_talent_pvp(raw_path, raw_storage, kb_dir)
     except Exception:
         pass
 

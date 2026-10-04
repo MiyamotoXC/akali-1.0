@@ -43,7 +43,7 @@ from src.文件提取 import (
     extract_skill_rows,
     extract_talents,
 )
-from src.名称归一化 import canonicalize_name, match_key
+from src.名称归一化 import canonicalize_name, match_key, load_nicknames
 from src.原始数据存档 import RawDataStore
 from src.技能解析 import parse_skills_batch
 from src.技能增益提取 import extract_raguz_bonus, extract_cd_effects, KAI_BASE as _KAI_BASE
@@ -324,7 +324,7 @@ def _check_suspicious_names(names: list):
     if suspicious:
         print('\n[提示] 以下舰名高度相似，可能是错别字/变体，请检查 config/ship_name_map.json：')
         for n1, n2, d in suspicious:
-            print(f'  {n1} ↔ {n2} (距离={d})')
+            print(f'  {n1} <-> {n2} (距离={d})')
 
 
 def _levenshtein(a: str, b: str) -> int:
@@ -428,12 +428,33 @@ def _clean_skill_value(v):
     return v
 
 
-def _merge_to_raw(store: RawDataStore, panel_by_key, normal_by_key, skill_by_key, talent_by_key=None):
+# 技能原文手动覆盖：源表尚未同步、但已人工确认的新版技能文案。
+# 文件：知识库/底层数据/源文件/skill_text_overrides.json（{舰名: {技能字段: 文案}}）
+SKILL_OVERRIDES_FILE = 'skill_text_overrides.json'
+
+
+def _load_skill_overrides(kb_dir: str = None) -> dict:
+    """读取技能原文手动覆盖表（缺失/异常 → 空表）。"""
+    kb_root = kb_dir or DEFAULT_KB_DIR
+    path = os.path.join(kb_root, '底层数据', '源文件', SKILL_OVERRIDES_FILE)
+    try:
+        with open(path, encoding='utf-8') as f:
+            raw = json.load(f)
+    except Exception:
+        return {}
+    return {k: v for k, v in raw.items()
+            if not str(k).startswith('_') and isinstance(v, dict)}
+
+
+def _merge_to_raw(store: RawDataStore, panel_by_key, normal_by_key, skill_by_key,
+                  talent_by_key=None, skill_overrides=None):
     """以面板表为基准合并四源数据 → raw_data.json（差异化更新）。
 
     - 角色集合严格等于面板表：遍历 panel_by_key，覆盖更新（面板以面板表为准）
     - **差异化保留**：技能/普攻/天赋源表缺失的舰或字段，继承 raw 既有值
       （手动更新补充的数据不被导入覆盖）；源表字段存在但值为空/???/纯空白 → 删除该 key
+    - **技能原文手动覆盖**（skill_overrides）：源表尚未同步、但已人工确认的新版文案，
+      合表后最后应用，源表覆盖不到（见 源文件/skill_text_overrides.json）
     - 清理 raw_data 里不在面板表的历史残留角色
     - 天赋存储为 talents（四行二列，置于 skills 之后）
     返回 (更新数, 删除数)
@@ -469,6 +490,11 @@ def _merge_to_raw(store: RawDataStore, panel_by_key, normal_by_key, skill_by_key
                 ocv = _clean_skill_value(old_skills.get(sk))
                 if ocv is not None:
                     cleaned_skills[sk] = ocv
+        # 技能原文手动覆盖：源表未同步的人工确认稿，最后应用（优先级最高）
+        for _f, _v in ((skill_overrides or {}).get(name) or {}).items():
+            if _f in ('LeaderSkill', 'SupportSkill', 'BattleSkill1', 'BattleSkill2') \
+                    and isinstance(_v, str) and _v.strip():
+                cleaned_skills[_f] = _v
         # 天赋：源表缺失保留旧值；有则覆盖
         if mk in talent_by_key:
             talents = talent_by_key[mk][1]
@@ -503,7 +529,8 @@ def _merge_tables(kb_dir: str = None) -> list:
     panel_by_key, normal_by_key, skill_by_key, talent_by_key, talent_map = result
 
     store = RawDataStore(raw_path)
-    updated, removed = _merge_to_raw(store, panel_by_key, normal_by_key, skill_by_key, talent_by_key)
+    updated, removed = _merge_to_raw(store, panel_by_key, normal_by_key, skill_by_key,
+                                     talent_by_key, _load_skill_overrides(kb_dir))
     store.save()
     print(f'\n底层信息: 以面板表为基准更新 {updated} 个，清理历史残留 {removed} 个，共 {len(store.storage)} 个 → {raw_path}')
     # 天赋映射表写入用户侧知识库（供计算器解析天赋编码用）
@@ -519,8 +546,8 @@ def _merge_tables(kb_dir: str = None) -> list:
     # ·改 角色天赋补全：改造前后天赋一致，从基础名复制（如 飞鹰·改 ← 飞鹰）
     _fill_kai_talents(store)
 
-    # PVP 推荐表（用户侧知识库/天赋表pvp260719.xlsx）→ talent_pvp.json
-    _generate_talent_pvp(raw_path, store.storage)
+    # PVP 推荐表（源表 底层数据/源文件/天赋表pvp*.xlsx）→ talent_pvp.json
+    _generate_talent_pvp(raw_path, store.storage, kb_dir)
 
     # 检查面板表舰名中的可疑近似写法（提示可能需补充 ship_name_map.json）
     _check_suspicious_names([v[0] for v in panel_by_key.values()])
@@ -570,20 +597,36 @@ def _fill_kai_talents(store):
         print(f'·改 天赋补全: 无需处理（0 个），缺失 {len(skipped)} 个 → {skipped}')
 
 
-def _generate_talent_pvp(raw_path: str, raw_storage: dict):
-    """从用户侧知识库的 天赋表pvp260719.xlsx 生成 talent_pvp.json（角色名→推荐编码）。
-    表名格式 '原名/昵称'（如 '夕立/夏雨临'），取第一个 4 位编码；归一化到 raw 正规舰名。"""
+def _generate_talent_pvp(raw_path: str, raw_storage: dict, kb_dir: str = None):
+    """从**源表** 天赋表pvp*.xlsx 生成 talent_pvp.json（角色名→推荐编码）。
+
+    源表位置：知识库/底层数据/源文件/（与其余源表同处，遵循「读源表→生成产物」；
+    旧版误扫产物目录，已修正）。表名格式 '原名/昵称'。
+
+    **同一个格子可能同时写本体与改造名**（如 '雪风/祥瑞御免-丹阳'），改造前后推荐一致
+    → 格内**每个**能解析出的正规名都登记同一编码（雪风 与 丹阳 都拿 1221）。
+
+    一个格若给了**多套点法**（如 '1211/1221'）→ **取第一种**（用户口径 2026-10-04：
+    计算时按表格给出的第一套来，不做增伤/索敌等二次筛选）。
+    """
     try:
         from src.文件提取 import extract_talent_pvp
     except ImportError:
         return
-    kb_dir = os.path.dirname(raw_path)
+    # 1) 找源表：优先 底层数据/源文件/（源表区），兼容旧位置（产物目录 / 知识库顶层）
+    kb_root = kb_dir or DEFAULT_KB_DIR
+    out_dir = os.path.dirname(raw_path)
     pvp_file = None
-    for fn in os.listdir(kb_dir):
-        if fn.startswith('~$') or not fn.lower().endswith('.xlsx'):
+    for d in (os.path.join(kb_root, '底层数据', '源文件'), out_dir, kb_root):
+        if not os.path.isdir(d):
             continue
-        if 'pvp' in fn.lower() or '天赋表' in fn:
-            pvp_file = os.path.join(kb_dir, fn)
+        for fn in sorted(os.listdir(d)):
+            if fn.startswith('~$') or not fn.lower().endswith('.xlsx'):
+                continue
+            if 'pvp' in fn.lower() or '天赋表' in fn:
+                pvp_file = os.path.join(d, fn)
+                break
+        if pvp_file:
             break
     if not pvp_file:
         return
@@ -592,51 +635,118 @@ def _generate_talent_pvp(raw_path: str, raw_storage: dict):
     except Exception as e:
         print(f'警告: PVP 天赋表解析失败 {e}')
         return
-    # 表名 → 正规舰名归一化（原名/昵称 → raw 键）
-    # 共用 ship_nicknames.json（与 agent NameMatcher 同一张表），别名如 花生→华盛顿/太太→列克星敦 均识别
+
     from src.舰船命名 import normalize_ship_name
 
-    def norm(table_name):
-        main = table_name.split('/')[0].strip()
-        # 直接命中 / 去·改 / 昵称表反向映射（含别名）
-        rn = normalize_ship_name(table_name, raw_storage)
-        if rn:
-            return rn
-        # 手动补全（拉菲系/列克星敦系等特殊编号舰）——旧逻辑兜底
-        manual = {
-            '拉菲DD459/萨罗蒙': '拉菲', '拉菲DD724/破空者': '拉菲(DD-724)',
-            '加里波第': '朱塞佩·加里波第', '北上改/木田神改': '北上·改',
-            '大井改/多多改': '大井·改', '列克星敦CV2/灰夫人': '列克星敦',
-            '列克星敦CV16/蓝女士': '列克星敦·改', '提尔皮茨/北之女王': '提尔比茨',
-            '卡约杜伊利奥/伊莉欧星语': '卡约·杜伊利奥', '朱利奥凯撒/尤莉娅西撒': '朱利奥·凯撒',
-            '甘谷特': '甘古特', '日向改/乌螯改': '日向·改', '伊势改/乌鳌改': '伊势·改',
-        }
-        return manual.get(table_name)
+    # 2) 名字索引：raw 正规名 + ship_nicknames.json 的「别名/和谐名/改造名 → 正规名」
+    def _key(s):
+        s = (s or '').strip()
+        for ch in ('‧', '・', '∙', '⋅'):
+            s = s.replace(ch, '·')
+        return re.sub(r'\s+', '', s).lower()
 
-    import re as _re
+    raw_keys = [k for k in raw_storage if k and not str(k).startswith('_')]
+    raw_set = set(raw_keys)
+    name2canon = {}
+    for k in raw_keys:
+        name2canon.setdefault(_key(k), k)
+    for canon, aliases in (load_nicknames() or {}).items():
+        if str(canon).startswith('_'):
+            continue
+        for a in (aliases or []):
+            name2canon.setdefault(_key(str(a)), canon)
+
+    def _refit_of(base):
+        """基座正规名 → 其改造正规名（'X·改' 键，或别名含 'X改'/'X·改' 的角色）。"""
+        k = base + '·改'
+        if k in raw_set:
+            return k
+        for canon, aliases in (load_nicknames() or {}).items():
+            if str(canon).startswith('_') or canon not in raw_set:
+                continue
+            for a in (aliases or []):
+                if str(a) in (base + '改', base + '·改'):
+                    return canon
+        return ''
+
+    def _resolve_token(tok, depth=0):
+        """单个名字片段 → 正规名列表（解析不出为空）。"""
+        tok = (tok or '').strip()
+        if not tok or depth > 3:
+            return []
+        out = []
+
+        def add(n):
+            if n and n in raw_set and n not in out:
+                out.append(n)
+
+        add(name2canon.get(_key(tok)))            # 正规名 / 昵称 / 和谐名
+        if out:
+            return out
+        m = re.match(r'^(.*?)(·改|改)$', tok)     # '本体改' → 基座 → 改造正规名
+        if m:
+            for b in _resolve_token(m.group(1), depth + 1):
+                add(_refit_of(b))
+            if out:
+                return out
+        r = normalize_ship_name(tok, raw_storage)  # 兼容 去·改 / 去括号
+        if r:
+            add(r)
+        return out
+
+    # 手工兜底（表名 → 正规名）：昵称表覆盖不全的编号舰 / 音译带点写法
+    manual = {
+        '拉菲DD459/萨罗蒙': '拉菲(DD-459)', '拉菲DD724/破空者': '拉菲(DD-724)',
+        '加里波第': '朱塞佩·加里波第', '北上改/木田神改': '北上·改',
+        '大井改/多多改': '大井·改', '列克星敦CV2/灰夫人': '列克星敦',
+        '列克星敦CV16/蓝女士': '列克星敦(CV-16)', '提尔皮茨/北之女王': '提尔比茨',
+        '卡约杜伊利奥/伊莉欧星语': '卡约·杜伊利奥', '朱利奥凯撒/尤莉娅西撒': '朱利奥·凯撒',
+        '甘谷特': '甘古特', '日向改/乌螯改': '日向·改', '伊势改/乌鳌改': '伊势·改',
+    }
+
+    def _cell_names(table_name):
+        """一个名字格 → 正规名列表。
+        先按 '/'、'、'、',' 分列，再把含 '-' 的片段按 '-' 拆（如 '祥瑞御免-丹阳'）。"""
+        toks = []
+        for p in [p.strip() for p in re.split(r'[/、,，]+', table_name) if p.strip()]:
+            toks.append(p)
+            if '-' in p:
+                toks += [s.strip() for s in p.split('-') if s.strip()]
+        names = []
+        for tk in toks:
+            for n in _resolve_token(tk):
+                if n not in names:
+                    names.append(n)
+        if not names and table_name in manual and manual[table_name] in raw_set:
+            names = [manual[table_name]]
+        return names
+
+    # 3) 逐格登记：同一格内的多个名字（本体/改造/昵称）共用同一编码；
+    #    一个格若给了多套点法（如 '1211/1221'）→ 取**第一种**
     result = {}
     for table_name, codes in raw_pairs.items():
-        rn = norm(table_name)
-        if not rn:
+        m = re.match(r'(\d{4})', str(codes[0]))
+        if not m:
             continue
-        m = _re.match(r'(\d{4})', codes[0])
-        if m:
-            result[rn] = m.group(1)
-    # ·改 角色从基础名补齐（改造前后推荐一致）
-    for n in raw_storage:
+        code = m.group(1)
+        for n in _cell_names(table_name):
+            result.setdefault(n, code)
+    # 4) ·改 角色从基础名补齐（改造前后推荐一致）
+    for n in raw_keys:
         if n.endswith('·改') and n not in result:
             base = n[:-2]
             if base in result:
                 result[n] = result[base]
     # 特例：拉菲·改 ← 拉菲(DD-724)（同船改造，非拉菲 DD-459）
-    if '拉菲·改' in raw_storage and '拉菲·改' not in result and '拉菲(DD-724)' in result:
+    if '拉菲·改' in raw_set and '拉菲·改' not in result and '拉菲(DD-724)' in result:
         result['拉菲·改'] = result['拉菲(DD-724)']
 
-    pvp_path = os.path.join(kb_dir, 'talent_pvp.json')
+    pvp_path = os.path.join(out_dir, 'talent_pvp.json')
     try:
         with open(pvp_path, 'w', encoding='utf-8') as f:
             json.dump(result, f, ensure_ascii=False, indent=2)
-        print(f'PVP 天赋推荐表: {len(result)} 条 → {pvp_path}')
+        print(f'PVP 天赋推荐表: {len(result)} 条 → {pvp_path}'
+              f'（源: {os.path.basename(pvp_file)}）')
     except Exception as e:
         print(f'警告: talent_pvp.json 写入失败 {e}')
 
