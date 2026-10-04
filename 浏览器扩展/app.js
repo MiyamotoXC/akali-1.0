@@ -27,7 +27,10 @@ var API_TIMEOUT_MS = (function () {
   } catch (e) {}
   if (typeof window.ARKLY_API_TIMEOUT_MS === 'number') return window.ARKLY_API_TIMEOUT_MS;
   if (typeof window.ARKLY_CHAT_TIMEOUT_MS === 'number') return window.ARKLY_CHAT_TIMEOUT_MS;
-  return 60000;
+  // 默认 90s（用户口径 2026-10-04：原 60s 对"装备/攻略问答"这类链路偏紧 ——
+  // 它要走「意图分类 → 检索(重排) → 生成 → 证据校对」最多 5 次串行 LLM，
+  // 常态 20~60s，遇到模型端抖动就会误伤。90s 仍能给真卡死兜底）。
+  return 90000;
 })();
 
 // 调用方据此判断「这次失败是超时中止」而非网络/服务异常
@@ -1885,7 +1888,8 @@ ${weatherData.location}实时天气：${weatherData.weather}
       if (isTimeoutError(error)) {
         typing.querySelector('.bubble').innerHTML =
           '<div class="role-tag">阿卡莉</div>响应过久，服务器ojbk中。'
-          + '天气查询已中止，并已自动反馈给开发者。';
+          + '天气查询已中止，并已自动反馈给开发者。'
+          + '（可稍后重试。）';
         sendBtn.disabled = false;
         return;
       }
@@ -1928,6 +1932,15 @@ ${weatherData.location}实时天气：${weatherData.weather}
       : '（面无表情地思考中…）';
     const typing = addMsg('secretary', _placeholder);
     if (_isEncounter) typing.classList.add('computing');
+    // 慢响应进度提示（用户口径 2026-10-04-D）：超过 15s 还没回，气泡里补一句"还在算"，
+    // 免得用户以为卡死；拿到响应 / 超时中止后由 finally 清掉。
+    let _slowTimer = setTimeout(function () {
+      try {
+        typing.querySelector('.bubble').innerHTML =
+          '<div class="role-tag">阿卡莉</div>还在算，指挥官稍等…'
+          + '（这类问题要走检索 → 生成 → 校对，常见 20~60 秒）';
+      } catch (e) {}
+    }, 15000);
     try {
       const _payload = { message: text, session_id: _sessionId() };
       // 云端模式：用户面板存浏览器本地，随请求携带（服务器无状态、不落盘）
@@ -1949,12 +1962,14 @@ ${weatherData.location}实时天气：${weatherData.weather}
         typing.querySelector('.bubble').innerHTML =
           '<div class="role-tag">阿卡莉</div>响应过久，服务器ojbk中。'
           + '本轮回答已中止，并已自动反馈给开发者。'
+          + '（这类问题较慢，可稍后重试或换个问法。）'
           + '<div class="sticker-wrap"><img loading="lazy" class="sticker-img" src="'
           + resolveAsset('/kb/图片素材/表情包/ojbk.png') + '" alt="ojbk"></div>';
       } else {
         typing.querySelector('.bubble').innerHTML = _ojbkBubbleHtml();
       }
     } finally {
+      if (_slowTimer) { clearTimeout(_slowTimer); _slowTimer = null; }
       sendBtn.disabled = false;
       inputEl.focus();
       messagesEl.scrollTop = messagesEl.scrollHeight;
