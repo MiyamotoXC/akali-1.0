@@ -671,9 +671,10 @@
     .fab-menu .sug-btn { padding: 10px 10px; font-size: 14px; }
   }
 
-  /* 反馈互动（用户口径 2026-10-04 改版）：不再用常显按钮；改为**长按阿卡莉回复**弹出
-     表情面板（🍬 / 🐷），选中的表情以小徽章显示在该条回复下方。仅「可反馈路由」
-     （后端 from_kb 标记 data-from-kb="1"）的消息长按才生效；同一轮只反馈一次。 */
+  /* 反馈互动（用户口径 2026-10-04 改版 · 第二版）：不再用常显按钮；**长按阿卡莉回复**
+     弹出面板 🍬 / 🐷 / 💡，选中的表情以小徽章贴在回复下方：
+     🍬 / 🐷 只是好玩（不上报）；💡 是反馈按钮（仅「可反馈路由」data-from-kb="1"
+     生效，同一轮只上报一次）。 */
   .bubble {
     position: relative;
   }
@@ -702,6 +703,11 @@
   }
   .fb-picker button:hover { transform: scale(1.12); background: #eef3f8; }
   .fb-picker button:active { transform: scale(.94); }
+  /* 面板里的 💡 才是真正的反馈按钮，与两个「好玩」表情做视觉区分 */
+  .fb-picker button.fb-feedback {
+    background: #eef3f8;
+    box-shadow: inset 0 0 0 1.5px rgba(74, 114, 151, .45);
+  }
   /* 已选表情徽章：贴在回复下方（气泡底部右对齐） */
   .fb-reaction {
     margin-top: 6px; display: flex; justify-content: flex-end;
@@ -752,7 +758,7 @@
 
   <!-- 温馨提示横幅：固定常驻文案，磨砂轻底（样式见 .warm-tip）；
        事务提醒（后端按占位注释注入 tip-item）与温馨提示共用此横幅，滚动轮播切换 -->
-  <div class="warm-tip" id="warmTip"><span class="tip-item">提示：长按不满意的答复、选个表情反馈，帮助阿卡莉进步</span><!--AFFAIR_TIP--></div>
+  <div class="warm-tip" id="warmTip"><span class="tip-item">提示：长按答复可贴个表情；不满意的回答点 💡 反馈给阿卡莉</span><!--AFFAIR_TIP--></div>
 
   <!-- 我的舰船·装备面板（本地副本）：可折叠；逻辑由下方 JS「用户本地副本管理」区块
        （up* 系列函数）控制——载入角色/改面板值/保存或删增量/刷新已改列表 -->
@@ -3435,12 +3441,14 @@ document.addEventListener('click', function (ev) {
   }
 })();
 
-// ===== 反馈互动（用户口径 2026-10-04 改版）=====
-// 旧版：知识库问答回复右下角常显 💡 按钮，点一下上报。
-// 新版：**长按任意阿卡莉回复**弹出表情面板（🍬 / 🐷），选中的表情显示在该条回复下方；
-//   效果与旧按钮等价（POST /api/feedback，feedback_type=unsatisfied）。长按对**所有回复**
-//   都可触发，但只有「可反馈路由」（后端 from_kb 标记 data-from-kb="1"）的消息才真正生效；
-//   同一轮对话（自上一个进程边界起、连续的 kb 回复）只上报一次，重复选择不再重复提交。
+// ===== 反馈互动（用户口径 2026-10-04 改版 · 第二版）=====
+// 长按任意阿卡莉回复 → 弹出面板，里面有 **🍬 / 🐷 / 💡** 三个选项：
+//   · 🍬 / 🐷 —— 只是好玩：选中的表情贴在该条回复**下方**，**不上报**任何东西；
+//   · 💡      —— 反馈按钮：贴在下方，并真正上报这段问答（POST /api/feedback，
+//               feedback_type=unsatisfied，与旧版常显 💡 完全等价）。
+// 长按对**所有回复**都可触发（🍬/🐷 随处可玩），但 💡 只有「可反馈路由」
+// （后端 from_kb 标记 data-from-kb="1"）的消息才真正生效；同一轮对话（自上一个进程边界起、
+// 连续的 kb 回复）只上报一次，重复点 💡 不再重复提交。
 
 // 提取气泡正文：克隆后剔除角色标签、表情徽章，避免污染上报文本
 function _fbBubbleText(node) {
@@ -3487,13 +3495,19 @@ function _fbMarkRoundDone(msgEl) {
   _fbRoundNodes(msgEl).forEach(function (n) { n.setAttribute('data-fb-done', '1'); });
 }
 
-// 在回复下方显示已选表情
-function _fbShowReaction(msgEl, emoji) {
+// 在回复下方贴一个表情（可叠加多个、去重）
+function _fbAddReaction(msgEl, emoji) {
   const bubble = msgEl.querySelector('.bubble');
   if (!bubble) return;
   let box = bubble.querySelector('.fb-reaction');
   if (!box) { box = document.createElement('div'); box.className = 'fb-reaction'; bubble.appendChild(box); }
-  box.innerHTML = '<span>' + emoji + '</span>';
+  const dup = Array.prototype.some.call(box.querySelectorAll('span'), function (s) {
+    return s.textContent === emoji;
+  });
+  if (dup) return;
+  const span = document.createElement('span');
+  span.textContent = emoji;
+  box.appendChild(span);
 }
 
 // 提交一次反馈（等价旧 💡：POST /api/feedback，feedback_type=unsatisfied）
@@ -3518,7 +3532,7 @@ function _fbSubmit(msgEl, emoji) {
   }).then(function (r) { return r.json(); });
 }
 
-// —— 长按 → 表情面板（🍬 / 🐷）——
+// —— 长按 → 表情面板（🍬 / 🐷 好玩；💡 真反馈）——
 let _fbPickerEl = null;
 let _fbLastFire = 0;
 
@@ -3532,9 +3546,12 @@ function _fbInPicker(node) {
   return !!(node && node.closest && node.closest('.fb-picker'));
 }
 
-// 选中表情：先显示在回复下方。**只有「可反馈路由」才真正上报**；同一轮只上报一次。
-function _fbPick(msgEl, emoji) {
-  _fbShowReaction(msgEl, emoji);
+// 选中一个选项：
+//   isFeedback=false（🍬/🐷）→ 只把表情贴在回复下方，**完全不上报**；
+//   isFeedback=true （💡）  → 贴上表情，并真正上报（仅「可反馈路由」生效、同一轮一次）。
+function _fbPick(msgEl, emoji, isFeedback) {
+  _fbAddReaction(msgEl, emoji);
+  if (!isFeedback) return;                                  // 🍬/🐷：纯好玩，不起作用
   if (msgEl.getAttribute('data-from-kb') !== '1') return;   // 非可反馈回复：只显示，不上报
   if (_fbRoundDone(msgEl)) return;                          // 本轮已上报 → 不重复提交
   _fbSubmit(msgEl, emoji).then(function (d) {
@@ -3548,21 +3565,29 @@ function _fbOpenPicker(msgEl) {
   if (!bubble) return;
   const picker = document.createElement('div');
   picker.className = 'fb-picker';
-  ['🍬', '🐷'].forEach(function (emoji) {
+  // 前两个是「好玩」的表情，最后一个 💡 才是真正的反馈按钮
+  [{ emoji: '🍬' }, { emoji: '🐷' }, { emoji: '💡', feedback: true }].forEach(function (opt) {
     const btn = document.createElement('button');
-    btn.type = 'button'; btn.textContent = emoji;
-    btn.setAttribute('aria-label', '反馈 ' + emoji);
+    btn.type = 'button'; btn.textContent = opt.emoji;
+    if (opt.feedback) {
+      btn.className = 'fb-feedback';
+      btn.title = '这条回答不满意？点这里反馈给开发者';
+      btn.setAttribute('aria-label', '反馈此答复');
+    } else {
+      btn.title = '贴在回复下方玩玩';
+      btn.setAttribute('aria-label', '贴上 ' + opt.emoji);
+    }
     btn.addEventListener('click', function (ev) {
       ev.stopPropagation();
       _fbClosePicker();
-      _fbPick(msgEl, emoji);
+      _fbPick(msgEl, opt.emoji, !!opt.feedback);
     });
     picker.appendChild(btn);
   });
   document.body.appendChild(picker);
   // 定位在气泡正上方居中；上方空间不足则落到下方（并夹在视口内）
   const r = bubble.getBoundingClientRect();
-  const pw = picker.offsetWidth || 108, ph = picker.offsetHeight || 52;
+  const pw = picker.offsetWidth || 164, ph = picker.offsetHeight || 52;
   const left = Math.max(8, Math.min(r.left + r.width / 2 - pw / 2, window.innerWidth - pw - 8));
   let top = r.top - ph - 8;
   if (top < 8) top = Math.min(r.bottom + 8, Math.max(8, window.innerHeight - ph - 8));

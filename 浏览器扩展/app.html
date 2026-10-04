@@ -672,9 +672,10 @@
     .fab-menu .sug-btn { padding: 10px 10px; font-size: 14px; }
   }
 
-  /* 反馈互动（用户口径 2026-10-04 改版）：不再用常显按钮；改为**长按阿卡莉回复**弹出
-     表情面板（🍬 / 🐷），选中的表情以小徽章显示在该条回复下方。仅「可反馈路由」
-     （后端 from_kb 标记 data-from-kb="1"）的消息长按才生效；同一轮只反馈一次。 */
+  /* 反馈互动（用户口径 2026-10-04 改版 · 第二版）：不再用常显按钮；**长按阿卡莉回复**
+     弹出面板 🍬 / 🐷 / 💡，选中的表情以小徽章贴在回复下方：
+     🍬 / 🐷 只是好玩（不上报）；💡 是反馈按钮（仅「可反馈路由」data-from-kb="1"
+     生效，同一轮只上报一次）。 */
   .bubble {
     position: relative;
   }
@@ -703,6 +704,11 @@
   }
   .fb-picker button:hover { transform: scale(1.12); background: #eef3f8; }
   .fb-picker button:active { transform: scale(.94); }
+  /* 面板里的 💡 才是真正的反馈按钮，与两个「好玩」表情做视觉区分 */
+  .fb-picker button.fb-feedback {
+    background: #eef3f8;
+    box-shadow: inset 0 0 0 1.5px rgba(74, 114, 151, .45);
+  }
   /* 已选表情徽章：贴在回复下方（气泡底部右对齐） */
   .fb-reaction {
     margin-top: 6px; display: flex; justify-content: flex-end;
@@ -753,7 +759,7 @@
 
   <!-- 温馨提示横幅：固定常驻文案，磨砂轻底（样式见 .warm-tip）；
        事务提醒（后端按占位注释注入 tip-item）与温馨提示共用此横幅，滚动轮播切换 -->
-  <div class="warm-tip" id="warmTip"><span class="tip-item">提示：长按不满意的答复、选个表情反馈，帮助阿卡莉进步</span><!--AFFAIR_TIP--></div>
+  <div class="warm-tip" id="warmTip"><span class="tip-item">提示：长按答复可贴个表情；不满意的回答点 💡 反馈给阿卡莉</span><!--AFFAIR_TIP--></div>
 
   <!-- 我的舰船·装备面板（本地副本）：可折叠；逻辑由下方 JS「用户本地副本管理」区块
        （up* 系列函数）控制——载入角色/改面板值/保存或删增量/刷新已改列表 -->
