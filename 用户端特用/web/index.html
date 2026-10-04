@@ -673,8 +673,8 @@
 
   /* 反馈互动（用户口径 2026-10-04 改版 · 第二版）：不再用常显按钮；**长按阿卡莉回复**
      弹出面板 🍬 / 🐷 / 💡，选中的表情以小徽章贴在回复下方：
-     🍬 / 🐷 只是好玩（不上报）；💡 是反馈按钮（仅「可反馈路由」data-from-kb="1"
-     生效，同一轮只上报一次）。 */
+     🍬 / 🐷 只是好玩（不上报）；💡 是反馈按钮，**只对走向量检索的答复与 LLM 依据知识库
+     生成的答复生效**（data-from-kb="1"），闲聊等非可反馈回复点了毫无效果；同一轮只上报一次。 */
   .bubble {
     position: relative;
   }
@@ -3464,8 +3464,9 @@ document.addEventListener('click', function (ev) {
 //   · 🍬 / 🐷 —— 只是好玩：选中的表情贴在该条回复**下方**，**不上报**任何东西；
 //   · 💡      —— 反馈按钮：贴在下方，并真正上报这段问答（POST /api/feedback，
 //               feedback_type=unsatisfied，与旧版常显 💡 完全等价）。
-// 长按对**所有回复**都可触发（🍬/🐷 随处可玩），但 💡 只有「可反馈路由」
-// （后端 from_kb 标记 data-from-kb="1"）的消息才真正生效；同一轮对话（自上一个进程边界起、
+// 长按对**所有回复**都可触发（🍬/🐷 随处可玩），但 💡 只对「可反馈路由」生效 ——
+// 即**走向量检索的答复**与**LLM 依据知识库生成的答复**（后端 from_kb 标记 data-from-kb="1"）；
+// **闲聊**、固定话术、计算面板等一概不算（点了毫无效果）。同一轮对话（自上一个进程边界起、
 // 连续的 kb 回复）只上报一次，重复点 💡 不再重复提交。
 
 // 提取气泡正文：克隆后剔除角色标签、表情徽章，避免污染上报文本
@@ -3565,13 +3566,16 @@ function _fbInPicker(node) {
 }
 
 // 选中一个选项：
-//   isFeedback=false（🍬/🐷）→ 只把表情贴在回复下方，**完全不上报**；
-//   isFeedback=true （💡）  → 贴上表情，并真正上报（仅「可反馈路由」生效、同一轮一次）。
+//   isFeedback=false（🍬/🐷）→ 只把表情贴在回复下方，**完全不上报**；任何回复都能玩。
+//   isFeedback=true （💡）  → **反馈按钮**：只对「可反馈路由」生效 —— 即**走向量检索的答复**
+//     与**LLM 依据知识库生成的答复**（后端 from_kb 标记 data-from-kb="1"）。**闲聊**、固定话术、
+//     计算面板等点了**毫无效果**（不贴徽章、也不上报），避免让人误以为闲聊的反馈也计进去了。
+//   同一轮对话只上报一次，重复点 💡 不再重复提交。
 function _fbPick(msgEl, emoji, isFeedback) {
+  if (!isFeedback) { _fbAddReaction(msgEl, emoji); return; }   // 🍬/🐷：纯好玩，随处可贴
+  if (msgEl.getAttribute('data-from-kb') !== '1') return;      // 闲聊/固定话术等：💡 不生效
   _fbAddReaction(msgEl, emoji);
-  if (!isFeedback) return;                                  // 🍬/🐷：纯好玩，不起作用
-  if (msgEl.getAttribute('data-from-kb') !== '1') return;   // 非可反馈回复：只显示，不上报
-  if (_fbRoundDone(msgEl)) return;                          // 本轮已上报 → 不重复提交
+  if (_fbRoundDone(msgEl)) return;                             // 本轮已上报 → 不重复提交
   _fbSubmit(msgEl, emoji).then(function (d) {
     if (d && d.ok) { _fbMarkRoundDone(msgEl); }
   }).catch(function () { /* 静默：本地已显示，不打断对话 */ });
