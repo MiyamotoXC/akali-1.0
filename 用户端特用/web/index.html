@@ -679,8 +679,11 @@
   }
   /* 长按 = 反馈入口：关掉系统长按菜单/选择，避免与表情面板打架（仅阿卡莉回复） */
   .msg.secretary .bubble { -webkit-touch-callout: none; }
-  /* 长按进行中的轻微高亮 */
-  .msg.secretary.fb-pressing .bubble { box-shadow: 0 0 0 2px rgba(74, 114, 151, .35); }
+  /* 长按进行中的轻微高亮（顺带禁止选中，避免系统长按菜单/选择抢走手势） */
+  .msg.secretary.fb-pressing .bubble {
+    box-shadow: 0 0 0 2px rgba(74, 114, 151, .35);
+    user-select: none; -webkit-user-select: none;
+  }
   /* 表情选择面板：body 固定层，跟随气泡定位（避免被消息区裁剪） */
   .fb-picker {
     position: fixed; z-index: 60;
@@ -3524,10 +3527,16 @@ function _fbClosePicker() {
   _fbPickerEl = null;
 }
 
-// 选中表情：先显示在回复下方；同一轮已反馈过则不再重复提交
+// 事件是否落在表情面板自身内（面板上的操作不能把面板关掉）
+function _fbInPicker(node) {
+  return !!(node && node.closest && node.closest('.fb-picker'));
+}
+
+// 选中表情：先显示在回复下方。**只有「可反馈路由」才真正上报**；同一轮只上报一次。
 function _fbPick(msgEl, emoji) {
   _fbShowReaction(msgEl, emoji);
-  if (_fbRoundDone(msgEl)) return;   // 本轮已反馈 → 只显示，不再提交
+  if (msgEl.getAttribute('data-from-kb') !== '1') return;   // 非可反馈回复：只显示，不上报
+  if (_fbRoundDone(msgEl)) return;                          // 本轮已上报 → 不重复提交
   _fbSubmit(msgEl, emoji).then(function (d) {
     if (d && d.ok) { _fbMarkRoundDone(msgEl); }
   }).catch(function () { /* 静默：本地已显示，不打断对话 */ });
@@ -3551,23 +3560,24 @@ function _fbOpenPicker(msgEl) {
     picker.appendChild(btn);
   });
   document.body.appendChild(picker);
-  // 定位在气泡正上方居中；上方空间不足则落到下方
+  // 定位在气泡正上方居中；上方空间不足则落到下方（并夹在视口内）
   const r = bubble.getBoundingClientRect();
-  const pw = picker.offsetWidth, ph = picker.offsetHeight;
-  let left = Math.max(8, Math.min(r.left + r.width / 2 - pw / 2, window.innerWidth - pw - 8));
+  const pw = picker.offsetWidth || 108, ph = picker.offsetHeight || 52;
+  const left = Math.max(8, Math.min(r.left + r.width / 2 - pw / 2, window.innerWidth - pw - 8));
   let top = r.top - ph - 8;
-  if (top < 8) top = r.bottom + 8;
+  if (top < 8) top = Math.min(r.bottom + 8, Math.max(8, window.innerHeight - ph - 8));
   picker.style.left = left + 'px';
   picker.style.top = top + 'px';
   _fbPickerEl = picker;
 }
 
-// 长按检测（触摸 + 鼠标）：所有阿卡莉回复都可长按，仅「可反馈路由」弹面板
+// 长按检测（触摸 + 鼠标）：**任意阿卡莉回复**长按都弹表情面板（界面一致）；
+// 是否真正上报由该条回复的 data-from-kb 决定（见 _fbPick）。
 (function initLongPressFeedback() {
-  const HOLD_MS = 500;
+  const HOLD_MS = 450;
   let timer = null, holdEl = null, startX = 0, startY = 0;
 
-  function cancel() {
+  function clearHold() {
     if (timer) { clearTimeout(timer); timer = null; }
     if (holdEl) holdEl.classList.remove('fb-pressing');
     holdEl = null;
@@ -3575,10 +3585,11 @@ function _fbOpenPicker(msgEl) {
 
   function onDown(e) {
     if (e.button != null && e.button !== 0) return;   // 仅左键 / 触摸
+    if (_fbInPicker(e.target)) return;                // 面板自身的操作不打断
     const msgEl = (e.target && e.target.closest) ? e.target.closest('.msg.secretary') : null;
-    if (!msgEl) return;
+    if (!msgEl) { _fbClosePicker(); return; }         // 按在别处 → 关面板
     _fbClosePicker();
-    cancel();
+    clearHold();
     holdEl = msgEl;
     const pt = e.touches ? e.touches[0] : e;
     startX = pt.clientX || 0; startY = pt.clientY || 0;
@@ -3586,12 +3597,11 @@ function _fbOpenPicker(msgEl) {
     timer = setTimeout(function () {
       timer = null;
       const el = holdEl;
-      if (el) el.classList.remove('fb-pressing');
       holdEl = null;
-      // 只有「可反馈路由」才弹面板；也只有此时才吞掉随后的 click
-      if (el && el.getAttribute('data-from-kb') === '1') {
+      if (el) {
+        el.classList.remove('fb-pressing');
         _fbLastFire = Date.now();
-        _fbOpenPicker(el);
+        _fbOpenPicker(el);                            // 所有回复都弹面板
       }
     }, HOLD_MS);
   }
@@ -3599,27 +3609,29 @@ function _fbOpenPicker(msgEl) {
   function onMove(e) {
     if (!timer) return;
     const pt = e.touches ? e.touches[0] : e;
-    if (Math.abs((pt.clientX || 0) - startX) > 12 || Math.abs((pt.clientY || 0) - startY) > 12) cancel();
+    const dx = Math.abs((pt.clientX || 0) - startX), dy = Math.abs((pt.clientY || 0) - startY);
+    if (dx > 14 || dy > 14) clearHold();              // 明显滑动 → 视为滚动，不触发
   }
 
   document.addEventListener('touchstart', onDown, { passive: true });
   document.addEventListener('touchmove', onMove, { passive: true });
-  document.addEventListener('touchend', cancel, { passive: true });
-  document.addEventListener('touchcancel', cancel, { passive: true });
+  document.addEventListener('touchend', clearHold, { passive: true });
+  // 注意：触摸被系统打断（touchcancel，长按菜单/选择抢手势）**不**取消 —— 面板照弹
   document.addEventListener('mousedown', onDown);
   document.addEventListener('mousemove', onMove);
-  document.addEventListener('mouseup', cancel);
-  // 长按已触发时，吞掉随后的一次 click，避免误触回复内按钮（表情面板自身的点击放行）
+  document.addEventListener('mouseup', clearHold);
+  // 长按已触发时吞掉随后的一次 click，避免误触回复内按钮（面板自身放行）
   document.addEventListener('click', function (e) {
-    if (e.target && e.target.closest && e.target.closest('.fb-picker')) return;
+    if (_fbInPicker(e.target)) return;
     if (Date.now() - _fbLastFire < 800) { _fbLastFire = 0; e.stopPropagation(); e.preventDefault(); }
   }, true);
-  // 滚动 / 缩放 / 点别处 → 关面板
+  // 系统长按菜单会抢走手势 → 在阿卡莉回复上禁掉（桌面右键同理）
+  document.addEventListener('contextmenu', function (e) {
+    if (e.target && e.target.closest && e.target.closest('.msg.secretary')) e.preventDefault();
+  }, true);
+  // 滚动 / 缩放 → 关面板
   document.addEventListener('scroll', _fbClosePicker, true);
   window.addEventListener('resize', _fbClosePicker);
-  document.addEventListener('mousedown', function (e) {
-    if (_fbPickerEl && !(e.target && e.target.closest && e.target.closest('.fb-picker'))) _fbClosePicker();
-  }, true);
 })();
 
 // 每条阿卡莉回复都打上「可反馈」标记（data-from-kb="1"）与 msg-id，供长按面板使用。

@@ -1357,7 +1357,9 @@ async def index():
         base = CDN_BASE.rstrip("/")
         html = _re.sub(r"/kb/(?!html)([^\"' )]*)", lambda m: base + "/" + m.group(1), html)
         html = _re.sub(r"/avatar/([^\"' )]*)", lambda m: base + "/图片素材/" + m.group(1), html)
-    return HTMLResponse(html)
+    # no-store：首页是动态拼装的，且**每次部署都要立刻生效**（否则浏览器/WebView 可能仍
+    # 按旧页面渲染 —— 旧页面里没有新版交互，会被误判成「功能没上线」）
+    return HTMLResponse(html, headers={"Cache-Control": "no-store"})
 
 
 @app.get("/kb/{file_path:path}")
