@@ -1856,6 +1856,22 @@ function _ojbkBubbleHtml() {
     + resolveAsset('/kb/图片素材/表情包/ojbk.png') + '" alt="ojbk"></div>';
 }
 
+// 「是不是在问天气」（用户口径 2026-10-04）：必须**既**是天气话题、**又**是提问式。
+// 只是顺口提到天气（如「这天气应该趁热吧」「我喜欢这种天气」）**不算**查询 —— 照常进对话，
+// 后端会把**真实天气**注入上下文，由阿卡莉接着聊。判定口径与后端 calc_flow 的天气分支对齐。
+function isWeatherQuestion(text) {
+  let s = String(text || '').trim();
+  if (!s) return false;
+  s = s.replace(/[\s？?！!。.，,、~～啊呀哦哈啦呢吧嘛]+$/g, '');   // 去掉句尾语气词/标点
+  if (!s) return false;
+  // ① 天气词 + 问法：「今天天气怎么样」「明天天气如何」「气温多少度」
+  if (/(?:天气|气温|温度)(?:怎么样|咋样|怎么|如何|多少度|几度|多少|好不好|好吗|呢|吗)/.test(s)) return true;
+  // ② 省略式提问（短句、以天气词收尾）：「今天天气」「北京气温」「这天气」「天气」
+  if (/^(?:今天|明天|后天|现在|外面|这边|那边|这|那|这儿|那儿|当地|本地|[一-龥]{2,4}(?:市|区|县)?)?(?:的)?(?:天气|气温|温度)$/.test(s)) return true;
+  // ③ 明确查询动作或固定问法：「查北京天气」「明天会下雨吗」「今天多少度」「热不热」
+  return /查.{0,8}天气|看.{0,4}天气|热不热|冷不冷|下雨[吗么]|下雪[吗么]|多少度|几度/.test(s);
+}
+
 async function sendChat(text) {
   // 发送消息时重新启用输入框（用户提交表单后）
   inputEl.disabled = false;
@@ -1865,8 +1881,10 @@ async function sendChat(text) {
   inputEl.style.height = 'auto';
   sendBtn.disabled = true;
   
-  // 检查是否为天气查询
-  const isWeatherQuery = /天气|气温|温度|湿度|风速|预报/.test(text);
+  // 只有**在问天气**才拦截走天气查询（用户口径 2026-10-04）：此前是见到「天气」二字就整条
+  // 拦截，导致「这天气应该趁热吧」这类闲聊被当查询、定位失败还回「定位失败，请检查浏览器设置」。
+  // 其余含天气的句子照常进对话（后端会注入真实天气，交给阿卡莉接话）。
+  const isWeatherQuery = isWeatherQuestion(text);
   
   if (isWeatherQuery) {
     // 天气查询：调用 queryWeather 函数

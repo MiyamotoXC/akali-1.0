@@ -2558,6 +2558,46 @@ def _handle_activity_list() -> dict:
             'encounter_form': [], 'guide_files': [], 'guide_lib': '', 'ok': True, 'bye': False}
 
 
+# ===== 天气闲聊上下文（用户口径 2026-10-04）=====
+# 背景：此前前端**见到「天气」二字就把整条消息拦截**去查天气，于是「这天气应该趁热吧」这种
+# 闲聊被误当查询，定位失败时还回「定位失败，请检查浏览器设置」。前端已改为「只拦真正的提问」；
+# 但**聊到天气时阿卡莉不能空口附和** —— 这里在闲聊轮把**真实天气**当上下文注入，让她接着真实
+# 天气聊（取不到定位/取数失败则静默不注入，绝不影响主流程）。
+_WEATHER_TALK_RE = re.compile(
+    r'天气|气温|温度|下雨|下雪|阴天|晴天|多云|台风|降温|升温|变天|冷不冷|热不热|凉快|暖和|闷热|好晒')
+_WEATHER_CTX_TTL = 600            # 真实天气缓存 10 分钟，避免每轮闲聊都外呼
+_weather_ctx_cache = {'at': 0.0, 'text': ''}
+
+
+def _weather_chat_context(msg: str) -> str:
+    """聊到天气时返回「当前真实天气」上下文前缀；取不到则返回空串（调用方直接拼，无副作用）。"""
+    m = msg or ''
+    if not m or not _WEATHER_TALK_RE.search(m):
+        return ''
+    loc = getattr(agent, 'user_location', None)   # 浏览器定位授权后由前端 /api/location 上报
+    if not loc:
+        return ''                                 # 无定位：不注入（不编造所在地天气）
+    now = time.time()
+    if _weather_ctx_cache['text'] and now - _weather_ctx_cache['at'] < _WEATHER_CTX_TTL:
+        return _weather_ctx_cache['text']
+    try:
+        from tools.knowledge import _fetch_weather
+        w = _fetch_weather(float(loc['lat']), float(loc['lon']))
+    except Exception:
+        w = None
+    if not w:
+        return ''
+    bits = ['%s %s℃' % (w.get('desc') or '', w.get('temp_c'))]
+    if w.get('humidity') is not None:
+        bits.append('湿度 %s%%' % w['humidity'])
+    if w.get('wind_kmh') is not None:
+        bits.append('风速 %s km/h' % w['wind_kmh'])
+    text = ('[指挥官所在地实时天气：%s。这轮若聊到天气、冷热或下雨，按此真实天气自然接话；'
+            '不要编造天气，也不要把它念成数据报告。]' % '，'.join(bits))
+    _weather_ctx_cache.update({'at': now, 'text': text})
+    return text
+
+
 def _chat_impl(req: ChatRequest):
     """对话接口：返回秘书回复 + 工具原始输出（含计算结果明细）。
     按 session_id 隔离对话状态（chat_history / session_overrides），多人调用互不串。
@@ -2822,6 +2862,8 @@ def _chat_impl(req: ChatRequest):
         if _flirt_finishing:
             user_msg = ('[这是连续调情第20轮，也是允许正常回应的最后一轮。请正面回应本轮，'
                         '并在本轮末自然收尾；不要提前拒绝，不要输出<STANDBY>标记。]') + user_msg
+        # 天气闲聊：句子里提到天气/冷热/下雨时，把**真实天气**随上下文注入，让阿卡莉接着真实天气聊
+        user_msg = _weather_chat_context(req.message) + user_msg
         messages = list(hist) + [{'role': 'user', 'content': user_msg}]
         # Token 监控：输入估算 = 人设模板 + 历史 + 用户消息（qwen_agent 内部自动附加 system）
         _tok_in = _est_tokens(agent.prompt_template) + sum(_est_tokens(m.get('content') or '') for m in messages)
