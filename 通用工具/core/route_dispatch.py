@@ -27,6 +27,17 @@ def route_work_dispatch(tools, overrides, msg, agent=None, history=None):
                 return _use
     except Exception:
         pass
+    # 角色「天赋怎么点」（用户口径 2026-10-04）：同样放最前 —— 「格奈森瑙天赋怎么点」
+    # 这类点名角色的问题必须读底层数据（推荐点法 + 天赋原文），
+    # 否则 agent 模式的 LLM 路由会拿通用规则顶（该舰不在攻略正文里，检索无依据）。
+    try:
+        if not (overrides or {}).get('calc_state'):
+            from core.calc_flow import _handle_talent_ask
+            _tal = _handle_talent_ask(tools, msg)
+            if _tal is not None:
+                return _tal
+    except Exception:
+        pass
     # 争锋竞技场「队伍/阵容推荐」（用户口径 2026-10-03）：同样放在最前 ——
     # RAG 会只捞到「金大船」那几块（正文写的是"金中船/紫中船"，体量词对不上），
     # 这里按场质/体量定向取原文块直出；命中不到就交回原链路。

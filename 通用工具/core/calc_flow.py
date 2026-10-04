@@ -2336,7 +2336,7 @@ def _handle_ship_use(tools, msg: str):
                 _w += ('·' if _w else '') + sec
             if _w and _w not in _src:
                 _src.append(_w)
-        return ('攻略里没有写「%s」的**就业定位**（没有「定位：…」这类描述行），'
+        return ('攻略里没有写「%s」的就业定位（没有「定位：…」这类描述行），'
                 '但它在这些地方被点名过：\n%s\n（出处：%s）\n'
                 '（阿卡莉不替它编定位；想看它自身技能与面板说「查%s」。）'
                 % (name, '\n'.join(_hits), '；'.join(_src) or '攻略相关章节', name))
@@ -2382,6 +2382,107 @@ def _handle_ship_use(tools, msg: str):
     return {'reply': reply, 'tool_outputs': [], 'suggestions': [], 'fill_form': [],
             'encounter_form': [], 'guide_files': [], 'guide_lib': '',
             'from_kb': True, 'ok': True}
+
+
+# ======================================================================
+# 角色「天赋怎么点」（用户口径 2026-10-04）
+# 问题：问「格奈森瑙天赋怎么点」答成了**通用规则**（增伤优先 / 不点对空 / 誓约八槽…）——
+# 该舰不在攻略正文里（攻略 md 全库无「格奈森瑙」），检索没有依据，模型只能拿通识顶。
+# 用户口径：**点名角色**的天赋 / 面板类问题必须读**底层数据**并输出对应内容，不给通用套路。
+# 做法（确定性、零 LLM）：
+#   ① 推荐点法取底层 talent_pvp 表（202 舰中 187 舰有推荐；键可能用改造名/别名，多重回退）；
+#   ② 该舰天赋原文（四行二列的名字与效果）取 raw_data，**复用「查角色」同一段格式**，
+#      保证与「查X」看到的内容完全一致；
+#   ③ 推荐表里没有它 → 如实说明 + 列出四行供自选（绝不编点法）。
+# ======================================================================
+_TALENT_WORD = '天赋'
+# 「问点法」的问法词（不含"有哪些"——那种交回查角色链路，输出同一段原文）
+_TALENT_ASK_RE = re.compile(
+    r'怎么点|点法|加点|怎么加|该怎么|如何点|怎么选|怎么带|带什么|推荐|默认|优先')
+
+
+def _talent_block_of(app, name: str, raw) -> str:
+    """复用「查角色」的天赋段（四行二列的名字与效果），与查询输出保持一致。"""
+    try:
+        out = app.format_raw_ship_summary(name, raw) or ''
+    except Exception:
+        return ''
+    i = out.find('天赋 ---')
+    if i < 0:
+        return ''
+    j = out.find('技能描述')
+    if j < 0 or j < i:
+        j = out.find('---------------------', i)
+    return out[i:j].rstrip() if j > i else out[i:].rstrip()
+
+
+def _handle_talent_ask(tools, msg: str):
+    """「X 天赋怎么点」→ 直读底层：推荐点法（有则给）+ 天赋原文；非该类问法返回 None。"""
+    m = (msg or '').strip()
+    if not m or _TALENT_WORD not in m or not _TALENT_ASK_RE.search(m):
+        return None
+    app = None
+    for _t in (tools or []):
+        _cfg = getattr(_t, 'cfg', None)
+        if isinstance(_cfg, dict) and _cfg.get('app') is not None:
+            app = _cfg['app']
+            break
+    if app is None or not getattr(app, 'storage', None):
+        return None
+    # 舰名：昵称/谐音先归一，再取最长的正规名（与「就业」同一套解析，天然排除 BOSS）
+    try:
+        from core.entity_norm import standardize
+        _std = str(standardize(m) or m)
+    except Exception:
+        _std = m
+    name = ''
+    for _n in (app.storage or {}):
+        _n = str(_n)
+        if _n and _n in _std and len(_n) > len(name):
+            name = _n
+    if not name:
+        return None
+    try:
+        _canon, raw = app.get_raw_ship(name)
+    except Exception:
+        return None
+    if raw is None:
+        return None
+    # ① 推荐点法：底层 talent_pvp 表
+    code = ''
+    try:
+        from tools.talent import load_talent_pvp
+        pvp = load_talent_pvp() or {}
+        for _k in (name, str(_canon or ''), name.replace('·', ''),
+                   name.replace('·改', '改'), name.replace('·改', '')):
+            if _k and pvp.get(_k):
+                code = str(pvp[_k]).strip()
+                break
+    except Exception:
+        code = ''
+    # ② 天赋原文（与「查X」一致）
+    block = _talent_block_of(app, name, raw)
+    _empty = {'tool_outputs': [], 'suggestions': [], 'fill_form': [], 'encounter_form': [],
+              'guide_files': [], 'guide_lib': '', 'from_kb': True, 'ok': True}
+    if not block:
+        _r = dict(_empty)
+        _r['reply'] = '底层数据里没有「%s」的天赋信息（信息不全），这个阿卡莉不能替它编点法。' % name
+        return _r
+    if code:
+        _rows = '、'.join(
+            '第%d行%s' % (i + 1, 'A' if c == '1' else ('B' if c == '2' else '?'))
+            for i, c in enumerate(code))
+        reply = ('「%s」天赋点法：底层推荐表默认 %s（%s）。\n\n%s\n\n'
+                 '（来源：底层数据 raw_data 天赋表 ＋ talent_pvp 推荐表）'
+                 % (name, code, _rows, block))
+    else:
+        reply = ('「%s」的底层推荐表里没有收录它的点法（全 202 舰中 187 舰有推荐），'
+                 '下面是它自己的天赋原文（四行二列），指挥官按需自选即可：\n\n%s\n\n'
+                 '（来源：底层数据 raw_data 天赋表。要按某个编码计算，直接把 4 位编码给我，'
+                 '如 1212；也可先「查%s」看完整面板与技能。）' % (name, block, name))
+    _r = dict(_empty)
+    _r['reply'] = reply
+    return _r
 
 
 # ======================================================================
@@ -4714,6 +4815,11 @@ def route_work(tools, overrides, msg: str, agent=None, allow_intent_llm=True, up
         _use_r = _handle_ship_use(tools, msg)
         if _use_r is not None:
             return _use_r
+        # 0b. 角色「天赋怎么点」（用户口径 2026-10-04）：点名角色 → 直读底层（推荐点法 +
+        #     天赋原文），不给通用套路；放这里是为了抢在攻略 RAG 之前。
+        _tal_r = _handle_talent_ask(tools, msg)
+        if _tal_r is not None:
+            return _tal_r
 
     # 0. 计算流程排他（工具流程中禁止切闲聊/其他工具）：
     # calc_state 激活时（计算进行中），输入默认进 handle_calc 计算流程，
