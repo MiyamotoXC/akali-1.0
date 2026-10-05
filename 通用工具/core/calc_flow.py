@@ -2398,7 +2398,9 @@ def _handle_ship_use(tools, msg: str):
 _TALENT_WORD = '天赋'
 # 「问点法」的问法词（不含"有哪些"——那种交回查角色链路，输出同一段原文）
 _TALENT_ASK_RE = re.compile(
-    r'怎么点|点法|加点|怎么加|该怎么|如何点|怎么选|怎么带|带什么|推荐|默认|优先')
+    r'怎么点|点什么|点啥|点哪个|点那个|点法|加点|怎么加|该怎么|如何点|怎么选|怎么带|带什么|'
+    r'推荐|默认|优先|pve|pvp',
+    re.I)   # pve/pvp 见用户口径 2026-10-05：「丹阳PVE天赋」这类正确提问要能检索到推荐点法
 
 
 def _talent_block_of(app, name: str, raw) -> str:
@@ -2416,36 +2418,66 @@ def _talent_block_of(app, name: str, raw) -> str:
     return out[i:j].rstrip() if j > i else out[i:].rstrip()
 
 
-# 底层天赋段的原始排版是「第N行: A(效果) | B(效果)」，一屏挤两列、行又长（用户口径 2026-10-05：
-# "排版不好看、换行太少"）。这里重排成「行头 + 每行一个天赋」，并丢掉 `天赋 ---` 与分隔虚线。
+# 底层天赋段有**两种**原始排版，解析必须都吃（用户口径 2026-10-05）：
+#   ① 「第N行: 甲(效果) | 乙(效果)」           —— 一屏挤两列、行又长
+#   ② 「[1A] 甲」换行「效果」…（含 `--- 丹阳 - 天赋 ---` 表头与结尾虚线）
+# 统一重排成「行头 + 每行一个天赋」，并丢掉 `天赋 ---` / `-----` 等装饰线
+# （原先装饰线会留在末尾，看着像多出来的括号/乱码）。
 _TALENT_ROW_RE = re.compile(r'^第\s*(\d)\s*行\s*[:：]\s*(.*)$')
+_TALENT_TAG_RE = re.compile(r'^\[\s*(\d)\s*([ABab])\s*\]\s*(.*)$')
 
 
 def _format_talent_block(block: str, code: str = '') -> str:
     """把底层天赋段重排成好读的多行文本（纯展示，不改任何数值）。
 
     · 行头带点法编码字母（有推荐表时）：`第1行（A）`
-    · 每个天赋单独一行，前缀 `· `
-    · `天赋 ---`、`-----` 等装饰线一律去掉（原先会留在末尾，看着像多出来的括号/乱码）
+    · 每个天赋单独一行，前缀 `· `；格式②把「名字 + 效果」合成与格式①一致的 `名字(效果)`
     """
-    rows = []
+    rows = {}            # 行号 -> [文本, …]（保序）
+    pending = None       # 格式②：[行号, 名字, 效果累积]
+
+    def _flush():
+        nonlocal pending
+        if pending and (pending[1] or pending[2].strip()):
+            name, eff = pending[1].strip(), pending[2].strip()
+            rows.setdefault(pending[0], []).append(('%s(%s)' % (name, eff)) if (name and eff) else (name or eff))
+        pending = None
+
     for raw_line in (block or '').splitlines():
         ln = raw_line.strip()
-        if not ln or ln.startswith('天赋'):
+        if not ln or set(ln) <= set('-—=_· '):        # 空行 / 纯装饰线（------）
             continue
-        if set(ln) <= set('-—=_· '):          # 纯装饰线
+        m1 = _TALENT_ROW_RE.match(ln)
+        if m1:
+            _flush()
+            idx, body = int(m1.group(1)), m1.group(2)
+            for c in (x.strip() for x in re.split(r'\s*[|｜]\s*', body) if x.strip()):
+                rows.setdefault(idx, []).append(c)
             continue
-        m = _TALENT_ROW_RE.match(ln)
-        if not m:
+        m2 = _TALENT_TAG_RE.match(ln)
+        if m2:
+            _flush()
+            pending = [int(m2.group(1)), (m2.group(3) or '').strip(), '']
             continue
-        idx, body = int(m.group(1)), m.group(2)
-        cands = [c.strip() for c in re.split(r'\s*[|｜]\s*', body) if c.strip()]
-        pick = code[idx - 1] if 0 <= idx - 1 < len(code) else ''
+        if '天赋' in ln:                              # `天赋 ---` / `--- 丹阳 - 天赋 ---`
+            _flush()
+            continue
+        if pending is not None:                       # 格式②：名字或效果续行
+            if not pending[1]:
+                pending[1] = ln                       # 名字在下一行（tag 只给了 [NA]）
+            else:
+                pending[2] += ln
+            continue
+    _flush()
+
+    out = []
+    for idx in sorted(rows):
         head = '第%d行' % idx
+        pick = code[idx - 1] if 0 <= idx - 1 < len(code) else ''
         if pick:
             head += '（%s）' % ('A' if pick == '1' else ('B' if pick == '2' else pick))
-        rows.append('\n'.join([head] + ['· %s' % c for c in cands]))
-    return '\n\n'.join(rows) if rows else (block or '').strip()
+        out.append('\n'.join([head] + ['· %s' % t for t in rows[idx]]))
+    return '\n\n'.join(out) if out else (block or '').strip()
 
 
 def _handle_talent_ask(tools, msg: str):

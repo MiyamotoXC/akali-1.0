@@ -122,7 +122,7 @@
    "pvp": false
   },
   "work_none": false,
-  "work_reply": "若出现操作失误（如误用珍贵道具），可联系客服寻求帮助，但回档机会仅限一次",
+  "work_reply": "- 联系客服反馈问题；\n- 加入腾讯频道“拂晓胜利之刻”参与交流。",
   "work_from_kb": true
  },
  {
@@ -164,7 +164,7 @@
    "pvp": false
   },
   "work_none": false,
-  "work_reply": "88礼包（即新手调遣特令）推荐选择：\n- 首选前卫：拂晓数值天花板，可随",
+  "work_reply": "88礼包（即新手调遣特令）推荐选择：\n\n- 首选前卫：拂晓数值天花板，选",
   "work_from_kb": true
  },
  {
@@ -236,7 +236,7 @@
    "pvp": false
   },
   "work_none": false,
-  "work_reply": "「格奈森瑙」天赋点法：底层推荐表默认 1122（第1行A、第2行A、第3",
+  "work_reply": "「格奈森瑙」天赋点法：底层推荐表默认 1122\n\n第1行（A）\n· 节能",
   "work_from_kb": true
  },
  {
@@ -278,8 +278,38 @@
    "pvp": false
   },
   "work_none": false,
-  "work_reply": "甲种 · 航母 · 大船  \n\n配队（原文舰名）：花生、饼拓、墩子、长门",
-  "work_from_kb": false
+  "work_from_kb": false,
+  "_unstable": [
+   "work_reply"
+  ]
+ },
+ {
+  "input": "丹阳天赋怎么点",
+  "norm": "丹阳天赋怎么点",
+  "guard_handled": false,
+  "guard_reply": "",
+  "pregate": {
+   "ship_use": false,
+   "talent": true,
+   "pvp": false
+  },
+  "work_none": false,
+  "work_reply": "「丹阳」天赋点法：底层推荐表默认 1221\n\n第1行（A）\n· 节能科技",
+  "work_from_kb": true
+ },
+ {
+  "input": "丹阳PVE天赋",
+  "norm": "丹阳PVE天赋",
+  "guard_handled": false,
+  "guard_reply": "",
+  "pregate": {
+   "ship_use": false,
+   "talent": true,
+   "pvp": false
+  },
+  "work_none": false,
+  "work_reply": "「丹阳」天赋点法：底层推荐表默认 1221\n\n第1行（A）\n· 节能科技",
+  "work_from_kb": true
  },
  {
   "input": "胡德打前卫算伤害",
@@ -306,7 +336,7 @@
    "pvp": false
   },
   "work_none": false,
-  "work_reply": "减伤25%的收益高于加伤害25%：减伤25%时实际坦度增幅为0.3125",
+  "work_reply": "减伤25%的收益高于加伤害25%：\n- 减伤25%天赋，实际坦度增幅为0",
   "work_from_kb": true
  },
  {
@@ -418,10 +448,8 @@
    "pvp": false
   },
   "work_none": false,
-  "work_from_kb": false,
-  "_unstable": [
-   "work_reply"
-  ]
+  "work_reply": "《舰灵对比 · 齐柏林伯爵 / 列克星敦》\n\n【齐柏林伯爵】\n前排技能范",
+  "work_from_kb": false
  },
  {
   "input": "胡德改造厉害吗",
@@ -448,7 +476,7 @@
    "pvp": false
   },
   "work_none": false,
-  "work_reply": "- 胡德面板 = 逸仙面板\n- 胡德面板 = 黑暗界面板\n- 图中均为1",
+  "work_reply": "- 胡德面板 = 逸仙面板\n- 胡德面板 = 黑暗界面板\n- 所有对比数",
   "work_from_kb": true
  },
  {
@@ -504,7 +532,7 @@
    "pvp": false
   },
   "work_none": false,
-  "work_reply": "- 优先参与当前打捞活动的困难或地狱难度关卡练级，因活动期间经验大幅提升",
+  "work_reply": "- 优先选择当前打捞活动的困难或地狱难度关卡练级，因活动期间经验大幅提升",
   "work_from_kb": true
  },
  {

@@ -228,11 +228,15 @@ RULES: Tuple[Rule, ...] = (
          samples=(('胡德有什么用', True), ('胡德面板', False)),
          ),
     Rule('judge.talent_ask', 'converge', 'judge', '通用工具/core/calc_flow.py:2400',
-         '_TALENT_ASK_RE（点法词）+ 消息含「天赋」→ 直读底层',
-         'calc_flow.py:2392「推荐点法取底层 talent_pvp（202 舰中 187 舰有推荐）；没有就如实说明不编」',
+         '_TALENT_ASK_RE（点法词 / PVE·PVP）+ 消息含「天赋」→ 直读底层',
+         'calc_flow.py:2392「推荐点法取底层 talent_pvp（202 舰中 187 舰有推荐）；没有就如实说明不编」；'
+         '2026-10-05 用户口径：『丹阳PVE天赋』这类正确提问此前落到 RAG 原文直出（文档自带的 [1A] 排版），'
+         '答不出推荐点法 → 补 pve/pvp、点什么 等问法',
          retire_when='并入 pregate.talent_ask 的退场评审',
-         probe=_c(r'怎么点|点法|加点|怎么加|该怎么|如何点|怎么选|怎么带|带什么|推荐|默认|优先'),
-         samples=(('天赋怎么点', True), ('胡德面板', False)),
+         probe=_c(r'怎么点|点什么|点啥|点哪个|点那个|点法|加点|怎么加|该怎么|如何点|怎么选|怎么带|带什么|'
+                  r'推荐|默认|优先|pve|pvp', re.I),
+         samples=(('天赋怎么点', True), ('丹阳PVE天赋', True), ('丹阳PVP天赋怎么点', True),
+                  ('胡德面板', False)),
          ),
     Rule('judge.calc_theory', 'converge', 'judge', '通用工具/core/calc_flow.py:4924',
          '_calc_theory（理论/比较/抱怨语境）→ 其中的「伤害」不算计算请求',
