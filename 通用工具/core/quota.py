@@ -531,6 +531,30 @@ def entry_calls(key: str) -> dict:
                 if isinstance(v, dict)}
 
 
+def calls_delta_tok(before: dict, after: dict) -> int:
+    """两次 calls 明细快照之差 → 本轮**真实** token 消耗（输入 + 输出）。
+
+    用户口径 2026-10-05：控制台「请求明细 · 本轮token」必须与服务商**实际调用**逐条
+    一致。此前那里用的是 `字数×0.70` 的估算，且只在闲聊分支才赋值 —— 于是攻略/知识库
+    类请求的调用被记成 0、闲聊轮又只是个近似值，与服务商账单对不上。
+    现在改成「记账明细前后做差」，与限额/成本**同一数据源**（core.llm_accounting 在
+    openai SDK 层读响应 usage，覆盖工具循环每一轮与全部工作路由调用）；
+    真没走 LLM 的请求（查询/计算/表单）自然差出 0。
+    """
+    total = 0
+    for kind, cur in (after or {}).items():
+        if not isinstance(cur, dict):
+            continue
+        old = (before or {}).get(kind) or {}
+        tin = int(cur.get('tok_in') or 0) - int(old.get('tok_in') or 0)
+        tout = int(cur.get('tok_out') or 0) - int(old.get('tok_out') or 0)
+        if tin > 0:
+            total += tin
+        if tout > 0:
+            total += tout
+    return total
+
+
 def replay_llm_calls(key: str, calls: dict) -> int:
     """按 calls 明细**复现**一轮真实调用记账（命中缓存、未真调 LLM 时用）。
 

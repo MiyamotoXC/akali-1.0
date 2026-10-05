@@ -138,7 +138,7 @@ ADMIN_HTML = r"""<!DOCTYPE html>
     }
     var rc = (d.recent || []).filter(function (e) { return e.key === r.key; });
     if (rc.length) {
-      h += '<table><tr><th>日期</th><th>时间</th><th class="num">本轮token(估算)</th></tr>';
+      h += '<table><tr><th>日期</th><th>时间</th><th class="num">本轮token(真实)</th></tr>';
       rc.slice().reverse().forEach(function (e) {
         h += '<tr><td class="mono">' + (e.date || '') + '</td><td class="mono">' + e.ts + '</td>'
           + '<td class="num">' + fmt(e.tok) + '</td></tr>';
@@ -184,10 +184,10 @@ ADMIN_HTML = r"""<!DOCTYPE html>
     h += '</table><div class="empty">当日（' + d.day + '）合计 ' + fmt(d.day_tok) + ' token；'
        + '本周期（' + (d.period || '') + ' 起，周四→下周四）合计 ' + fmt(d.total_tok) + ' token，参考成本 ￥'
        + (d.total_cost || 0).toFixed(4) + '　（维度：' + d.dim + '，存储：' + d.backend + '）</div>';
-    // 请求明细：全部请求的流水（本轮token=0 表示该请求未走 LLM，如攻略/计算）
+    // 请求明细：全部请求的流水（本轮token = 该请求的 **API 真实用量**；0 = 该请求未走 LLM）
     var rc = d.recent || [];
     h += '<div style="margin-top:12px;font-size:12px;color:var(--soft);font-weight:600">'
-       + '请求明细（最近 ' + rc.length + ' 条 · 按天持久化，可回看历史日）</div>';
+       + '请求明细（最近 ' + rc.length + ' 条 · 按天持久化，可回看历史日 · 本轮token 为 API 真实用量，0 = 未走 LLM）</div>';
     if (!rc.length) {
       h += '<div class="empty">暂无请求记录。</div>';
     } else {

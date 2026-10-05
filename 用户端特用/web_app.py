@@ -2532,20 +2532,33 @@ def chat(req: ChatRequest, request: Request):
         _qkey = _q_ident(request)
     except Exception:
         _qkey = str(getattr(request.state, 'uid', '') or '')
+    # 请求级用量明细（开发者侧「请求明细 · 本轮token」）：**本轮真实消耗** ——
+    # 在记账明细（core.quota.entry_calls，由 openai SDK 层读响应 usage 累计）上前后做差。
+    # 用户口径 2026-10-05：此前这里记的是 _chat_impl 里 `字数×0.70` 的**估算**，且只有
+    # 闲聊分支才赋值 → 攻略/知识库轮的调用被记成 0、闲聊轮又只是近似值，与服务商账单对不上。
+    from core import quota as _quota
+    try:
+        _calls_before = _quota.entry_calls(_qkey)
+    except Exception:
+        _calls_before = {}
     _qkey_tok = _req_ctx.set_quota_key(_qkey)
     try:
         resp = _chat_impl(req)
     finally:
         _req_ctx.reset_quota_key(_qkey_tok)
-    # 请求级用量明细（开发者侧「流量/请求明细」数据源）：走 LLM 的请求由 _chat_impl
-    # 把本轮 token 以 _tok 附在响应里；未走 LLM（工具类/超限提示）按 0 记。
-    # 命中缓存标记（core.kb_cache）只在内部排障用，同样不下发给前端。
+    # 命中缓存标记（core.kb_cache）只在内部排障用，不下发给前端
     resp.pop('_cache', None)
+    resp.pop('_tok', None)          # 旧「估算」字段已废弃：统计改取真实值，这里直接丢弃
     try:
-        from core.quota import log_request as _q_log
-        _q_log(req.uid or '', int(resp.pop('_tok', 0) or 0))
+        _real_tok = _quota.calls_delta_tok(_calls_before, _quota.entry_calls(_qkey))
+    except Exception:
+        _real_tok = 0
+    try:
+        _quota.log_request(_qkey or (req.uid or ''), _real_tok)
     except Exception:
         pass
+    if _real_tok > 0:
+        print('[token·真实] uid=%s 本轮=%s token（与记账/服务商一致）' % (_qkey, _real_tok), flush=True)
     return resp
 
 
@@ -3052,13 +3065,12 @@ def _chat_impl(req: ChatRequest):
         _tok_out = _est_tokens(clean_reply)
         _sk = req.session_id or 'default'
         _session_token_total[_sk] = _session_token_total.get(_sk, 0) + _tok_in + _tok_out
-        print('[token] 会话[%s] 输入≈%s 输出≈%s 本轮≈%s | 会话累计≈%s'
+        print('[token·估算] 会话[%s] 输入≈%s 输出≈%s 本轮≈%s | 会话累计≈%s'
               % (_sk, _tok_in, _tok_out, _tok_in + _tok_out, _session_token_total[_sk]), flush=True)
         return {"reply": clean_reply, "tool_outputs": tool_outputs, "suggestions": suggestions,
                 "fill_form": fill_form, "encounter_form": encounter_form,
                 "guide_files": guide_files, "guide_lib": guide_lib, "ok": True,
                 "expression": expression_url,
-                "_tok": _tok_in + _tok_out,   # 本轮 token 给 chat 出口打点用，响应前会被 pop 掉
                 "sticker": None}
     except Exception as e:
         # 报错轮不消耗闲聊轮次计数（越界/ojbk 后继续对话不受影响）
