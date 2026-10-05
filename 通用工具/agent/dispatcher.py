@@ -183,7 +183,16 @@ def _select_route(msg, sel_tools, history=None):
         catalog.append('%s：%s\n参数Schema=%s' % (
             getattr(tool, 'name', ''), desc,
             json.dumps(params, ensure_ascii=False, separators=(',', ':'))))
-    system = ROUTER_SYSTEM + '\n可用工具参数目录：\n' + '\n'.join(catalog)
+    # 路由先验（用户口径 2026-10-05）：确定性判据命中的"典型问法"作为**参考提示**交给模型，
+    # 模型**可否决**（文案已写明"若与整句语义不符，以你的判断为准"）——即判据从
+    # "决策者"降级为"护栏"。AKALI_ROUTE_PRIOR=0 可一键关闭。
+    _prior = ''
+    try:
+        from . import route_registry as _rr
+        _prior = _rr.prior_hints(msg)
+    except Exception:
+        _prior = ''
+    system = ROUTER_SYSTEM + '\n可用工具参数目录：\n' + '\n'.join(catalog) + _prior
     # 用 qwen_agent 底层 chat 做单次强制 function calling：
     # - 不传 functions（避免进 fncall 模式被后处理剥掉 function_call），
     #   改把 tools+tool_choice 直接塞进 extra_generate_cfg，走原生 tool_calls 流式解析；
@@ -474,6 +483,19 @@ def route_work_agent(tools, overrides, msg, agent=None, history=None):
 
     name = decision.get('name') or 'no_tool'
     intent = decision.get('intent') or ''
+    # 先验 vs 模型选择（用户口径 2026-10-05）：先验命中就记一笔；若模型判成闲聊（no_tool），
+    # 说明"这条判据认为是工作请求、模型认为是聊天"—— 这正是**该不该退场**的证据，
+    # 记进 route_registry.conflicts()，供管理端「路由闸门」视图决策（不改变本次路由结果）。
+    try:
+        from . import route_registry as _rr
+        _priors = _rr.prior_tools(context_msg)
+        for _rid in _priors:
+            _rr.hit(_rid + '@prior')
+        if _priors and name == 'no_tool':
+            for _rid in _priors:
+                _rr.note_conflict(_rid, 'no_tool')
+    except Exception:
+        pass
     # 把 LLM 的意图结论留给 legacy 兼容层：回落时若不再跑意图分类，会让 _li=None、
     # 所有正则分支同时放行，于是「含『伤害』二字」就能把用户拉进伤害计算流程。
     # 记录在此，供 calc_flow 否决这类误判（用户口径 2026-09-24；那边消费后即清除）。

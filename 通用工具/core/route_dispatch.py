@@ -16,6 +16,16 @@ import traceback
 
 
 def route_work_dispatch(tools, overrides, msg, agent=None, history=None):
+    # 闸门命中计数（用户口径 2026-10-05）：三条业务前置谁在真接管、agent/legacy 各占多少，
+    # 都记进 agent.route_registry —— 用来回答"这条前置能不能退场"（长期 0 命中=死规则）。
+    def _hit(rule_id):
+        try:
+            from agent import route_registry as _rr
+            _rr.hit(rule_id)
+            _rr.route_src(rule_id)
+        except Exception:
+            pass
+
     # 舰船「用途 / 就业」问答（用户口径 2026-10-03）：放在**五层分发最前** ——
     # agent 模式下 dispatcher 的 LLM 路由会先接走「X 有什么用」，答成泛泛的攻略片段；
     # 这里确定性拦下（不调 LLM），agent / legacy 两种模式都覆盖。
@@ -24,6 +34,7 @@ def route_work_dispatch(tools, overrides, msg, agent=None, history=None):
             from core.calc_flow import _handle_ship_use
             _use = _handle_ship_use(tools, msg)
             if _use is not None:
+                _hit('pregate.ship_use')
                 return _use
     except Exception:
         pass
@@ -35,6 +46,7 @@ def route_work_dispatch(tools, overrides, msg, agent=None, history=None):
             from core.calc_flow import _handle_talent_ask
             _tal = _handle_talent_ask(tools, msg)
             if _tal is not None:
+                _hit('pregate.talent_ask')
                 return _tal
     except Exception:
         pass
@@ -46,6 +58,7 @@ def route_work_dispatch(tools, overrides, msg, agent=None, history=None):
             from core.calc_flow import _handle_pvp_lineup
             _pvp = _handle_pvp_lineup(tools, msg)
             if _pvp is not None:
+                _hit('pregate.pvp_lineup')
                 return _pvp
     except Exception:
         pass
@@ -55,6 +68,7 @@ def route_work_dispatch(tools, overrides, msg, agent=None, history=None):
             from agent.dispatcher import route_work_agent
             from agent.guard import track_unanswered_result
             result = route_work_agent(tools, overrides, msg, agent=agent, history=history)
+            _hit('route.agent')
             return track_unanswered_result(overrides, msg, result)
         except Exception as exc:
             # 仍允许 legacy 保底，但必须留下真实原因；此前静默吞错会让测试只看到
@@ -65,6 +79,7 @@ def route_work_dispatch(tools, overrides, msg, agent=None, history=None):
     from core.calc_flow import route_work
     result = route_work(tools, overrides, msg, agent=agent,
                         allow_intent_llm=True, update_recent=(mode != 'agent'))
+    _hit('route.legacy')
     try:
         from agent.guard import track_unanswered_result
         return track_unanswered_result(overrides, msg, result)

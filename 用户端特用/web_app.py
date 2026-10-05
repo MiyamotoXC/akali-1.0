@@ -1068,6 +1068,35 @@ async def admin_usage(request: Request, day: Optional[str] = None):
             'kb_cache': _kb_cache_stats()}
 
 
+@app.get("/api/admin/routes")
+async def admin_routes(request: Request, kind: Optional[str] = None):
+    """**路由闸门视图**（用户口径 2026-10-05）：让"前置闸门 / 正则判据"可枚举、可回归、可退场。
+
+    背景：判据只增不减、位置依赖（"必须早于 X 门控"）、事故出处只活在注释里 → 没人敢删。
+    本接口把 `agent.route_registry` 的注册表 + 计数 + 先验分歧一起给出：
+
+    - `rules` ：全量注册表（id / 处置 / 位置 / 判据 / **事故出处** / **退场条件** / 回归样例 / 命中数）
+    - `stats` ：命中计数、路线来源占比（agent / legacy / 前置闸）、
+                **先验与模型分歧**、长期 0 命中的死规则候选、先验开关
+    - `problems`：注册表自检结果（位置失效 / 样例不符 / 缺退场条件）
+    - `markdown`：同一份清单的 markdown 表格（便于贴文档 / issue）
+
+    仅开发者侧白名单可调（与 /api/admin/usage 同口径）。
+    """
+    _require_admin(request)
+    from agent import route_registry as _rr
+    _hits = _rr.counts()
+    return {'ok': True,
+            'rules': [{'id': r.id, 'kind': r.kind, 'layer': r.layer, 'where': r.where,
+                       'what': r.what, 'accident': r.accident, 'tool': r.tool,
+                       'retire_when': r.retire_when, 'hits': _hits.get(r.id, 0),
+                       'samples': [{'text': t, 'expect': bool(b)} for t, b in r.samples]}
+                      for r in _rr.RULES if not kind or r.kind == kind],
+            'stats': _rr.stats(),
+            'problems': _rr.selfcheck(),
+            'markdown': _rr.dump_markdown(kind or '')}
+
+
 @app.post("/api/register")
 async def register(request: Request):
     """用户端**首次打开自动注册**（用户口径 2026-09-25）。

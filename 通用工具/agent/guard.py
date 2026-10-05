@@ -19,6 +19,19 @@ from core import boundary as _boundary
 import re
 
 
+def _rr_hit(rule_id: str) -> None:
+    """闸门命中计数（agent.route_registry）—— **只计数，不影响判定**。
+
+    为什么要计数（用户口径 2026-10-05）：闸门只增不减的根因是"没人知道哪条还在用"。
+    计了数就能看到长期 0 命中的死规则，才谈得上退场（见 route_registry.selfcheck/stats）。
+    """
+    try:
+        from agent import route_registry as _rr
+        _rr.hit(rule_id)
+    except Exception:
+        pass
+
+
 # 统一「资料不足 / 查不到」话术（用户口径 2026-09-22）：全项目未命中一律用这一句，
 # 不再为单个分支写专属话术。文案与 core/calc_flow.py::_query_text 的兜底完全一致
 # （两处同文，改文案要一起动）。
@@ -101,13 +114,17 @@ def guarded_backend_reason(msg, history=None):
     """供完整分发层和路由测试共用的确定性拦截判据。"""
     m = (msg or '').strip()
     if _ANSWER_CHALLENGE_RE.search(m):
+        _rr_hit('guard.challenge')
         return 'answer_challenge'
     if _UNSUPPORTED_ARCHIVE_RE.search(m):
+        _rr_hit('guard.archive')
         return 'unsupported_archive'
     if (_ARCHIVE_ACTION_RE.match(m)
             and _UNSUPPORTED_ARCHIVE_RE.search(_last_history(history, 'assistant'))):
+        _rr_hit('guard.archive')
         return 'unsupported_archive'
     if _NO_KB_FUTURE_RE.search(m) or _NO_KB_CREATIVE_RE.search(m):
+        _rr_hit('guard.nokb_basis')
         return 'no_kb_basis'
     return ''
 
@@ -160,11 +177,13 @@ def guard(tools, overrides, msg, agent=None, history=None, context_msg=None):
     # 1) 其他游戏（同类于违规，属守卫范围）：回复与违规完全一致（ILLEGAL_REPLY + 嫌弃）。
     #    仍保留独立判定点（不并入 _BANNED_RE），便于将来单独调话术/表情。
     if _boundary.is_other_game(cm):
+        _rr_hit('guard.other_game')
         return True, _work_dict(_boundary.other_game_reply(), no_history=True,
                                 expression_hint=_boundary.ILLEGAL_EXPR)
 
     # 2) 违规/禁区：固定话术，且不写入会话历史（no_history）
     if _BANNED_RE.search(m) or _boundary.is_banned(cm):
+        _rr_hit('guard.banned')
         return True, _work_dict(_boundary.ILLEGAL_REPLY, no_history=True,
                                 expression_hint=_boundary.ILLEGAL_EXPR)
 
@@ -173,6 +192,7 @@ def guard(tools, overrides, msg, agent=None, history=None, context_msg=None):
     #     话术与神态按主体分流：冲着阿卡莉本人 → 无语敷衍（淡淡敷衍过去）；
     #     说的是某个角色 → 厌恶嫌弃。
     if _boundary.is_flirt_overstep(cm):
+        _rr_hit('guard.flirt_overstep')
         return True, _work_dict(_boundary.overstep_reply(cm),
                                 expression_hint=_boundary.overstep_expression(cm))
 
@@ -180,15 +200,18 @@ def guard(tools, overrides, msg, agent=None, history=None, context_msg=None):
     #     否则会被 guide_rag 的向量检索抢走，返回知识库里「联系客服 / 加入腾讯频道」
     #     那类与本应用无关的原文（from_kb 直出，阿卡莉本人没机会回答）。
     if _FEEDBACK_RE.search(cm):
+        _rr_hit('guard.feedback')
         return True, _work_dict(_FEEDBACK_REPLY, expression_hint='微笑关心')
 
     # 3c) 用户问「知识库/数据的截止日期、更新到什么时候、哪年的数据」（用户口径 2026-10-03）：
     #     同样在路由前确定性作答，避免被向量检索抢答；口径只有一句「明天！」。
     if _KB_CUTOFF_RE.search(cm):
+        _rr_hit('guard.kb_cutoff')
         return True, _work_dict(_KB_CUTOFF_REPLY, expression_hint='微笑关心')
 
     unanswered = _guard_unanswered_topic(overrides, m)
     if unanswered is not None:
+        _rr_hit('guard.unanswered_topic')
         return True, unanswered
 
     # 2) 不存在的“RA-01 档案”曾由自由生成链路臆造。相关追问和“调取”动作都在
@@ -228,6 +251,7 @@ def guard(tools, overrides, msg, agent=None, history=None, context_msg=None):
     # 4) 状态机续接（用户口径 2026-09-28 的"明确工具流程"豁免）：整段交回 legacy
     #    （确定性、结构化解参），不跑 LLM 意图分类——此时输入是向导的一步参数，不是新意图。
     if overrides.get('calc_state') or overrides.get('favor_pending'):
+        _rr_hit('keep.calc_state')
         return True, _legacy_route_work(tools, overrides, m, agent=agent, allow_intent_llm=False)
 
     return False, None

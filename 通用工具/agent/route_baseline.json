@@ -1,0 +1,548 @@
+[
+ {
+  "input": "原神怎么玩",
+  "guard_handled": true,
+  "guard_reply": "与阿卡莉无关，不回答。",
+  "pregate": {
+   "ship_use": false,
+   "talent": false,
+   "pvp": false
+  },
+  "work_none": false,
+  "work_reply": "与阿卡莉无关，不回答。",
+  "work_from_kb": false
+ },
+ {
+  "input": "元神怎么玩",
+  "guard_handled": true,
+  "guard_reply": "与阿卡莉无关，不回答。",
+  "pregate": {
+   "ship_use": false,
+   "talent": false,
+   "pvp": false
+  },
+  "work_none": false,
+  "work_reply": "与阿卡莉无关，不回答。",
+  "work_from_kb": false
+ },
+ {
+  "input": "帮我写一段同人故事",
+  "guard_handled": true,
+  "guard_reply": "我暂时没查到相关的信息，指挥官。",
+  "pregate": {
+   "ship_use": false,
+   "talent": false,
+   "pvp": false
+  },
+  "work_none": true,
+  "work_reply": "",
+  "work_from_kb": false
+ },
+ {
+  "input": "下期会不会出新舰灵",
+  "guard_handled": true,
+  "guard_reply": "我暂时没查到相关的信息，指挥官。",
+  "pregate": {
+   "ship_use": false,
+   "talent": false,
+   "pvp": false
+  },
+  "work_none": true,
+  "work_reply": "",
+  "work_from_kb": false
+ },
+ {
+  "input": "调取RA-01档案",
+  "guard_handled": true,
+  "guard_reply": "我暂时没查到相关的信息，指挥官。",
+  "pregate": {
+   "ship_use": false,
+   "talent": false,
+   "pvp": false
+  },
+  "work_none": true,
+  "work_reply": "",
+  "work_from_kb": false
+ },
+ {
+  "input": "你这个是编的吧",
+  "guard_handled": true,
+  "guard_reply": "你质疑得对。上一条没有通过角色数据或知识库验证，我撤回；目前没有可靠内容",
+  "pregate": {
+   "ship_use": false,
+   "talent": false,
+   "pvp": false
+  },
+  "work_none": true,
+  "work_reply": "",
+  "work_from_kb": false
+ },
+ {
+  "input": "知识库截止到什么时候",
+  "guard_handled": true,
+  "guard_reply": "明天！",
+  "pregate": {
+   "ship_use": false,
+   "talent": false,
+   "pvp": false
+  },
+  "work_none": false,
+  "work_reply": "关于「拂晓」（分类：游戏概述）：\n\n游戏简介\n《拂晓》是一款舰灵题材的二",
+  "work_from_kb": false
+ },
+ {
+  "input": "怎么反馈",
+  "guard_handled": true,
+  "guard_reply": "觉得哪条回答不够好，长按那条回复、点末尾那个 💡 就行，会把你刚才的提问",
+  "pregate": {
+   "ship_use": false,
+   "talent": false,
+   "pvp": false
+  },
+  "work_none": false,
+  "work_reply": "- 加入腾讯频道“拂晓胜利之刻”，进行攻略分享、角色讨论与活动交流。\n-",
+  "work_from_kb": true
+ },
+ {
+  "input": "结束本轮",
+  "guard_handled": false,
+  "guard_reply": "",
+  "pregate": {
+   "ship_use": false,
+   "talent": false,
+   "pvp": false
+  },
+  "work_none": true,
+  "work_reply": "",
+  "work_from_kb": false
+ },
+ {
+  "input": "再见",
+  "guard_handled": false,
+  "guard_reply": "",
+  "pregate": {
+   "ship_use": false,
+   "talent": false,
+   "pvp": false
+  },
+  "work_none": true,
+  "work_reply": "",
+  "work_from_kb": false
+ },
+ {
+  "input": "88礼包选谁",
+  "guard_handled": false,
+  "guard_reply": "",
+  "pregate": {
+   "ship_use": false,
+   "talent": false,
+   "pvp": false
+  },
+  "work_none": false,
+  "work_reply": "88礼包（即“88自选”）推荐选择：\n\n- 首选前卫：拂晓数值天花板，选",
+  "work_from_kb": true
+ },
+ {
+  "input": "计算工具",
+  "guard_handled": false,
+  "guard_reply": "",
+  "pregate": {
+   "ship_use": false,
+   "talent": false,
+   "pvp": false
+  },
+  "work_none": false,
+  "work_reply": "指挥官，选择要用的计算工具：",
+  "work_from_kb": false
+ },
+ {
+  "input": "活动",
+  "guard_handled": false,
+  "guard_reply": "",
+  "pregate": {
+   "ship_use": false,
+   "talent": false,
+   "pvp": false
+  },
+  "work_none": false,
+  "work_reply": "关于「活动」（分类：活动玩法）：\n\n活动玩法：在路线复杂的海域刷图，掉落",
+  "work_from_kb": false
+ },
+ {
+  "input": "胡德有什么用",
+  "guard_handled": false,
+  "guard_reply": "",
+  "pregate": {
+   "ship_use": true,
+   "talent": false,
+   "pvp": false
+  },
+  "work_none": false,
+  "work_reply": "「胡德·改」在攻略里的就业：\n· 大范围AOE：逸仙、前卫、胡德　（《无",
+  "work_from_kb": true
+ },
+ {
+  "input": "女灶神值得练吗",
+  "guard_handled": false,
+  "guard_reply": "",
+  "pregate": {
+   "ship_use": false,
+   "talent": false,
+   "pvp": false
+  },
+  "work_none": false,
+  "work_reply": "《舰灵评估 · 女灶神》\n\n【女灶神】\n女灶神是88/168氪金限定SS",
+  "work_from_kb": false
+ },
+ {
+  "input": "格奈森瑙天赋怎么点",
+  "guard_handled": false,
+  "guard_reply": "",
+  "pregate": {
+   "ship_use": false,
+   "talent": true,
+   "pvp": false
+  },
+  "work_none": false,
+  "work_reply": "「格奈森瑙」天赋点法：底层推荐表默认 1122（第1行A、第2行A、第3",
+  "work_from_kb": true
+ },
+ {
+  "input": "竞技场中船队伍推荐",
+  "guard_handled": false,
+  "guard_reply": "",
+  "pregate": {
+   "ship_use": false,
+   "talent": false,
+   "pvp": true
+  },
+  "work_none": false,
+  "work_reply": "以下是争锋竞技场参考阵容的角色统计（来源：《争锋竞技场简易百科·参考阵容",
+  "work_from_kb": false
+ },
+ {
+  "input": "胡德打前卫算伤害",
+  "guard_handled": false,
+  "guard_reply": "",
+  "pregate": {
+   "ship_use": false,
+   "talent": false,
+   "pvp": false
+  },
+  "work_none": false,
+  "work_reply": "收到。请输入攻击方 buff/天赋（不填则用默认）：\n\n--- 胡德 -",
+  "work_from_kb": false
+ },
+ {
+  "input": "减伤25%和加伤害25%哪个收益高",
+  "guard_handled": false,
+  "guard_reply": "",
+  "pregate": {
+   "ship_use": false,
+   "talent": false,
+   "pvp": false
+  },
+  "work_none": false,
+  "work_reply": "减伤25%的收益高于加伤害25%：\n- 减伤25%天赋，实际坦度增幅为0",
+  "work_from_kb": true
+ },
+ {
+  "input": "算了我信你吧",
+  "guard_handled": false,
+  "guard_reply": "",
+  "pregate": {
+   "ship_use": false,
+   "talent": false,
+   "pvp": false
+  },
+  "work_none": true,
+  "work_reply": "",
+  "work_from_kb": false
+ },
+ {
+  "input": "算经验值",
+  "guard_handled": false,
+  "guard_reply": "",
+  "pregate": {
+   "ship_use": false,
+   "talent": false,
+   "pvp": false
+  },
+  "work_none": false,
+  "work_reply": "指挥官，填当前等级与经验，我来算剩余经验。",
+  "work_from_kb": false
+ },
+ {
+  "input": "索敌计算 1000",
+  "guard_handled": false,
+  "guard_reply": "",
+  "pregate": {
+   "ship_use": false,
+   "talent": false,
+   "pvp": false
+  },
+  "work_none": false,
+  "work_reply": "《索敌线计算》\n基准索敌（我方）：1000\n\n· 我方进攻 / 敌方防守",
+  "work_from_kb": false
+ },
+ {
+  "input": "好感度计算",
+  "guard_handled": false,
+  "guard_reply": "",
+  "pregate": {
+   "ship_use": false,
+   "talent": false,
+   "pvp": false
+  },
+  "work_none": false,
+  "work_reply": "请填写当前好感度级别（进度不填按 0% 算）——已为你打开好感度计算器。",
+  "work_from_kb": false
+ },
+ {
+  "input": "查胡德",
+  "guard_handled": false,
+  "guard_reply": "",
+  "pregate": {
+   "ship_use": false,
+   "talent": false,
+   "pvp": false
+  },
+  "work_none": false,
+  "work_reply": "《胡德》的资料已展开，在面板里查看即可。",
+  "work_from_kb": false
+ },
+ {
+  "input": "女灶神很强",
+  "guard_handled": false,
+  "guard_reply": "",
+  "pregate": {
+   "ship_use": false,
+   "talent": false,
+   "pvp": false
+  },
+  "work_none": false,
+  "work_reply": "《小技巧》萌新入门\n① 女灶神获取方式\n　　女灶神的获取方法：88/16",
+  "work_from_kb": false
+ },
+ {
+  "input": "哪些舰灵有大型减伤天赋",
+  "guard_handled": false,
+  "guard_reply": "",
+  "pregate": {
+   "ship_use": false,
+   "talent": false,
+   "pvp": false
+  },
+  "work_none": false,
+  "work_reply": "《舰灵技能性质 · 减伤 · 大小 大型》\n共 28 名具备「减伤」：\n",
+  "work_from_kb": false
+ },
+ {
+  "input": "对比780和太太",
+  "guard_handled": false,
+  "guard_reply": "",
+  "pregate": {
+   "ship_use": false,
+   "talent": false,
+   "pvp": false
+  },
+  "work_none": false,
+  "work_reply": "《舰灵对比 · 齐柏林伯爵 / 列克星敦》\n\n【齐柏林伯爵】\n前排技能范",
+  "work_from_kb": false
+ },
+ {
+  "input": "胡德改造厉害吗",
+  "guard_handled": false,
+  "guard_reply": "",
+  "pregate": {
+   "ship_use": false,
+   "talent": false,
+   "pvp": false
+  },
+  "work_none": false,
+  "work_reply": "关于「改造」（分类：舰灵改造）：\n\n拂晓舰灵改造优先级详解（攻略版本2.",
+  "work_from_kb": false
+ },
+ {
+  "input": "查胡德面板",
+  "guard_handled": false,
+  "guard_reply": "",
+  "pregate": {
+   "ship_use": false,
+   "talent": false,
+   "pvp": false
+  },
+  "work_none": false,
+  "work_reply": "- 胡德面板 = 逸仙面板\n- 胡德面板 = 黑暗界面板\n- 所有数据均",
+  "work_from_kb": true
+ },
+ {
+  "input": "有哪些驱逐",
+  "guard_handled": false,
+  "guard_reply": "",
+  "pregate": {
+   "ship_use": false,
+   "talent": false,
+   "pvp": false
+  },
+  "work_none": false,
+  "work_reply": "《舰灵筛选 · 舰种 驱逐》\n共 54 名：\n1. Z1（奥鲁加 · 驱",
+  "work_from_kb": false
+ },
+ {
+  "input": "他们的必杀技CD是多少",
+  "guard_handled": false,
+  "guard_reply": "",
+  "pregate": {
+   "ship_use": false,
+   "talent": false,
+   "pvp": false
+  },
+  "work_none": false,
+  "work_reply": "现有信息无法确认任何舰灵的必杀技CD数值。",
+  "work_from_kb": true
+ },
+ {
+  "input": "最近舰队油耗很大",
+  "guard_handled": false,
+  "guard_reply": "",
+  "pregate": {
+   "ship_use": false,
+   "talent": false,
+   "pvp": false
+  },
+  "work_none": false,
+  "work_reply": "【油获取方式】\n3.如何获取更多油\n除了省油，开源也很必要。\n这里主要介",
+  "work_from_kb": false
+ },
+ {
+  "input": "怎么练级",
+  "guard_handled": false,
+  "guard_reply": "",
+  "pregate": {
+   "ship_use": false,
+   "talent": false,
+   "pvp": false
+  },
+  "work_none": false,
+  "work_reply": "- 优先选择当前打捞活动的困难或地狱难度关卡练级，因活动期间经验大幅提升",
+  "work_from_kb": true
+ },
+ {
+  "input": "装备速查",
+  "guard_handled": false,
+  "guard_reply": "",
+  "pregate": {
+   "ship_use": false,
+   "talent": false,
+   "pvp": false
+  },
+  "work_none": false,
+  "work_reply": "已为你定位《装备速查表》",
+  "work_from_kb": false
+ },
+ {
+  "input": "当期活动怎么打",
+  "guard_handled": false,
+  "guard_reply": "",
+  "pregate": {
+   "ship_use": false,
+   "talent": false,
+   "pvp": false
+  },
+  "work_none": false,
+  "work_reply": "关注拂晓qq频道凤栖攻略组，会有详细攻略。",
+  "work_from_kb": false
+ },
+ {
+  "input": "剧情榜",
+  "guard_handled": false,
+  "guard_reply": "",
+  "pregate": {
+   "ship_use": false,
+   "talent": false,
+   "pvp": false
+  },
+  "work_none": false,
+  "work_reply": "剧情相关的问题，先看【剧情榜】：按好感剧情质量分级（T0 推荐 ~ T4",
+  "work_from_kb": false
+ },
+ {
+  "input": "主线剧情讲了什么",
+  "guard_handled": false,
+  "guard_reply": "",
+  "pregate": {
+   "ship_use": false,
+   "talent": false,
+   "pvp": false
+  },
+  "work_none": false,
+  "work_reply": "主线与活动剧情，建议指挥官亲自走一遍，我就不剧透了。\n如果想挑一位姑娘培",
+  "work_from_kb": false
+ },
+ {
+  "input": "活动剧情什么时候结束",
+  "guard_handled": false,
+  "guard_reply": "",
+  "pregate": {
+   "ship_use": false,
+   "talent": false,
+   "pvp": false
+  },
+  "work_none": false,
+  "work_reply": "<<SALVAGE_HL>>【博览会的奇妙相遇】\n  类型：限时活动 |",
+  "work_from_kb": false
+ },
+ {
+  "input": "经验计算 等级：45 当前经验：3200 出战经验：120",
+  "guard_handled": false,
+  "guard_reply": "",
+  "pregate": {
+   "ship_use": false,
+   "talent": false,
+   "pvp": false
+  },
+  "work_none": false,
+  "work_reply": "《经验值计算》\n当前等级：Lv.45 ｜ 本级已累积 3,200 / 9",
+  "work_from_kb": false
+ },
+ {
+  "input": "遭遇战模拟 boss：嘉波 白天：60 前排：A B 后排：D E",
+  "guard_handled": false,
+  "guard_reply": "",
+  "pregate": {
+   "ship_use": false,
+   "talent": false,
+   "pvp": false
+  },
+  "work_none": false,
+  "work_reply": "指挥官，有 2 项没能识别出来，已帮你保留能识别的内容，请只修改标红的格",
+  "work_from_kb": false
+ },
+ {
+  "input": "今天心情不错",
+  "guard_handled": false,
+  "guard_reply": "",
+  "pregate": {
+   "ship_use": false,
+   "talent": false,
+   "pvp": false
+  },
+  "work_none": true,
+  "work_reply": "",
+  "work_from_kb": false
+ },
+ {
+  "input": "谢谢你",
+  "guard_handled": false,
+  "guard_reply": "",
+  "pregate": {
+   "ship_use": false,
+   "talent": false,
+   "pvp": false
+  },
+  "work_none": true,
+  "work_reply": "",
+  "work_from_kb": false
+ }
+]

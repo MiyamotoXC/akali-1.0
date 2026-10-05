@@ -88,6 +88,27 @@ ADMIN_HTML = r"""<!DOCTYPE html>
     <div id="acct"></div>
   </div>
 
+  <div class="card">
+    <h2>路由闸门 <span class="tag">前置闸门 / 正则判据 · 处置与退场条件（用户口径 2026-10-05）</span></h2>
+    <div class="row" style="margin-bottom:10px">
+      <label for="rKind">筛选：</label>
+      <select id="rKind">
+        <option value="">全部</option>
+        <option value="converge">收敛（降级为先验）</option>
+        <option value="retire">退场候选</option>
+        <option value="keep">保留</option>
+        <option value="redline">红线 · 永不退场</option>
+      </select>
+      <span id="routeMeta" class="tag"></span>
+    </div>
+    <div id="routes"></div>
+    <div class="foot" style="margin-top:8px">
+      口径：<b>红线</b>（安全/防幻觉，永不退场）· <b>保留</b>（状态机/按钮语义/槽位解析，不该交 LLM）·
+      <b>收敛</b>（已降级为 LLM <b>先验</b>，模型可否决；看「分歧」计数决定能否退场）·
+      <b>退场候选</b>（职责应由工具 schema 承担）。命中为进程内计数，重启清零。
+    </div>
+  </div>
+
   <div class="foot">
     用户相关的内容只可读（用户侧仅 /api/me）；本页所有数据来自 /api/admin/*，均受白名单限制。
   </div>
@@ -224,6 +245,57 @@ ADMIN_HTML = r"""<!DOCTYPE html>
     $('acct').innerHTML = h;
   }
 
+  // ===== 路由闸门视图（用户口径 2026-10-05）=====
+  // 目的：让「确定性前置 + 正则判据」可枚举 / 可回归 / 可退场 —— 每条都带事故出处与退场条件，
+  // 并显示命中数与「先验 vs 模型」分歧（分歧长期为 0 的收敛类规则就可以删了）。
+  var KIND_LABEL = { redline: '红线·永不退场', keep: '保留', converge: '收敛', retire: '退场候选' };
+
+  function loadRoutes(kind) {
+    if (!token) return;
+    req('/api/admin/routes' + (kind ? ('?kind=' + encodeURIComponent(kind)) : ''))
+      .then(function (r) {
+        if (r.s !== 200) {
+          $('routes').innerHTML = '<div class="empty">读取失败（口令无效或不在管理白名单内）。</div>';
+          return;
+        }
+        renderRoutes(r.d);
+      })
+      .catch(function () { $('routes').innerHTML = '<div class="empty">读取失败。</div>'; });
+  }
+
+  function renderRoutes(d) {
+    var st = d.stats || {}, conf = st.conflicts || {};
+    $('routeMeta').textContent = '共 ' + (st.rules || 0) + ' 条 · 先验注入 '
+      + (st.prior_enabled ? 'on' : 'off') + ' · 命中 ' + fmt(st.hit_total || 0);
+    var h = '<table><tr><th>id</th><th>处置</th><th>位置</th><th>判据</th>'
+          + '<th>事故出处</th><th>退场条件</th><th class="num">命中</th></tr>';
+    (d.rules || []).forEach(function (r) {
+      var c = conf[r.id];
+      h += '<tr><td class="mono">' + r.id + '</td>'
+        + '<td><span class="pill ' + (r.kind === 'redline' ? 'off' : 'on') + '">'
+        + (KIND_LABEL[r.kind] || r.kind) + '</span></td>'
+        + '<td class="mono" style="font-size:12px">' + (r.where || '') + '</td>'
+        + '<td>' + (r.what || '') + '</td>'
+        + '<td style="font-size:12px;color:var(--soft)">' + (r.accident || '') + '</td>'
+        + '<td style="font-size:12px">' + (r.retire_when || '—') + '</td>'
+        + '<td class="num">' + fmt(r.hits || 0)
+        + (c ? (' <span class="pill off" title="先验认为是工作请求、模型判成了闲聊">分歧 ' + c.n + '</span>') : '')
+        + '</td></tr>';
+    });
+    h += '</table>';
+    if ((d.problems || []).length) {
+      h += '<div class="msg">注册表自检未过：' + d.problems.join('；') + '</div>';
+    }
+    var dead = st.dead_candidates || [];
+    if (dead.length) {
+      h += '<div class="empty">长期 0 命中（退场候选）：' + dead.join('、') + '</div>';
+    }
+    var src = st.sources || {};
+    var srcTxt = Object.keys(src).map(function (k) { return k + '=' + fmt(src[k]); }).join('　');
+    if (srcTxt) h += '<div class="empty">路线来源：' + srcTxt + '</div>';
+    $('routes').innerHTML = h;
+  }
+
   // 拉取并渲染某天用量；day 为空则取当天。同时用返回的 dates 填充日期选择器，
   // 便于开发者在历史视图里随时切换查阅（历史用量永不自动清理，用户口径 2026-10-02）。
   function loadUsage(day) {
@@ -255,10 +327,12 @@ ADMIN_HTML = r"""<!DOCTYPE html>
   function load() {
     if (!token) { $('err').textContent = '请先填写口令，或用 /admin?token=<开发者口令> 打开（可存为书签，免每次输入）。'; return; }
     loadUsage(null);
+    loadRoutes($('rKind').value);
     req('/api/admin/accounts').then(function (r) { if (r.s === 200) renderAcct(r.d); });
   }
 
   $('usageDay').addEventListener('change', function () { loadUsage(this.value); });
+  $('rKind').addEventListener('change', function () { loadRoutes(this.value); });
 
   $('save').addEventListener('click', function () {
     token = $('tok').value.trim();
