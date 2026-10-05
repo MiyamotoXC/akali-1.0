@@ -2737,6 +2737,7 @@ function _fbSubmit(msgEl, emoji) {
 // —— 长按 → 表情面板（🍬 / 🐷 好玩；💡 真反馈）——
 let _fbPickerEl = null;
 let _fbLastFire = 0;
+let _fbLastTouch = 0;      // 最近一次触摸时间：只有触摸长按才拦系统菜单（桌面右键放行）
 
 function _fbClosePicker() {
   if (_fbPickerEl && _fbPickerEl.parentNode) _fbPickerEl.parentNode.removeChild(_fbPickerEl);
@@ -2815,6 +2816,7 @@ function _fbOpenPicker(msgEl) {
 
   function onDown(e) {
     if (e.button != null && e.button !== 0) return;   // 仅左键 / 触摸
+    if (e.touches) _fbLastTouch = Date.now();         // 记触摸来源（供 contextmenu 判定）
     if (_fbInPicker(e.target)) return;                // 面板自身的操作不打断
     const msgEl = (e.target && e.target.closest) ? e.target.closest('.msg.secretary') : null;
     if (!msgEl) { _fbClosePicker(); return; }         // 按在别处 → 关面板
@@ -2855,8 +2857,10 @@ function _fbOpenPicker(msgEl) {
     if (_fbInPicker(e.target)) return;
     if (Date.now() - _fbLastFire < 800) { _fbLastFire = 0; e.stopPropagation(); e.preventDefault(); }
   }, true);
-  // 系统长按菜单会抢走手势 → 在阿卡莉回复上禁掉（桌面右键同理）
+  // 系统长按菜单会抢走手势 → 只在**触摸**长按时拦掉；
+  // 用户口径 2026-10-05：桌面右键要能正常用（右键→复制是常用路径），不能一起禁。
   document.addEventListener('contextmenu', function (e) {
+    if (Date.now() - _fbLastTouch > 2000) return;      // 非触摸来源（鼠标右键）放行
     if (e.target && e.target.closest && e.target.closest('.msg.secretary')) e.preventDefault();
   }, true);
   // 滚动 / 缩放 → 关面板

@@ -681,10 +681,12 @@
   }
   /* 长按 = 反馈入口：关掉系统长按菜单/选择，避免与表情面板打架（仅阿卡莉回复） */
   .msg.secretary .bubble { -webkit-touch-callout: none; }
-  /* 长按进行中的轻微高亮（顺带禁止选中，避免系统长按菜单/选择抢走手势） */
+  /* 长按进行中的轻微高亮。
+     用户口径 2026-10-05：**不要在这里禁选** —— 按下鼠标就会加上这个类，若带
+     user-select:none，选取动作还没开始就被禁掉（用户反馈"回复内容不能选取复制"）。
+     系统长按菜单由 -webkit-touch-callout + 触摸态的 contextmenu 拦截负责，不靠禁选。 */
   .msg.secretary.fb-pressing .bubble {
     box-shadow: 0 0 0 2px rgba(74, 114, 151, .35);
-    user-select: none; -webkit-user-select: none;
   }
   /* 表情选择面板：body 固定层，跟随气泡定位（避免被消息区裁剪） */
   .fb-picker {

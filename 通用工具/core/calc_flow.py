@@ -2416,6 +2416,38 @@ def _talent_block_of(app, name: str, raw) -> str:
     return out[i:j].rstrip() if j > i else out[i:].rstrip()
 
 
+# 底层天赋段的原始排版是「第N行: A(效果) | B(效果)」，一屏挤两列、行又长（用户口径 2026-10-05：
+# "排版不好看、换行太少"）。这里重排成「行头 + 每行一个天赋」，并丢掉 `天赋 ---` 与分隔虚线。
+_TALENT_ROW_RE = re.compile(r'^第\s*(\d)\s*行\s*[:：]\s*(.*)$')
+
+
+def _format_talent_block(block: str, code: str = '') -> str:
+    """把底层天赋段重排成好读的多行文本（纯展示，不改任何数值）。
+
+    · 行头带点法编码字母（有推荐表时）：`第1行（A）`
+    · 每个天赋单独一行，前缀 `· `
+    · `天赋 ---`、`-----` 等装饰线一律去掉（原先会留在末尾，看着像多出来的括号/乱码）
+    """
+    rows = []
+    for raw_line in (block or '').splitlines():
+        ln = raw_line.strip()
+        if not ln or ln.startswith('天赋'):
+            continue
+        if set(ln) <= set('-—=_· '):          # 纯装饰线
+            continue
+        m = _TALENT_ROW_RE.match(ln)
+        if not m:
+            continue
+        idx, body = int(m.group(1)), m.group(2)
+        cands = [c.strip() for c in re.split(r'\s*[|｜]\s*', body) if c.strip()]
+        pick = code[idx - 1] if 0 <= idx - 1 < len(code) else ''
+        head = '第%d行' % idx
+        if pick:
+            head += '（%s）' % ('A' if pick == '1' else ('B' if pick == '2' else pick))
+        rows.append('\n'.join([head] + ['· %s' % c for c in cands]))
+    return '\n\n'.join(rows) if rows else (block or '').strip()
+
+
 def _handle_talent_ask(tools, msg: str):
     """「X 天赋怎么点」→ 直读底层：推荐点法（有则给）+ 天赋原文；非该类问法返回 None。"""
     m = (msg or '').strip()
@@ -2469,17 +2501,15 @@ def _handle_talent_ask(tools, msg: str):
         _r['reply'] = '底层数据里没有「%s」的天赋信息（信息不全），这个阿卡莉不能替它编点法。' % name
         return _r
     if code:
-        _rows = '、'.join(
-            '第%d行%s' % (i + 1, 'A' if c == '1' else ('B' if c == '2' else '?'))
-            for i, c in enumerate(code))
-        reply = ('「%s」天赋点法：底层推荐表默认 %s（%s）。\n\n%s\n\n'
-                 '（来源：底层数据 raw_data 天赋表 ＋ talent_pvp 推荐表）'
-                 % (name, code, _rows, block))
+        reply = ('「%s」天赋点法：底层推荐表默认 %s\n\n%s\n\n'
+                 '来源：底层数据 raw_data 天赋表 ＋ talent_pvp 推荐表'
+                 % (name, code, _format_talent_block(block, code)))
     else:
         reply = ('「%s」的底层推荐表里没有收录它的点法（全 202 舰中 187 舰有推荐），'
-                 '下面是它自己的天赋原文（四行二列），指挥官按需自选即可：\n\n%s\n\n'
-                 '（来源：底层数据 raw_data 天赋表。要按某个编码计算，直接把 4 位编码给我，'
-                 '如 1212；也可先「查%s」看完整面板与技能。）' % (name, block, name))
+                 '下面的天赋原文供指挥官自选：\n\n%s\n\n'
+                 '来源：底层数据 raw_data 天赋表。要按某个编码计算，直接把 4 位编码给我，'
+                 '如 1212；也可先「查%s」看完整面板与技能。'
+                 % (name, _format_talent_block(block), name))
     _r = dict(_empty)
     _r['reply'] = reply
     return _r
