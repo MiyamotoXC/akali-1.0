@@ -236,6 +236,11 @@ class NameMatcher:
             return candidates[0]
         # 5. 编辑距离匹配：仅 **字符** 通道（错字纠正），不做拼音（谐音）。
         #    全部拼音通道已移除：见类文档（同音/近音会把「想喝」误纠「翔鹤」等）。
+        #    **长度下限 4**（2026-10-05）：3 字窗口与任意 3 字名"只差 1 字"是常态
+        #    （线上事故：「胡德有」vs「胡德·改」→ 把「胡德有什么用」改坏）；
+        #    2~3 字名字走硬别名表，不依赖本通道。
+        if len(nq) < 4:
+            return None
         best, best_d = None, None
         for n in self.all_names:
             nn = _normalize(n)

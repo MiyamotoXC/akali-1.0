@@ -1,6 +1,7 @@
 [
  {
   "input": "原神怎么玩",
+  "norm": "原神怎么玩",
   "guard_handled": true,
   "guard_reply": "与阿卡莉无关，不回答。",
   "pregate": {
@@ -14,6 +15,7 @@
  },
  {
   "input": "元神怎么玩",
+  "norm": "元神怎么玩",
   "guard_handled": true,
   "guard_reply": "与阿卡莉无关，不回答。",
   "pregate": {
@@ -27,6 +29,7 @@
  },
  {
   "input": "帮我写一段同人故事",
+  "norm": "帮我写一段同人故事",
   "guard_handled": true,
   "guard_reply": "我暂时没查到相关的信息，指挥官。",
   "pregate": {
@@ -40,6 +43,7 @@
  },
  {
   "input": "下期会不会出新舰灵",
+  "norm": "下期会不会出新舰灵",
   "guard_handled": true,
   "guard_reply": "我暂时没查到相关的信息，指挥官。",
   "pregate": {
@@ -52,7 +56,22 @@
   "work_from_kb": false
  },
  {
+  "input": "下期会出什么舰灵",
+  "norm": "下期会出什么舰灵",
+  "guard_handled": true,
+  "guard_reply": "我暂时没查到相关的信息，指挥官。",
+  "pregate": {
+   "ship_use": false,
+   "talent": false,
+   "pvp": false
+  },
+  "work_none": false,
+  "work_reply": "攻略现有信息无法确认下期将推出的舰灵名称或具体信息。",
+  "work_from_kb": true
+ },
+ {
   "input": "调取RA-01档案",
+  "norm": "调取RA-01档案",
   "guard_handled": true,
   "guard_reply": "我暂时没查到相关的信息，指挥官。",
   "pregate": {
@@ -66,6 +85,7 @@
  },
  {
   "input": "你这个是编的吧",
+  "norm": "你这个是编的吧",
   "guard_handled": true,
   "guard_reply": "你质疑得对。上一条没有通过角色数据或知识库验证，我撤回；目前没有可靠内容",
   "pregate": {
@@ -79,6 +99,7 @@
  },
  {
   "input": "知识库截止到什么时候",
+  "norm": "知识库截止到什么时候",
   "guard_handled": true,
   "guard_reply": "明天！",
   "pregate": {
@@ -92,6 +113,7 @@
  },
  {
   "input": "怎么反馈",
+  "norm": "怎么反馈",
   "guard_handled": true,
   "guard_reply": "觉得哪条回答不够好，长按那条回复、点末尾那个 💡 就行，会把你刚才的提问",
   "pregate": {
@@ -100,11 +122,12 @@
    "pvp": false
   },
   "work_none": false,
-  "work_reply": "- 加入腾讯频道“拂晓胜利之刻”，进行攻略分享、角色讨论与活动交流。\n-",
+  "work_reply": "若出现操作失误（如误用珍贵道具），可联系客服寻求帮助，但回档机会仅限一次",
   "work_from_kb": true
  },
  {
   "input": "结束本轮",
+  "norm": "结束本轮",
   "guard_handled": false,
   "guard_reply": "",
   "pregate": {
@@ -118,6 +141,7 @@
  },
  {
   "input": "再见",
+  "norm": "再见",
   "guard_handled": false,
   "guard_reply": "",
   "pregate": {
@@ -131,6 +155,7 @@
  },
  {
   "input": "88礼包选谁",
+  "norm": "88礼包选谁",
   "guard_handled": false,
   "guard_reply": "",
   "pregate": {
@@ -139,11 +164,12 @@
    "pvp": false
   },
   "work_none": false,
-  "work_reply": "88礼包（即“88自选”）推荐选择：\n\n- 首选前卫：拂晓数值天花板，选",
+  "work_reply": "88礼包（即新手调遣特令）推荐选择：\n- 首选前卫：拂晓数值天花板，可随",
   "work_from_kb": true
  },
  {
   "input": "计算工具",
+  "norm": "计算工具",
   "guard_handled": false,
   "guard_reply": "",
   "pregate": {
@@ -157,6 +183,7 @@
  },
  {
   "input": "活动",
+  "norm": "活动",
   "guard_handled": false,
   "guard_reply": "",
   "pregate": {
@@ -170,6 +197,7 @@
  },
  {
   "input": "胡德有什么用",
+  "norm": "胡德有什么用",
   "guard_handled": false,
   "guard_reply": "",
   "pregate": {
@@ -178,11 +206,12 @@
    "pvp": false
   },
   "work_none": false,
-  "work_reply": "「胡德·改」在攻略里的就业：\n· 大范围AOE：逸仙、前卫、胡德　（《无",
+  "work_reply": "「胡德」在攻略里的就业：\n· 大范围AOE：逸仙、前卫、胡德　（《无尽海",
   "work_from_kb": true
  },
  {
   "input": "女灶神值得练吗",
+  "norm": "女灶神值得练吗",
   "guard_handled": false,
   "guard_reply": "",
   "pregate": {
@@ -191,11 +220,14 @@
    "pvp": false
   },
   "work_none": false,
-  "work_reply": "《舰灵评估 · 女灶神》\n\n【女灶神】\n女灶神是88/168氪金限定SS",
-  "work_from_kb": false
+  "work_from_kb": false,
+  "_unstable": [
+   "work_reply"
+  ]
  },
  {
   "input": "格奈森瑙天赋怎么点",
+  "norm": "格奈森瑙天赋怎么点",
   "guard_handled": false,
   "guard_reply": "",
   "pregate": {
@@ -209,6 +241,7 @@
  },
  {
   "input": "竞技场中船队伍推荐",
+  "norm": "竞技场中船队伍推荐",
   "guard_handled": false,
   "guard_reply": "",
   "pregate": {
@@ -221,7 +254,36 @@
   "work_from_kb": false
  },
  {
+  "input": "艾塞克斯面板",
+  "norm": "埃塞克斯面板",
+  "guard_handled": false,
+  "guard_reply": "",
+  "pregate": {
+   "ship_use": false,
+   "talent": false,
+   "pvp": false
+  },
+  "work_none": false,
+  "work_reply": "现有信息没有给出艾塞克斯的面板数值。",
+  "work_from_kb": true
+ },
+ {
+  "input": "阿斯莫德怎么打",
+  "norm": "阿丝莫德怎么打",
+  "guard_handled": false,
+  "guard_reply": "",
+  "pregate": {
+   "ship_use": false,
+   "talent": false,
+   "pvp": false
+  },
+  "work_none": false,
+  "work_reply": "甲种 · 航母 · 大船  \n\n配队（原文舰名）：花生、饼拓、墩子、长门",
+  "work_from_kb": false
+ },
+ {
   "input": "胡德打前卫算伤害",
+  "norm": "胡德打前卫算伤害",
   "guard_handled": false,
   "guard_reply": "",
   "pregate": {
@@ -235,6 +297,7 @@
  },
  {
   "input": "减伤25%和加伤害25%哪个收益高",
+  "norm": "减伤25%和加伤害25%哪个收益高",
   "guard_handled": false,
   "guard_reply": "",
   "pregate": {
@@ -243,11 +306,12 @@
    "pvp": false
   },
   "work_none": false,
-  "work_reply": "减伤25%的收益高于加伤害25%：\n- 减伤25%天赋，实际坦度增幅为0",
+  "work_reply": "减伤25%的收益高于加伤害25%：减伤25%时实际坦度增幅为0.3125",
   "work_from_kb": true
  },
  {
   "input": "算了我信你吧",
+  "norm": "算了我信你吧",
   "guard_handled": false,
   "guard_reply": "",
   "pregate": {
@@ -261,6 +325,7 @@
  },
  {
   "input": "算经验值",
+  "norm": "算经验值",
   "guard_handled": false,
   "guard_reply": "",
   "pregate": {
@@ -274,6 +339,7 @@
  },
  {
   "input": "索敌计算 1000",
+  "norm": "索敌计算 1000",
   "guard_handled": false,
   "guard_reply": "",
   "pregate": {
@@ -287,6 +353,7 @@
  },
  {
   "input": "好感度计算",
+  "norm": "好感度计算",
   "guard_handled": false,
   "guard_reply": "",
   "pregate": {
@@ -300,6 +367,7 @@
  },
  {
   "input": "查胡德",
+  "norm": "查胡德",
   "guard_handled": false,
   "guard_reply": "",
   "pregate": {
@@ -313,6 +381,7 @@
  },
  {
   "input": "女灶神很强",
+  "norm": "女灶神很强",
   "guard_handled": false,
   "guard_reply": "",
   "pregate": {
@@ -326,6 +395,7 @@
  },
  {
   "input": "哪些舰灵有大型减伤天赋",
+  "norm": "哪些舰灵有大型减伤天赋",
   "guard_handled": false,
   "guard_reply": "",
   "pregate": {
@@ -339,6 +409,7 @@
  },
  {
   "input": "对比780和太太",
+  "norm": "对比齐柏林伯爵和列克星敦",
   "guard_handled": false,
   "guard_reply": "",
   "pregate": {
@@ -347,11 +418,14 @@
    "pvp": false
   },
   "work_none": false,
-  "work_reply": "《舰灵对比 · 齐柏林伯爵 / 列克星敦》\n\n【齐柏林伯爵】\n前排技能范",
-  "work_from_kb": false
+  "work_from_kb": false,
+  "_unstable": [
+   "work_reply"
+  ]
  },
  {
   "input": "胡德改造厉害吗",
+  "norm": "胡德改造厉害吗",
   "guard_handled": false,
   "guard_reply": "",
   "pregate": {
@@ -365,6 +439,7 @@
  },
  {
   "input": "查胡德面板",
+  "norm": "查胡德面板",
   "guard_handled": false,
   "guard_reply": "",
   "pregate": {
@@ -373,11 +448,12 @@
    "pvp": false
   },
   "work_none": false,
-  "work_reply": "- 胡德面板 = 逸仙面板\n- 胡德面板 = 黑暗界面板\n- 所有数据均",
+  "work_reply": "- 胡德面板 = 逸仙面板\n- 胡德面板 = 黑暗界面板\n- 图中均为1",
   "work_from_kb": true
  },
  {
   "input": "有哪些驱逐",
+  "norm": "有哪些驱逐",
   "guard_handled": false,
   "guard_reply": "",
   "pregate": {
@@ -391,6 +467,7 @@
  },
  {
   "input": "他们的必杀技CD是多少",
+  "norm": "他们的必杀技CD是多少",
   "guard_handled": false,
   "guard_reply": "",
   "pregate": {
@@ -404,6 +481,7 @@
  },
  {
   "input": "最近舰队油耗很大",
+  "norm": "最近舰队油耗很大",
   "guard_handled": false,
   "guard_reply": "",
   "pregate": {
@@ -417,6 +495,7 @@
  },
  {
   "input": "怎么练级",
+  "norm": "怎么练级",
   "guard_handled": false,
   "guard_reply": "",
   "pregate": {
@@ -425,11 +504,12 @@
    "pvp": false
   },
   "work_none": false,
-  "work_reply": "- 优先选择当前打捞活动的困难或地狱难度关卡练级，因活动期间经验大幅提升",
+  "work_reply": "- 优先参与当前打捞活动的困难或地狱难度关卡练级，因活动期间经验大幅提升",
   "work_from_kb": true
  },
  {
   "input": "装备速查",
+  "norm": "装备速查",
   "guard_handled": false,
   "guard_reply": "",
   "pregate": {
@@ -443,6 +523,7 @@
  },
  {
   "input": "当期活动怎么打",
+  "norm": "当期活动怎么打",
   "guard_handled": false,
   "guard_reply": "",
   "pregate": {
@@ -456,6 +537,7 @@
  },
  {
   "input": "剧情榜",
+  "norm": "剧情榜",
   "guard_handled": false,
   "guard_reply": "",
   "pregate": {
@@ -469,6 +551,7 @@
  },
  {
   "input": "主线剧情讲了什么",
+  "norm": "主线剧情讲了什么",
   "guard_handled": false,
   "guard_reply": "",
   "pregate": {
@@ -482,6 +565,7 @@
  },
  {
   "input": "活动剧情什么时候结束",
+  "norm": "活动剧情什么时候结束",
   "guard_handled": false,
   "guard_reply": "",
   "pregate": {
@@ -495,6 +579,7 @@
  },
  {
   "input": "经验计算 等级：45 当前经验：3200 出战经验：120",
+  "norm": "经验计算 等级：45 当前经验：3200 出战经验：120",
   "guard_handled": false,
   "guard_reply": "",
   "pregate": {
@@ -508,6 +593,7 @@
  },
  {
   "input": "遭遇战模拟 boss：嘉波 白天：60 前排：A B 后排：D E",
+  "norm": "遭遇战模拟 boss：嘉波 白天：60 前排：A B 后排：D E",
   "guard_handled": false,
   "guard_reply": "",
   "pregate": {
@@ -516,11 +602,12 @@
    "pvp": false
   },
   "work_none": false,
-  "work_reply": "指挥官，有 2 项没能识别出来，已帮你保留能识别的内容，请只修改标红的格",
+  "work_reply": "指挥官，有 6 项没能识别出来，已帮你保留能识别的内容，请只修改标红的格",
   "work_from_kb": false
  },
  {
   "input": "今天心情不错",
+  "norm": "今天心情不错",
   "guard_handled": false,
   "guard_reply": "",
   "pregate": {
@@ -534,6 +621,7 @@
  },
  {
   "input": "谢谢你",
+  "norm": "谢谢你",
   "guard_handled": false,
   "guard_reply": "",
   "pregate": {

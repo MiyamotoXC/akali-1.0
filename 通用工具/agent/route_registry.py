@@ -131,18 +131,19 @@ RULES: Tuple[Rule, ...] = (
          probe=_c(r'RA[\s\-－—_]*0*1\s*(?:档案|编号)?', re.I),
          ),
     Rule('guard.nokb_basis', 'redline', 'guard', '通用工具/agent/guard.py:39',
-         '_NO_KB_FUTURE_RE / _NO_KB_CREATIVE_RE → _NO_DATA_REPLY'
-         '（**已知缺口**：『下期会出什么舰灵』这类"下期+会出+什么X"不在覆盖内，2026-10-05 自检发现）',
-         'guard.py:36「未来/未公布内容 与 创作请求，知识库无据（自由生成链路会臆造）」',
+         '_NO_KB_FUTURE_RE / _NO_KB_CREATIVE_RE → _NO_DATA_REPLY',
+         'guard.py:36「未来/未公布内容 与 创作请求，知识库无据（自由生成链路会臆造）」；'
+         '2026-10-05 本注册表自检发现『下期会出什么舰灵』漏网，已补 `会出(什么|哪些|啥)` 分支',
          probe=_c(r'(?:下期|下个版本|下一个版本|以后的?版本|未来|明年)[^。！？\n]{0,12}'
                   r'(?:会不会|是否|什么(?:时候|时)|何时|要出|出新|新(?:舰灵|角色|皮肤|活动)|叫什么)'
                   r'|会不会(?:加强|削弱|出|上线|进|改)'
                   r'|(?:什么(?:时候|时)|何时)(?:上线|开放|公测|开服)'
                   r'|公测|内测|爆料|剧透|舅舅党'
+                  r'|会出(?:什么|哪些|啥)'
                   r'|(?:写|编|来|整|作|弄|搞)(?:一)?(?:段|篇|个|首)?[^。！？\n]{0,8}'
                   r'(?:故事|同人|小作文|段子|小说|诗|歌词|剧本|梗)'
                   r'|同人(?:文|小说|故事)|角色扮演|扮演一下'),
-         samples=(('下期会不会出新舰灵', True), ('公测什么时候', True),
+         samples=(('下期会不会出新舰灵', True), ('下期会出什么舰灵', True), ('公测什么时候', True),
                   ('帮我写一段同人故事', True), ('胡德改怎么练', False)),
          ),
     Rule('guard.unanswered_topic', 'keep', 'guard', '通用工具/agent/guard.py:127',
@@ -173,7 +174,8 @@ RULES: Tuple[Rule, ...] = (
     Rule('pregate.ship_use', 'converge', 'pregate', '通用工具/core/route_dispatch.py:24',
          '_handle_ship_use「X 有什么用/就业」→ 原文直出',
          'route_dispatch.py:20「agent 模式下 dispatcher 会先接走『X 有什么用』，答成泛泛的攻略片段」',
-         tool='', retire_when='元路由对「有什么用/就业/值得练吗」的命中率 ≥95%，且直出结果与今天一致',
+         tool='', retire_when='元路由对「有什么用/就业/值得练吗」命中率 ≥95% 且直出结果一致；'
+                              '可先用 AKALI_PREGATE_MODE=prior（前置闸由「门」变「网」）A/B 验证',
          samples=(),
          ),
     Rule('pregate.talent_ask', 'converge', 'pregate', '通用工具/core/route_dispatch.py:35',

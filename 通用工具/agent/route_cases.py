@@ -50,11 +50,16 @@ BASELINE = os.path.join(_HERE, 'route_baseline.json')
 CASES = (
     # —— guard 红线 / 防幻觉 ——
     '原神怎么玩', '元神怎么玩', '帮我写一段同人故事', '下期会不会出新舰灵',
+    # 2026-10-05 注册表自检发现的口子：『下期会出什么舰灵』此前不在 _NO_KB_FUTURE_RE 覆盖内
+    # （未来内容无据，必须前置拦下，不能漏给自由生成）→ 补 `会出(什么|哪些|啥)` 后加此用例钉住。
+    '下期会出什么舰灵',
     '调取RA-01档案', '你这个是编的吧', '知识库截止到什么时候', '怎么反馈',
     # —— 状态机 / 按钮语义 ——
     '结束本轮', '再见', '88礼包选谁', '计算工具', '活动',
     # —— 三条业务前置闸 ——
     '胡德有什么用', '女灶神值得练吗', '格奈森瑙天赋怎么点', '竞技场中船队伍推荐',
+    # —— 输入归一（entity_norm）：4 字错字仍要纠（下限抬到 4 之后的有效性证明）——
+    '艾塞克斯面板', '阿斯莫德怎么打',
     # —— 意图判据：计算 ——
     '胡德打前卫算伤害', '减伤25%和加伤害25%哪个收益高', '算了我信你吧',
     '算经验值', '索敌计算 1000', '好感度计算',
@@ -80,6 +85,42 @@ def _norm(rec: dict) -> dict:
     return d
 
 
+_COMPARE_SKIP = ('_unstable',)
+
+
+def _stable_records(cases=CASES, tools=None, runs: int = 3) -> list:
+    """跑 `runs` 遍，**只保留各遍都一致的字段**（不稳定字段登记进 `_unstable`，不作判定）。
+
+    目的：回归集必须可信。随机话术变体（`random.choice`）、KB-LLM 措辞、进程内缓存预热
+    都会让个别字段漂移；跑 3 遍取交集，比"整份基线偶尔红一次"要诚实得多。
+    """
+    runs_data = [snapshot(cases, tools) for _ in range(max(2, int(runs)))]
+    out = []
+    for i in range(len(cases)):
+        recs = [r[i] for r in runs_data]
+        rec, unstable = {}, []
+        for k in recs[0]:
+            vals = [r.get(k) for r in recs]
+            if all(v == vals[0] for v in vals):
+                rec[k] = vals[0]
+            else:
+                unstable.append(k)
+        if unstable:
+            rec['_unstable'] = unstable
+        out.append(rec)
+    return out
+
+
+def _same(base_rec: dict, now_rec: dict) -> bool:
+    """只比基线里**钉住**的字段（`_unstable` 等元信息不参与判定）。"""
+    for k, v in (base_rec or {}).items():
+        if k in _COMPARE_SKIP:
+            continue
+        if now_rec.get(k) != v:
+            return False
+    return True
+
+
 def _build_tools():
     import web_app as w
     from tools import build_tools
@@ -95,6 +136,13 @@ def snapshot(cases=CASES, tools=None):
     rows = []
     for one in cases:
         out = {'input': one}
+        # 输入归一（entity_norm）：**必须先钉住** —— 它先于一切路由执行，改坏了会让整条
+        # 链路对不上（2026-10-05 事故：「胡德有什么用」被归一成「胡德·改什么用」）。
+        try:
+            from core.entity_norm import standardize as _std
+            out['norm'] = _std(one)
+        except Exception as e:
+            out['norm'] = 'ERR:%s' % type(e).__name__
         try:
             handled, res = g.guard(tools, {}, one, agent=None, history=[])
             out['guard_handled'] = bool(handled)
@@ -128,9 +176,12 @@ def save(update: bool = False) -> int:
     if os.path.isfile(BASELINE) and not update:
         print('[route_cases] 基线已存在，未覆盖：%s（确认有意变更后用 --update）' % BASELINE)
         return 2
+    recs = _stable_records()
     with open(BASELINE, 'w', encoding='utf-8') as f:
-        json.dump(snapshot(), f, ensure_ascii=False, indent=1)
-    print('[route_cases] 基线已写入 %s（%d 条用例）' % (BASELINE, len(CASES)))
+        json.dump(recs, f, ensure_ascii=False, indent=1)
+    n_un = sum(1 for r in recs if r.get('_unstable'))
+    print('[route_cases] 基线已写入 %s（%d 条用例，其中 %d 条含不稳定字段已标出）'
+          % (BASELINE, len(recs), n_un))
     return 0
 
 
@@ -142,7 +193,7 @@ def check(verbose: bool = True) -> int:
     with open(BASELINE, encoding='utf-8') as f:
         base = {_r['input']: _norm(_r) for _r in json.load(f)}
     now = {_r['input']: _norm(_r) for _r in snapshot()}
-    bad = [k for k in base if k in now and base[k] != now[k]]
+    bad = [k for k in base if k in now and not _same(base[k], now[k])]
     extra = [k for k in now if k not in base]
     if verbose:
         for k in bad:
