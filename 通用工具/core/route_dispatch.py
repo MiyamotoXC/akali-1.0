@@ -32,8 +32,8 @@ def _pregate_result(tools, overrides, msg):
                              ('pregate.pvp_lineup', '_handle_pvp_lineup')):
         try:
             # 争锋阵容反问式需要跨轮记忆（pvp_lineup_pending），故把 overrides 传给它；
-            # 其余 handler 不接收该参数（保持原签名，多传会被忽略的逻辑见各自定义）。
-            if fn_name == '_handle_pvp_lineup':
+            # 天赋点法追问需要上下文继承上一轮查过的角色（overrides['last_role']），同样传 overrides。
+            if fn_name in ('_handle_pvp_lineup', '_handle_talent_ask'):
                 r = getattr(_cf, fn_name)(tools, msg, overrides)
             else:
                 r = getattr(_cf, fn_name)(tools, msg)

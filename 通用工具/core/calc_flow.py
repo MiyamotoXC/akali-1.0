@@ -2504,10 +2504,13 @@ def _format_talent_block(block: str, code: str = '') -> str:
     return '\n\n'.join(out) if out else (block or '').strip()
 
 
-def _handle_talent_ask(tools, msg: str):
-    """「X 天赋怎么点」→ 直读底层：推荐点法（有则给）+ 天赋原文；非该类问法返回 None。"""
+def _handle_talent_ask(tools, msg: str, overrides=None, history=None):
+    """「X 天赋怎么点」→ 直读底层：推荐点法（有则给）+ 天赋原文；非该类问法返回 None。
+
+    支持追问继承：消息本身没带舰名（如单独说「怎么点」）时，从上下文补回上一轮查过的角色
+    （overrides['last_role']，兜底最近历史），再走确定性逻辑——避免追问退化到 LLM 口胡。"""
     m = (msg or '').strip()
-    if not m or _TALENT_WORD not in m or not _TALENT_ASK_RE.search(m):
+    if not m or not _TALENT_ASK_RE.search(m):
         return None
     app = None
     for _t in (tools or []):
@@ -2529,7 +2532,20 @@ def _handle_talent_ask(tools, msg: str):
         if _n and _n in _std and len(_n) > len(name):
             name = _n
     if not name:
-        return None
+        _ctx = (overrides or {}).get('last_role') or ''
+        if not _ctx and history:
+            try:
+                from agent.dispatcher import _last_ship_in_history
+                _ctx = _last_ship_in_history(history) or ''
+            except Exception:
+                _ctx = ''
+        if not _ctx:
+            return None
+        name = _ctx
+        # 上下文补回舰名（消息无「天赋」二字也一并补上），使后续判定/回复一致
+        m = ('%s %s%s' % (_ctx, _TALENT_WORD, m)).strip() if _TALENT_WORD not in m \
+            else ('%s %s' % (_ctx, m)).strip()
+    # 以下与原逻辑一致
     try:
         _canon, raw = app.get_raw_ship(name)
     except Exception:
@@ -2588,18 +2604,29 @@ def _handle_talent_ask(tools, msg: str):
         _r = dict(_empty)
         _r['reply'] = reply
         return _r
-    _parts = []
+    # 点法（编码）统一列在最上面；天赋原文只输出一次，避免 PvE+PVP 同时答时整棵树重复。
+    _code_lines = []
     for _mode in _modes:
         _c = _show.get(_mode)
         if not _c:
             continue
         _note = '（该舰暂无独立 PvE 配点，暂与 PVP 一致）' if (_mode == 'pve' and _pve_fallback) else ''
         _label = 'PVP' if _mode == 'pvp' else 'PvE'
-        _parts.append('【%s 点法】底层推荐表默认 %s%s\n\n%s'
-                      % (_label, _c, _note, _format_talent_block(block, _c)))
-    reply = ('「%s」天赋点法：\n\n%s\n\n'
-             '来源：底层数据 raw_data 天赋表 ＋ talent_pvp / talent_pve 推荐表'
-             % (name, '\n\n'.join(_parts)))
+        _code_lines.append('【%s 点法】底层推荐表默认 %s%s' % (_label, _c, _note))
+    if len(_code_lines) > 1:
+        # 多模式（PvE+PVP 同答）：点法并列置顶，天赋树中性输出一次（不按某编码高亮，编码已列在上方）
+        reply = ('「%s」天赋点法：\n\n%s\n\n%s\n\n'
+                 '来源：底层数据 raw_data 天赋表 ＋ talent_pvp / talent_pve 推荐表'
+                 % (name, '\n'.join(_code_lines), _format_talent_block(block)))
+    else:
+        # 单模式：点法 + 按编码高亮的完整天赋树（仅一次，无重复）
+        _mode = next(iter(_show))
+        _c = _show[_mode]
+        _note = '（该舰暂无独立 PvE 配点，暂与 PVP 一致）' if (_mode == 'pve' and _pve_fallback) else ''
+        _label = 'PVP' if _mode == 'pvp' else 'PvE'
+        reply = ('「%s」天赋点法：\n\n【%s 点法】底层推荐表默认 %s%s\n\n%s\n\n'
+                 '来源：底层数据 raw_data 天赋表 ＋ talent_pvp / talent_pve 推荐表'
+                 % (name, _label, _c, _note, _format_talent_block(block, _c)))
     _r = dict(_empty)
     _r['reply'] = reply
     return _r
@@ -5195,7 +5222,7 @@ def route_work(tools, overrides, msg: str, agent=None, allow_intent_llm=True, up
             return _use_r
         # 0b. 角色「天赋怎么点」（用户口径 2026-10-04）：点名角色 → 直读底层（推荐点法 +
         #     天赋原文），不给通用套路；放这里是为了抢在攻略 RAG 之前。
-        _tal_r = _handle_talent_ask(tools, msg)
+        _tal_r = _handle_talent_ask(tools, msg, overrides=overrides)
         if _tal_r is not None:
             return _tal_r
 
