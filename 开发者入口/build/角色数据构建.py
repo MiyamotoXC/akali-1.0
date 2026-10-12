@@ -546,8 +546,9 @@ def _merge_tables(kb_dir: str = None) -> list:
     # ·改 角色天赋补全：改造前后天赋一致，从基础名复制（如 飞鹰·改 ← 飞鹰）
     _fill_kai_talents(store)
 
-    # PVP 推荐表（源表 底层数据/源文件/天赋表pvp*.xlsx）→ talent_pvp.json
+    # PVP / PVE 推荐表（源表 底层数据/源文件/天赋表pvp*.xlsx、天赋表pve*.xlsx）
     _generate_talent_pvp(raw_path, store.storage, kb_dir)
+    _generate_talent_pve(raw_path, store.storage, kb_dir)
 
     # 检查面板表舰名中的可疑近似写法（提示可能需补充 ship_name_map.json）
     _check_suspicious_names([v[0] for v in panel_by_key.values()])
@@ -597,11 +598,18 @@ def _fill_kai_talents(store):
         print(f'·改 天赋补全: 无需处理（0 个），缺失 {len(skipped)} 个 → {skipped}')
 
 
-def _generate_talent_pvp(raw_path: str, raw_storage: dict, kb_dir: str = None):
-    """从**源表** 天赋表pvp*.xlsx 生成 talent_pvp.json（角色名→推荐编码）。
+# 天赋推荐表模式 → (源表文件名关键词, 产物文件名, 日志标签)
+_TALENT_RECO_MODES = {
+    'pvp': ('pvp', 'talent_pvp.json', 'PVP'),
+    'pve': ('pve', 'talent_pve.json', 'PVE'),
+}
 
-    源表位置：知识库/底层数据/源文件/（与其余源表同处，遵循「读源表→生成产物」；
-    旧版误扫产物目录，已修正）。表名格式 '原名/昵称'。
+
+def _generate_talent_reco(raw_path: str, raw_storage: dict, kb_dir: str = None, mode: str = 'pvp'):
+    """从**源表** 天赋表{mode}*.xlsx 生成 talent_{mode}.json（角色名→推荐编码）。
+
+    源表位置：知识库/底层数据/源文件/（与其余源表同处，遵循「读源表→生成产物」）。
+    表名格式 '原名/昵称'。PvP/PvE 两张源表按关键词（pvp/pve）严格区分，不互串。
 
     **同一个格子可能同时写本体与改造名**（如 '雪风/祥瑞御免-丹阳'），改造前后推荐一致
     → 格内**每个**能解析出的正规名都登记同一编码（雪风 与 丹阳 都拿 1221）。
@@ -609,31 +617,33 @@ def _generate_talent_pvp(raw_path: str, raw_storage: dict, kb_dir: str = None):
     一个格若给了**多套点法**（如 '1211/1221'）→ **取第一种**（用户口径 2026-10-04：
     计算时按表格给出的第一套来，不做增伤/索敌等二次筛选）。
     """
+    kw, out_name, label = _TALENT_RECO_MODES[mode]
     try:
-        from src.文件提取 import extract_talent_pvp
+        from src.文件提取 import extract_talent_pvp, extract_talent_pve
     except ImportError:
         return
+    extractor = extract_talent_pve if mode == 'pve' else extract_talent_pvp
     # 1) 找源表：优先 底层数据/源文件/（源表区），兼容旧位置（产物目录 / 知识库顶层）
     kb_root = kb_dir or DEFAULT_KB_DIR
     out_dir = os.path.dirname(raw_path)
-    pvp_file = None
+    src_file = None
     for d in (os.path.join(kb_root, '底层数据', '源文件'), out_dir, kb_root):
         if not os.path.isdir(d):
             continue
         for fn in sorted(os.listdir(d)):
             if fn.startswith('~$') or not fn.lower().endswith('.xlsx'):
                 continue
-            if 'pvp' in fn.lower() or '天赋表' in fn:
-                pvp_file = os.path.join(d, fn)
+            if kw in fn.lower():
+                src_file = os.path.join(d, fn)
                 break
-        if pvp_file:
+        if src_file:
             break
-    if not pvp_file:
+    if not src_file:
         return
     try:
-        raw_pairs = extract_talent_pvp(pvp_file)
+        raw_pairs = extractor(src_file)
     except Exception as e:
-        print(f'警告: PVP 天赋表解析失败 {e}')
+        print(f'警告: {label} 天赋表解析失败 {e}')
         return
 
     from src.舰船命名 import normalize_ship_name
@@ -723,15 +733,23 @@ def _generate_talent_pvp(raw_path: str, raw_storage: dict, kb_dir: str = None):
 
     # 3) 逐格登记：同一格内的多个名字（本体/改造/昵称）共用同一编码；
     #    一个格若给了多套点法（如 '1211/1221'）→ 取**第一种**
+    #    PVE 表额外支持「改前A，改后B」→ 本体取 A、·改 取 B（extractor 返回 (code, refit)）
     result = {}
-    for table_name, codes in raw_pairs.items():
-        m = re.match(r'(\d{4})', str(codes[0]))
-        if not m:
-            continue
-        code = m.group(1)
+    for table_name, spec in raw_pairs.items():
+        if mode == 'pve':
+            code, refit = spec
+        else:
+            m = re.match(r'(\d{4})', str(spec[0]))
+            if not m:
+                continue
+            code, refit = m.group(1), None
         for n in _cell_names(table_name):
             result.setdefault(n, code)
-    # 4) ·改 角色从基础名补齐（改造前后推荐一致）
+            if refit:
+                rn = _refit_of(n)
+                if rn:
+                    result.setdefault(rn, refit)
+    # 4) ·改 角色从基础名补齐（改造前后推荐一致；PVE 已显式给出改后的不会走到这里）
     for n in raw_keys:
         if n.endswith('·改') and n not in result:
             base = n[:-2]
@@ -741,14 +759,24 @@ def _generate_talent_pvp(raw_path: str, raw_storage: dict, kb_dir: str = None):
     if '拉菲·改' in raw_set and '拉菲·改' not in result and '拉菲(DD-724)' in result:
         result['拉菲·改'] = result['拉菲(DD-724)']
 
-    pvp_path = os.path.join(out_dir, 'talent_pvp.json')
+    out_path = os.path.join(out_dir, out_name)
     try:
-        with open(pvp_path, 'w', encoding='utf-8') as f:
+        with open(out_path, 'w', encoding='utf-8') as f:
             json.dump(result, f, ensure_ascii=False, indent=2)
-        print(f'PVP 天赋推荐表: {len(result)} 条 → {pvp_path}'
-              f'（源: {os.path.basename(pvp_file)}）')
+        print(f'{label} 天赋推荐表: {len(result)} 条 → {out_path}'
+              f'（源: {os.path.basename(src_file)}）')
     except Exception as e:
-        print(f'警告: talent_pvp.json 写入失败 {e}')
+        print(f'警告: {out_name} 写入失败 {e}')
+
+
+def _generate_talent_pvp(raw_path: str, raw_storage: dict, kb_dir: str = None):
+    """从源表 天赋表pvp*.xlsx 生成 talent_pvp.json（角色名→推荐编码）。"""
+    _generate_talent_reco(raw_path, raw_storage, kb_dir, mode='pvp')
+
+
+def _generate_talent_pve(raw_path: str, raw_storage: dict, kb_dir: str = None):
+    """从源表 天赋表pve*.xlsx 生成 talent_pve.json（角色名→推荐编码）。"""
+    _generate_talent_reco(raw_path, raw_storage, kb_dir, mode='pve')
 
 
 def import_tables(kb_dir: str = None):

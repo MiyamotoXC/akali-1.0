@@ -232,29 +232,10 @@ class App:
                 panel_parts.append(f"航速:{pn.get('航速')}节")
             if panel_parts:
                 lines.append("  面板（100级 满星 满强化）: " + " ".join(panel_parts))
-        # 天赋展示（含具体效果数值；在技能之前）——四行二列：name(效果数值)
-        talents = raw.get('talents') or {}
-        if talents:
-            lines.append("  --- 天赋 ---")
-            for row in ['1', '2', '3', '4']:
-                rd = talents.get(row)
-                if not rd:
-                    continue
-                cells = []
-                for opt in ('A', 'B'):
-                    od = rd.get(opt) or {}
-                    # 兼容新格式 {name, effect} 与旧格式字符串
-                    if isinstance(od, dict):
-                        tname = (od.get('name') or '').strip()
-                        effect = (od.get('effect') or '').strip()
-                    else:
-                        tname = (od or '').strip()
-                        effect = ''
-                    if not tname:
-                        cells.append('-')
-                        continue
-                    cells.append("%s(%s)" % (tname, effect) if effect else tname)
-                lines.append("    第%s行: %s | %s" % (row, cells[0], cells[1]))
+        # 天赋展示（含具体效果数值；在技能之前）——四行二列，复用统一渲染
+        from tools.talent import format_talents_4x2
+        lines.append("  --- 天赋 ---")
+        lines.append(format_talents_4x2(raw))
         # 技能描述原文直接输出（保留■①②③【】等符号，过滤空和???）
         # 顺序：通常技 → 必杀技 → 旗舰技 → 支援技
         skills = raw.get('skills', {})

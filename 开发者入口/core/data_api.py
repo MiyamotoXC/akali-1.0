@@ -803,6 +803,7 @@ def merge_tables(kb_dir: str = None, only_files: list = None, slots: list = None
 
     _fill_kai_talents(store)
     _generate_talent_pvp(raw_path, store.storage)
+    _generate_talent_pve(raw_path, store.storage)
 
     # 面板同步：合并后的最新面板直接刷新进 data.json（技能解析由增量 LLM 步骤负责）
     panel_synced = _sync_data_panels(store)
@@ -1629,6 +1630,14 @@ def _generate_talent_pvp(raw_path: str, raw_storage: dict, kb_dir: str = None):
     """生成 talent_pvp.json（委托 CLI 实现：读源表 + 一格多名字 + 双点法取增伤那种）。"""
     try:
         _build_module()._generate_talent_pvp(raw_path, raw_storage, kb_dir)
+    except Exception:
+        pass
+
+
+def _generate_talent_pve(raw_path: str, raw_storage: dict, kb_dir: str = None):
+    """生成 talent_pve.json（委托 CLI 实现：与 PvP 同表格式同规则，仅源表不同）。"""
+    try:
+        _build_module()._generate_talent_pve(raw_path, raw_storage, kb_dir)
     except Exception:
         pass
 

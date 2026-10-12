@@ -192,11 +192,29 @@
     box-shadow: 0 0 0 2px var(--fest-ring, transparent), 0 0 14px var(--fest-ring, transparent);
   }
   body.festival-on .msg.secretary .bubble {
+    /* 气泡内部：仅节日底色，不铺星月符号底纹（避免长气泡把图纵向拉伸变形） */
     background-color: var(--fest-bubble-bg, #f8f1de);
-    background-image: var(--fest-bubble-img, none);
-    background-size: 100% 100%; background-repeat: no-repeat;
     border-color: var(--fest-user-border, rgba(0,0,0,.1));
     box-shadow: 0 2px 10px var(--fest-user-border, rgba(0,0,0,.06));
+    position: relative;
+  }
+  /* 节日气泡的「边框线上」点缀小图案（月亮/桂花/玉兔等，取自该主题飘落素材变量
+     --fest-bubble-motif / --fest-bubble-motif2）：小图标骑在边框线上，气泡内部仍是
+     纯底色，不铺底纹图，因此长气泡也不会把图案纵向拉伸变形 */
+  body.festival-on .msg.secretary .bubble::before,
+  body.festival-on .msg.secretary .bubble::after {
+    content: '';
+    position: absolute;
+    width: 16px; height: 16px;
+    background: var(--fest-bubble-motif, none) center / contain no-repeat;
+    pointer-events: none;
+  }
+  body.festival-on .msg.secretary .bubble::before {
+    top: -8px; left: -8px;              /* 骑在左上边框线上 */
+  }
+  body.festival-on .msg.secretary .bubble::after {
+    bottom: -8px; right: -8px;          /* 骑在右下边框线上 */
+    background-image: var(--fest-bubble-motif2, var(--fest-bubble-motif, none));
   }
   body.festival-on .msg.user .bubble { border-color: var(--fest-user-border, rgba(0,0,0,.1)); }
   /* 落物层：固定覆盖视口，仅节庆时由 JS 创建 */
@@ -550,6 +568,17 @@
   .avatar-wrap { margin-bottom: 8px; text-align: left; }
   .avatar-img { width: 84px; height: 84px; object-fit: cover; border-radius: 12px;
     border: 2px solid var(--accent); background: #fff; display: block; box-shadow: 0 1px 4px rgba(0,0,0,0.12); }
+  /* 攻略头像行 <<SROW>>：一排头像 + 名字（仿攻略表格行；旗舰高亮） */
+  .ship-row { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0 10px; }
+  .ship-row-item { width: 64px; text-align: center; }
+  .ship-row-item img { width: 64px; height: 64px; object-fit: cover; border-radius: 8px;
+    border: 1px solid var(--line, #d8dee4); background: #fff; display: block; }
+  .ship-row-ph { width: 64px; height: 64px; border-radius: 8px;
+    border: 1px dashed var(--line, #d8dee4); background: #f2f5f7; }
+  .ship-row-name { font-size: 12px; line-height: 1.15; margin-top: 3px;
+    color: var(--ink, #33414c); word-break: break-all; }
+  .ship-row-item.hl img { border: 2px solid #e0a800; box-shadow: 0 0 0 2px #ffe08a; }
+  .ship-row-item.hl .ship-row-name { color: #b8860b; font-weight: 600; }
   /* 历史上的故事按钮：查询角色信息尾部的小按钮 */
   .story-btn { display: inline-block; margin: 6px 2px 2px 0; padding: 4px 12px;
     font-size: 14px; color: var(--accent); background: var(--accent-soft);
@@ -678,6 +707,8 @@
   .bubble {
     position: relative;
   }
+  /* 允许表情徽章换行落到气泡下方（气泡外部）；不影响「头像+气泡」同行 */
+  .msg.secretary { flex-wrap: wrap; }
   /* 长按 = 反馈入口：关掉系统长按菜单/选择，避免与表情面板打架（仅阿卡莉回复） */
   .msg.secretary .bubble { -webkit-touch-callout: none; }
   /* 长按进行中的轻微高亮。
@@ -710,9 +741,10 @@
     background: #eef3f8;
     box-shadow: inset 0 0 0 1.5px rgba(74, 114, 151, .45);
   }
-  /* 已选表情徽章：贴在回复下方（气泡底部右对齐） */
+  /* 已选表情徽章：贴在回复下方、气泡外部（独占一行，落于气泡正下方） */
   .fb-reaction {
-    margin-top: 6px; display: flex; justify-content: flex-end;
+    flex-basis: 100%;            /* 独占一行 → 落到气泡下方（气泡外部） */
+    margin-top: 4px; display: flex; justify-content: flex-end;
     font-size: 18px; line-height: 1;
     user-select: none; -webkit-user-select: none;
   }
@@ -720,6 +752,19 @@
     padding: 1px 7px; border-radius: 999px;
     background: rgba(255, 255, 255, .85); border: 1px solid var(--line);
     box-shadow: 0 1px 3px rgba(31, 58, 84, .12);
+  }
+  /* 猪/糖「好玩」表情托盘：钉在对话框右下角，右对齐、向左累积（纯展示，不挡操作） */
+  .sticker-tray {
+    position: fixed; right: 12px; bottom: 76px;
+    max-width: 62vw; display: flex; flex-wrap: wrap;
+    justify-content: flex-end; align-content: flex-end; gap: 4px;
+    z-index: 50; pointer-events: none;
+  }
+  .sticker-tray span {
+    padding: 1px 7px; border-radius: 999px;
+    background: rgba(255, 255, 255, .85); border: 1px solid var(--line);
+    box-shadow: 0 1px 3px rgba(31, 58, 84, .12);
+    font-size: 18px; line-height: 1; user-select: none; -webkit-user-select: none;
   }
 </style>
 </head>
@@ -736,7 +781,7 @@
   <!-- 悬浮球：挂在标题栏阿卡莉头像下方，点击展开工具菜单；逻辑见 JS「功能菜单（悬浮球）」区块 -->
   <!-- open：参考图要求「悬浮窗开始默认是打开的」 -->
   <div class="fab-wrap open" id="fabWrap">
-    <button class="fab-ball flipped" id="fabBall" title="港区工具（底色环形显示剩余算力）">
+    <button class="fab-ball flipped" id="fabBall" title="港区工具（底色环形显示剩余算力；每周四刷新算力）">
       <span class="fab-flip">
         <span class="fab-face fab-face-front" aria-hidden="true"></span>
         <span class="fab-face fab-face-back">
@@ -807,7 +852,7 @@
     <!-- 算力提醒：只在剩余不足 10% 时自动出现（用户口径 2026-09-25：用户不需要
          常驻查看用量，到阈值提醒即可）。由 checkQuotaAlert() 填充。 -->
     <div class="quota-bar" id="quotaBar" style="display:none"
-         title="同一网络/设备共享，每周自动恢复；基础功能不受影响">
+         title="同一网络/设备共享，每周四刷新算力；基础功能不受影响">
       <span class="quota-dot"></span><span id="quotaText"></span>
     </div>
     <div class="input-row">
@@ -1840,6 +1885,25 @@ function renderSecretaryReply(data, msgEl) {
     html = html.replace(/&lt;&lt;AVATAR&gt;&gt;([^<\n]+?)\|([^<\n]+)/g, function (m, p, t) {
       return '<div class="avatar-wrap"><img loading="lazy" class="avatar-img" src="' + resolveAsset('/avatar/' + p.replace(/\\/g, '/')) + qa
         + '" alt="' + t + '"></div>';
+    });
+  }
+  // 头像行标记 <<SROW>>path~舰名~旗舰（项间 ;;）：渲染成「一排头像 + 名字」的攻略表格行
+  if (/&lt;&lt;SROW&gt;&gt;/.test(html)) {
+    const ts = credGet('arkly_api_token') || '';
+    const qs = ts ? '?token=' + encodeURIComponent(ts) : '';
+    html = html.replace(/&lt;&lt;SROW&gt;&gt;([^<\n]+)/g, function (m, payload) {
+      const items = payload.split(';;').map(function (it) {
+        const a = it.split('~');
+        const p = a[0] || '';
+        const t = a[1] || '';
+        const fl = a[2] === '1';
+        const img = p
+          ? '<img loading="lazy" src="' + resolveAsset('/avatar/' + p.replace(/\\/g, '/')) + qs + '" alt="' + t + '">'
+          : '<div class="ship-row-ph"></div>';
+        return '<div class="ship-row-item' + (fl ? ' hl' : '') + '">' + img
+          + '<div class="ship-row-name">' + t + '</div></div>';
+      }).join('');
+      return '<div class="ship-row">' + items + '</div>';
     });
   }
   // 原型史标记 <<STORY>>舰名：渲染为「历史上的故事」小按钮，点击弹窗查看
@@ -3255,6 +3319,14 @@ function applyFestivalTheme(hol) {
   }
   // 飘落层：按 assets.fall 动态创建，每项用描述符里的 size/speed/rotate
   const fall = ((hol.assets) && hol.assets.fall) || [];
+  // 气泡边框线上的点缀图案：取该主题飘落素材前两项（如中秋的月亮/桂花），
+  // 注入成 CSS 变量，由 CSS 挂到气泡边框线上（气泡内部不铺图，避免长气泡拉伸变形）
+  const _motif0 = fall[0] && fall[0].file;
+  const _motif1 = (fall[1] || fall[0]) && (fall[1] || fall[0]).file;
+  if (_motif0) document.documentElement.style.setProperty(
+      '--fest-bubble-motif', 'url("/icons/festival/' + _motif0 + '")');
+  if (_motif1) document.documentElement.style.setProperty(
+      '--fest-bubble-motif2', 'url("/icons/festival/' + _motif1 + '")');
   if (!fall.length) return;
   const layer = document.createElement('div');
   layer.className = 'festival-fall';
@@ -3295,46 +3367,68 @@ function applyFestivalTheme(hol) {
     }
     // 节庆主题（今天在法定节假日区间内才有）：换头像边框 / 气泡皮肤 / 落节庆装饰
     if (data.holiday) applyFestivalTheme(data.holiday);
-    // 表情差分映射（名字→URL）：双击阿卡莉头像随机切换表情用
+    // 表情差分映射（名字→URL）：单击阿卡莉头像循环切换表情用（排除嫌弃/泳装/常态，同头像连点 5 次出泳装）
     if (Array.isArray(data.expression_urls)) ARKLY_EXPR_URLS = data.expression_urls;
   } catch (e) { /* 素材拉取失败沿用回退头像，不打断对话 */ }
 })();
 
-// ===== 双击阿卡莉头像：随机切换表情（排除「常态」「厌恶」）持续 3 秒 =====
-// 作用于标题栏头像（.avatar img）与每条秘书回复头像（.msg.secretary .ava img）。
-// 双击时随机挑一张非排出表情的差分图，3 秒后还原到切换前本来的头像。
-let _akaliExprTimer = null;
-function cycleAkaliExpression() {
-  if (!ARKLY_EXPR_URLS.length) return;
-  const EXCLUDE = new Set(['常态', '厌恶']);
-  const pool = ARKLY_EXPR_URLS.filter(e => e && e.name && !EXCLUDE.has(e.name));
-  if (!pool.length) return;
-  const pick = pool[Math.floor(Math.random() * pool.length)];
-  const url = resolveAsset(pick.url);
-  if (_akaliExprTimer) clearTimeout(_akaliExprTimer);
-  const imgs = document.querySelectorAll('.avatar img, .msg.secretary .ava img');
-  imgs.forEach(function (img) {
-    if (!img.dataset._exprPrev) img.dataset._exprPrev = img.src;
-    img.src = url;
-  });
-  _akaliExprTimer = setTimeout(function () {
-    document.querySelectorAll('.avatar img, .msg.secretary .ava img').forEach(function (img) {
-      if (img.dataset._exprPrev) { img.src = img.dataset._exprPrev; img.dataset._exprPrev = ''; }
-    });
-  }, 3000);
+// ===== 单击阿卡莉头像：循环切换表情（绝不出现「嫌弃」；同一个头像连点 5 次出「泳装」一次）=====
+// 作用对象：标题栏头像（.avatar img）与每条秘书回复头像（.msg.secretary .ava img），各自独立计数。
+// 排除规则：
+//   · 嫌弃 —— 安全红线专用差分（仅违规 / 极端恶意由后端强制命中），手动切换绝不出现；
+//   · 泳装 —— 仅作为「同头像连点 5 次」的彩蛋，不进入常规循环；
+//   · 常态 —— 默认态，排除可保证每次点击都切到一个有辨识度的神态。
+// 泳装触发后计数器清零，需再连点 5 次才会再次触发；连点中断（切到其他头像或停顿超 3 秒）即重计。
+const _EXPR_EXCLUDE = new Set(['嫌弃', '泳装', '常态']);
+let _exprPool = [];          // 常规循环池（已排除上面的名字）
+let _swimsuitUrl = null;     // 泳装差分 URL（无则 5 连点退化为常规循环）
+let _streakAvatar = null;    // 当前连点 streak 所属头像
+let _streakCount = 0;        // 同一头像的连续点击计数
+let _streakLast = 0;         // 上次连点时间戳（用于判断「连续」）
+
+function _buildExprPool() {
+  // 复用 /api/ui_assets 下发的表情差分列表（名字→URL），不重复造轮子、不改写名单
+  _exprPool = ARKLY_EXPR_URLS.filter(e => e && e.name && !_EXPR_EXCLUDE.has(e.name));
+  const sw = ARKLY_EXPR_URLS.find(e => e && e.name === '泳装');
+  _swimsuitUrl = sw ? sw.url : null;
 }
+
+// 把某个头像切到指定差分（url 为后端下发的相对/绝对路径，统一经 resolveAsset 处理）
+function _showAkaliExpr(img, url) {
+  if (!url) return;
+  img.src = resolveAsset(url);
+}
+
+// 单击阿卡莉头像：推进该头像的循环下标；连点满 5 次则切泳装一次
+function clickAkaliAvatar(img) {
+  // ARKLY_EXPR_URLS 由 /api/ui_assets 异步填充，首次点击时惰性构建循环池
+  if (!_exprPool.length && ARKLY_EXPR_URLS.length) _buildExprPool();
+  if (!_exprPool.length) return;
+  const now = Date.now();
+  // 连点判定：必须是「同一个头像」且「间隔不超过 3 秒」，否则视为新的一轮
+  if (img !== _streakAvatar || (now - _streakLast) > 3000) {
+    _streakAvatar = img;
+    _streakCount = 0;
+  }
+  _streakLast = now;
+  _streakCount++;
+  if (_streakCount >= 5) {
+    if (_swimsuitUrl) _showAkaliExpr(img, _swimsuitUrl);   // 连点满 5 次：切泳装一次
+    _streakCount = 0;        // 清零，需再连点 5 次才复现
+    return;
+  }
+  let idx = parseInt(img.dataset._exprIdx || '0', 10);
+  idx = (idx + 1) % _exprPool.length;
+  img.dataset._exprIdx = String(idx);
+  _showAkaliExpr(img, _exprPool[idx].url);
+}
+
 // 事件委托：单击阿卡莉头像任意一处即触发（标题栏 + 消息内头像，动态新增也能命中）
-// 守卫：仅当该头像当前就是「常态」时才响应 —— 覆盖 <<EXP>> 神态或随机切换中的临时表情时点击无效，
-// 切回常态（3 秒后或本就是默认）后才可再次触发（用户口径：必须是常态的时候点击才有效）。
 document.addEventListener('click', function (ev) {
   const img = ev.target.closest('.avatar img, .msg.secretary .ava img');
   if (!img) return;
   ev.preventDefault();
-  // 归一化为绝对地址再比：img.src 恒为绝对 URL，而 ARKLY_AVATAR 在同源部署下是相对路径，
-  // 直接 !== 会因「绝对 vs 相对」永远不相等，导致守卫误判「非常态」而拦截全部单击。
-  const def = new URL(ARKLY_AVATAR, location.href).href;
-  if (img.src !== def) return;
-  cycleAkaliExpression();
+  clickAkaliAvatar(img);
 });
 
 // ===== 心跳与自动关闭 =====
@@ -3520,8 +3614,9 @@ function _fbMarkRoundDone(msgEl) {
 function _fbAddReaction(msgEl, emoji) {
   const bubble = msgEl.querySelector('.bubble');
   if (!bubble) return;
-  let box = bubble.querySelector('.fb-reaction');
-  if (!box) { box = document.createElement('div'); box.className = 'fb-reaction'; bubble.appendChild(box); }
+  // 表情徽章挂在 .msg 上（气泡的兄弟节点），落到气泡外部下方，而非泡在气泡内
+  let box = msgEl.querySelector('.fb-reaction');
+  if (!box) { box = document.createElement('div'); box.className = 'fb-reaction'; msgEl.appendChild(box); }
   const dup = Array.prototype.some.call(box.querySelectorAll('span'), function (s) {
     return s.textContent === emoji;
   });
@@ -3529,6 +3624,21 @@ function _fbAddReaction(msgEl, emoji) {
   const span = document.createElement('span');
   span.textContent = emoji;
   box.appendChild(span);
+}
+
+// 猪/糖「好玩」表情：集中贴到对话框右下角的贴纸托盘（右对齐、向左累积，纯展示不上报）
+function _fbAddStickerTray(emoji) {
+  let tray = document.getElementById('stickerTray');
+  if (!tray) {
+    tray = document.createElement('div');
+    tray.id = 'stickerTray';
+    tray.className = 'sticker-tray';
+    document.body.appendChild(tray);
+  }
+  const span = document.createElement('span');
+  span.textContent = emoji;
+  tray.appendChild(span);
+  while (tray.children.length > 50) tray.removeChild(tray.firstChild);
 }
 
 // 提交一次反馈（等价旧 💡：POST /api/feedback，feedback_type=unsatisfied）
@@ -3575,7 +3685,7 @@ function _fbInPicker(node) {
 //     计算面板等点了**毫无效果**（不贴徽章、也不上报），避免让人误以为闲聊的反馈也计进去了。
 //   同一轮对话只上报一次，重复点 💡 不再重复提交。
 function _fbPick(msgEl, emoji, isFeedback) {
-  if (!isFeedback) { _fbAddReaction(msgEl, emoji); return; }   // 🍬/🐷：纯好玩，随处可贴
+  if (!isFeedback) { _fbAddStickerTray(emoji); return; }   // 🍬/🐷：纯好玩，集中贴到右下角托盘
   if (msgEl.getAttribute('data-from-kb') !== '1') return;      // 闲聊/固定话术等：💡 不生效
   _fbAddReaction(msgEl, emoji);
   if (_fbRoundDone(msgEl)) return;                             // 本轮已上报 → 不重复提交

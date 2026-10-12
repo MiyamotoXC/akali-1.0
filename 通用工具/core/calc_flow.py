@@ -1779,7 +1779,7 @@ def _filter_conjunctive_entities(question: str, evidence: str, answer: str) -> s
     return '\n'.join(kept).strip() or answer
 
 
-def _guide_qa_uncached(tools, msg: str, identity: str = '普通', search_query: str = ''):
+def _guide_qa_uncached(tools, msg: str, identity: str = '普通', search_query: str = '', history=None):
     """具体攻略问题：向量检索攻略片段 → LLM 依据片段作答（标注来源）。
     检索无命中/低分或 LLM 失败返回 None（调用方回落攻略面板路径）。
 
@@ -1787,6 +1787,14 @@ def _guide_qa_uncached(tools, msg: str, identity: str = '普通', search_query: 
     tool = _tool(tools, 'guide_rag')
     if tool is None:
         return None
+    # 多轮会话上下文（用户口径 2026-10-07）：在检索与作答之前注入最近几轮对话，
+    # 使检索改写与最终作答 LLM 能结合上下文理解省略/指代/追问（如「重甲呢」「那中甲呢」）。
+    _ctx = ''
+    try:
+        from tools.knowledge import _context_block_from_history
+        _ctx = _context_block_from_history(history) if history else ''
+    except Exception:
+        _ctx = ''
     # 主题词增强检索：本地主题命中（如 PVP→争锋竞技场）时拼进 query，
     # 避免向量检索被字面相近的异类文档吸走（"pvp阵容"曾被 PVE 配队文档压过）
     # 优先使用意图路由器产出的检索参数（它应保留用户原话的实体和动作）。
@@ -1802,7 +1810,7 @@ def _guide_qa_uncached(tools, msg: str, identity: str = '普通', search_query: 
             q = f'{q} {_t}'
     except Exception:
         pass
-    out = tool.call({'query': q})
+    out = tool.call({'query': q, 'context': _ctx})
     text = out if isinstance(out, str) else str(out)
     # 明确询问时间轴中的角色切换点时，从召回原文确定性抽取，避免并发下生成模型
     # 偶发漏掉首个或末个时间点。这里只负责组织已命中的时间轴，不新增独立路由。
@@ -1915,7 +1923,9 @@ def _guide_qa_uncached(tools, msg: str, identity: str = '普通', search_query: 
                     + (_tone or '') +
                     '不要在回复里标注来源篇目（如「来源：《XX》《YY》」），也不要输出任何来源书名列表；'
                     '不得用“证据明写”“片段中”“原文指出”“知识库显示”等元话术。'},
-                {'role': 'user', 'content': f'用户问题：{msg}\n\n检索到的攻略片段：\n{text}'},
+                {'role': 'user', 'content': (f'用户问题：{msg}\n\n检索到的攻略片段：\n{text}'
+                                            + ('\n\n【最近几轮对话（仅供理解指代/省略/追问，不要据此编造攻略库外内容）】\n' + _ctx
+                                               if _ctx else ''))},
             ],
             temperature=0.0,
             # qwen3 系列混合思考模型非流式调用必须显式关闭思考模式
@@ -1939,6 +1949,17 @@ def _guide_qa_uncached(tools, msg: str, identity: str = '普通', search_query: 
             'encounter_form': [], 'guide_files': [], 'guide_lib': '', 'from_kb': True, 'ok': True}
 
 
+def _context_cache_tag(history):
+    """会话上下文的稳定短标签，用于把『同一问句 + 不同上下文』区分进不同缓存键，避免跨上下文串答。"""
+    if not history:
+        return ''
+    try:
+        from tools.knowledge import _context_block_from_history
+        return 'ctx:' + str(hash(_context_block_from_history(history)))
+    except Exception:
+        return ''
+
+
 # ======================================================================
 # 知识库问答**命中缓存**（用户口径 2026-10-03）：同一问题重复问时，
 # 「向量检索 + 依据片段作答 + 证据校对」不再重算 —— 三个入参（问题 / 玩家身份 /
@@ -1948,17 +1969,17 @@ def _guide_qa_uncached(tools, msg: str, identity: str = '普通', search_query: 
 # （core.kb_cache.charge：按首算真实消耗复现），额度口径不受影响。
 # 开关：AKALI_KB_CACHE=0 关闭；AKALI_KB_CACHE_CHARGE=0 命中不记账。
 # ======================================================================
-def _handle_guide_qa(tools, msg: str, identity: str = '普通', search_query: str = ''):
+def _handle_guide_qa(tools, msg: str, identity: str = '普通', search_query: str = '', history=None):
     """知识库问答（对外入口）：命中缓存直接返回，未命中才算并回填缓存。"""
     try:
         from core import kb_cache as _kbc
     except Exception:
-        return _guide_qa_uncached(tools, msg, identity, search_query)
+        return _guide_qa_uncached(tools, msg, identity, search_query, history)
     _key = ''
     _base = None
     try:
         if _kbc.enabled():
-            _key = _kbc.key(msg, identity, search_query or msg)
+            _key = _kbc.key(msg, identity, (search_query or msg) + ('|' + _context_cache_tag(history) if history else ''))
             _hit = _kbc.get(_key)
             if _hit is not None:
                 _kbc.charge(_hit)                     # 命中：复现记账，额度口径不变
@@ -1970,7 +1991,7 @@ def _handle_guide_qa(tools, msg: str, identity: str = '普通', search_query: st
             _key = ''
     except Exception:
         _key, _base = '', None
-    result = _guide_qa_uncached(tools, msg, identity, search_query)
+    result = _guide_qa_uncached(tools, msg, identity, search_query, history)
     try:
         if _key and result:
             _kbc.store(_key, result, _base)           # 只收知识库问答类结果
@@ -2394,6 +2415,9 @@ def _handle_ship_use(tools, msg: str):
 #   ② 该舰天赋原文（四行二列的名字与效果）取 raw_data，**复用「查角色」同一段格式**，
 #      保证与「查X」看到的内容完全一致；
 #   ③ 推荐表里没有它 → 如实说明 + 列出四行供自选（绝不编点法）。
+#   ④ 模式分支（用户口径 2026-10-06）：问法没说 PvE/PVP → PvP 与 PvE 两种点法都答；
+#      只说 PvE → 只答 PvE，只说 PvP → 只答 PvP（"用户问哪个就回哪个"）。
+#      PvE 表缺失时与 PVP 一致并明确标注，不冒充 PvE 专属。
 # ======================================================================
 _TALENT_WORD = '天赋'
 # 「问点法」的问法词（不含"有哪些"——那种交回查角色链路，输出同一段原文）
@@ -2512,18 +2536,39 @@ def _handle_talent_ask(tools, msg: str):
         return None
     if raw is None:
         return None
-    # ① 推荐点法：底层 talent_pvp 表
-    code = ''
+    # ① 推荐点法：PVP / PvE 两张底层表（无 PvE 表时与 PVP 一致并明确标注）
+    # 模式判定（用户口径 2026-10-06）：问法没说 PvE/PVP → 两种都答；说了哪个就只答哪个
+    _has_pve = bool(re.search(r'pve', m, re.I))
+    _has_pvp = bool(re.search(r'pvp', m, re.I))
+    if _has_pve and not _has_pvp:
+        _modes = ['pve']
+    elif _has_pvp and not _has_pve:
+        _modes = ['pvp']
+    else:
+        _modes = ['pve', 'pvp']
     try:
-        from tools.talent import load_talent_pvp
-        pvp = load_talent_pvp() or {}
+        from tools.talent import load_talent_pvp, load_talent_pve
+        _pvp_tbl = load_talent_pvp() or {}
+        _pve_tbl = load_talent_pve() or {}
+    except Exception:
+        _pvp_tbl, _pve_tbl = {}, {}
+    def _lookup(tbl):
         for _k in (name, str(_canon or ''), name.replace('·', ''),
                    name.replace('·改', '改'), name.replace('·改', '')):
-            if _k and pvp.get(_k):
-                code = str(pvp[_k]).strip()
-                break
-    except Exception:
-        code = ''
+            if _k and tbl.get(_k):
+                return str(tbl[_k]).strip()
+        return ''
+    _pvp_code = _lookup(_pvp_tbl)
+    _pve_code = _lookup(_pve_tbl)
+    _pve_fallback = False
+    _codes = {}
+    if _pvp_code:
+        _codes['pvp'] = _pvp_code
+    if _pve_code:
+        _codes['pve'] = _pve_code
+    elif _pvp_code:
+        _codes['pve'] = _pvp_code      # 该舰无独立 PvE 配点 → 与 PVP 一致（下方标注，不冒充专属）
+        _pve_fallback = True
     # ② 天赋原文（与「查X」一致）
     block = _talent_block_of(app, name, raw)
     _empty = {'tool_outputs': [], 'suggestions': [], 'fill_form': [], 'encounter_form': [],
@@ -2532,79 +2577,241 @@ def _handle_talent_ask(tools, msg: str):
         _r = dict(_empty)
         _r['reply'] = '底层数据里没有「%s」的天赋信息（信息不全），这个阿卡莉不能替它编点法。' % name
         return _r
-    if code:
-        reply = ('「%s」天赋点法：底层推荐表默认 %s\n\n%s\n\n'
-                 '来源：底层数据 raw_data 天赋表 ＋ talent_pvp 推荐表'
-                 % (name, code, _format_talent_block(block, code)))
-    else:
+    # 按模式过滤；过滤后若两张表都没该舰推荐 → 走「自选」兜底（与旧逻辑一致）
+    _show = {k: v for k, v in _codes.items() if k in _modes}
+    if not _show:
         reply = ('「%s」的底层推荐表里没有收录它的点法（全 202 舰中 187 舰有推荐），'
                  '下面的天赋原文供指挥官自选：\n\n%s\n\n'
                  '来源：底层数据 raw_data 天赋表。要按某个编码计算，直接把 4 位编码给我，'
                  '如 1212；也可先「查%s」看完整面板与技能。'
                  % (name, _format_talent_block(block), name))
+        _r = dict(_empty)
+        _r['reply'] = reply
+        return _r
+    _parts = []
+    for _mode in _modes:
+        _c = _show.get(_mode)
+        if not _c:
+            continue
+        _note = '（该舰暂无独立 PvE 配点，暂与 PVP 一致）' if (_mode == 'pve' and _pve_fallback) else ''
+        _label = 'PVP' if _mode == 'pvp' else 'PvE'
+        _parts.append('【%s 点法】底层推荐表默认 %s%s\n\n%s'
+                      % (_label, _c, _note, _format_talent_block(block, _c)))
+    reply = ('「%s」天赋点法：\n\n%s\n\n'
+             '来源：底层数据 raw_data 天赋表 ＋ talent_pvp / talent_pve 推荐表'
+             % (name, '\n\n'.join(_parts)))
     _r = dict(_empty)
     _r['reply'] = reply
     return _r
 
 
 # ======================================================================
-# 争锋竞技场「队伍/阵容推荐」（用户口径 2026-10-03）
+# 争锋竞技场「队伍/阵容推荐」交互式路由（用户口径 2026-10-03 初版，2026-10-12 加反问）
 # 问题：问「竞技场中船队伍推荐」，RAG 只捞到「金大船」那几块就作答（正文写的是
 # 「金中船/紫中船」，体量词字面对不上），答案跑偏；换个说法（pvp…）还会撞上服务异常。
 # 做法：攻略《7.1 争锋竞技场简易百科》的「三、参考阵容推荐」本来就按
-# 【金/紫/蓝 × 小/中/大船】分块写好（tools.knowledge._pvp_parse_lineups 已可解析），
-# 这里按用户问到的场质/体量**定向取原文块直出** —— 准、快、零 LLM。
+# 【金/紫/蓝 × 小/中/大船】分块写好（tools.knowledge._pvp_docx_sections 直接解析原稿 docx）。
+# 这里按用户问到的场质/体量**按原攻略格式输出**：场次标题 + 原文段落（说明/优点/缺点/↑注释）
+# + 头像行（一排头像图 + 舰名，取自攻略头像素材，旗舰按原稿黄色高亮）—— 零 LLM、不改写。
+# 头像行的舰名只存在 docx 表格单元格里（转 md 时丢了），故取 docx 原稿而非 md。
+# 反问式（2026-10-12）：用户只说「推荐阵容」/「中船阵容」没指明场次/旗舰时，先反问具体信息
+# （XX 旗舰 / XX 队 / 金紫蓝×小中大），把 pvp_lineup_pending 记进 overrides 跨轮记忆，
+# 再根据后续回答定向出阵容。已明确场次的问法直接出。
 # ======================================================================
 _PVP_LINEUP_RE = re.compile(r'竞技场|争锋|pvp|jjc', re.I)
 _PVP_WANT_RE = re.compile(r'阵容|队伍|配队|推荐|用哪些|带哪些|练哪些')
+# 命名队伍 → 固定场次（用于后续回答里只说「索敌队」「凤栖队」「同航队」等不含场质体量的情形）
+_PVP_TEAM_HINT_RE = re.compile(r'索敌队|利根旗|诺福克旗|贝尔法斯特旗|凤栖队')
+_PVP_TEAM_HINT_SMALL_RE = re.compile(r'同航队|反航队|马桶队')
+# 追问轮退出词：放弃反问，交回其它路由
+_PVP_EXIT_RE = re.compile(r'退出|换话题|不用了|算了|取消|不看了|还是算了|不想要了|别的')
 
 
-def _handle_pvp_lineup(tools, msg: str):
-    """问「竞技场（金/紫/蓝 × 小/中/大）船 队伍/阵容 推荐」→ 直出对应块的攻略原文。
+def _pvp_extract_spec(msg):
+    """从文本解析场次规格：返回 (qs, ss, ships)。
+    qs：场质集合（金/紫/蓝）；ss：体量集合（小/中/大）；ships：命中的已知舰名（已归一为正规名）。"""
+    qs = [q for q in '金紫蓝' if q in msg]
+    ss = [s for s in '小中大' if s in msg]
+    ships = []
+    try:
+        from tools.knowledge import _PVP_ALIAS, _pvp_rarity_map
+        rarity = _pvp_rarity_map() or {}
+        names = sorted(set(rarity) | set(_PVP_ALIAS), key=len, reverse=True)
+        canon = {}
+        for n in names:
+            if n and n in msg:
+                c = _PVP_ALIAS.get(n, n)        # 昵称归一为正规名，再拿去块里检索
+                if c not in canon:
+                    canon[c] = True
+        ships = list(canon)
+    except Exception:
+        pass
+    if _PVP_TEAM_HINT_RE.search(msg):
+        qs, ss = ['金'], ['中']
+    elif _PVP_TEAM_HINT_SMALL_RE.search(msg):
+        qs, ss = ['金'], ['小']
+    return qs, ss, ships
 
-    触发：消息含 竞技场/争锋/pvp **且**含 阵容/队伍/推荐 等词，且能定位到具体分块。
-    未指明场质/体量 → 全部列出（最多 4 块）；定位不到 → 返回 None 交回原链路。
-    """
-    if not msg or not _PVP_LINEUP_RE.search(msg) or not _PVP_WANT_RE.search(msg):
-        return None
+
+def _pvp_ask_reply(overrides, partial=None):
+    """反问：让用户指明场次 / 旗舰 / 队伍方向，并记 pending 跨轮（携带已给的局部规格）。"""
+    if overrides is not None:
+        overrides['pvp_lineup_pending'] = True
+        if partial:
+            overrides['pvp_lineup_partial'] = partial
+    # 已给体量但缺场质（如「中船阵容」）→ 针对性反问「金/紫/蓝 哪个场的中船」
+    if partial and partial.get('ss'):
+        sizes = '、'.join(partial['ss'])
+        reply = ('你想看 **%s船** 阵容里 **金/紫/蓝** 哪个场的？直接说场质即可'
+                 '（如「金」=金%s船、「紫」=紫%s船）。' % (sizes, sizes, sizes))
+    else:
+        reply = ('想看哪一场的阵容？争锋竞技场按 **金/紫/蓝 × 小/中/大船** 分六档'
+                 '（直接说「金大船」「紫中船」即可）。\n'
+                 '也可以告诉我你想用的**旗舰或队伍方向**（比如「丹阳旗舰」「索敌队」），'
+                 '我给你对应阵容 + 阵容分析推荐图。')
+    return {
+        'reply': reply,
+        'tool_outputs': [], 'suggestions': [], 'fill_form': [],
+        'encounter_form': [], 'guide_files': [], 'guide_lib': '', 'ok': True,
+    }
+
+
+def _pvp_answer(tools, qs, ss, ships, overrides):
+    """按场次/舰名取《参考阵容推荐》，**按原攻略格式输出**：场次标题 + 原文段落
+    （说明/优点/缺点/↑注释）+ 头像行（一排头像+舰名，取自攻略头像素材，旗舰高亮）。
+    不统计数量、不把头像堆在末尾。头像行数据取自 docx 原稿（md 丢了行内舰名）。"""
     try:
         from tools.knowledge import _pvp_parse_lineups
         blocks = _pvp_parse_lineups() or {}
     except Exception:
         return None
     if not blocks:
+        if overrides is not None:
+            overrides['pvp_lineup_pending'] = None
         return None
-    qs = [q for q in '金紫蓝' if q in msg]
-    ss = [s for s in '小中大' if s in msg]
-    keys = [k for k in sorted(blocks, key=lambda k: ('金紫蓝'.index(k[0]), '小中大'.index(k[1])))
-            if (not qs or k[0] in qs) and (not ss or k[1] in ss)]
+    # qs/ss 都为空（只给了舰名）时不做场次过滤，留给下方舰名检索分支处理；
+    # 否则 (not qs or ...) 在空列表下恒为真，会误把全部块当成命中
+    if qs or ss:
+        keys = [k for k in sorted(blocks, key=lambda k: ('金紫蓝'.index(k[0]), '小中大'.index(k[1])))
+                if (not qs or k[0] in qs) and (not ss or k[1] in ss)]
+    else:
+        keys = []
+    # 给了舰名但没给场次：搜含该舰的场次块（昵称已归一为正规名）
+    if not keys and ships:
+        hit = sorted({(q, s) for (q, s), text in blocks.items()
+                      if any(sh in text for sh in ships)},
+                     key=lambda k: ('金紫蓝'.index(k[0]), '小中大'.index(k[1])))
+        if len(hit) == 1:
+            keys = hit
+        elif len(hit) > 1:
+            # 舰名跨多场出场 → 反问具体场次（保持 pending，下一轮「金小」即可下钻）
+            if overrides is not None:
+                overrides['pvp_lineup_pending'] = True
+            labels = '、'.join('%s%s' % (q, s) for q, s in hit)
+            return {'reply': ('「%s」在多个场次都有出场：%s。你看哪个场次的阵容？直接说场次即可（如「金小」）。'
+                             % ('、'.join(ships[:3]), labels)),
+                    'tool_outputs': [], 'suggestions': [], 'fill_form': [],
+                    'encounter_form': [], 'guide_files': [], 'guide_lib': '', 'ok': True}
+        # hit == 0 → 落到下方「没检索到」
     if not keys:
+        if overrides is not None:
+            overrides['pvp_lineup_pending'] = None
+        tip = ('参考阵容按场次（金/紫/蓝 × 小/中/大船）分类，没检索到「%s」所在的固定队伍。'
+               '请直接告诉我场次，比如「金大船」「紫中船」。' % '、'.join(ships[:3])) \
+            if ships else '没找到对应场次的固定阵容，请确认场次（金/紫/蓝 × 小/中/大船），比如「金大船」「紫中船」。'
+        return {'reply': tip, 'tool_outputs': [], 'suggestions': [], 'fill_form': [],
+                'encounter_form': [], 'guide_files': [], 'guide_lib': '', 'ok': True}
+    # 按「原攻略格式」输出：场次标题 + 原文段落 + 头像行（一排头像+舰名，攻略头像素材）。
+    # 数据取自 docx 原稿（md 丢了头像行里的舰名）。头像行由 tools.knowledge 出 <<SROW>> 标记，
+    # 前端渲染成一排「头像图 + 名字」；旗舰按原稿黄色高亮。
+    try:
+        from tools.knowledge import _pvp_docx_sections, _pvp_row_marker
+        secs = _pvp_docx_sections() or {}
+    except Exception:
+        secs = {}
+    if not secs:
         return None
-    _CAP = 2600
-    parts, used = [], 0
-    for (q, s) in keys:
-        text = (blocks.get((q, s)) or '').strip()
-        if not text:
+    CAP = 40                      # 单次最多渲染的头像行数（每行 6 艘），避免回复过长
+    parts, rows_used, truncated = [], 0, False
+    for (q, s) in keys[:3]:
+        elems = secs.get((q, s)) or []
+        if not elems:
             continue
-        parts.append('◆ %s·%s船场\n%s' % (q, s, text))
-        used += 1
-        if used >= 4:
-            break
+        parts.append('◆ %s·%s船场' % (q, s))
+        for el in elems:
+            if el[0] == 'p':
+                parts.append(el[1])
+            elif rows_used < CAP:
+                parts.append(_pvp_row_marker(el[1], el[2] if len(el) > 2 else ()))
+                rows_used += 1
+            else:
+                truncated = True
     if not parts:
         return None
-    body = '\n\n'.join(parts)
-    cut = ''
-    if len(body) > _CAP:
-        body = body[:_CAP].rstrip() + '…'
-        cut = '\n（原文较长，此处截断）'
-    head = ('《争锋竞技场简易百科 · 三、参考阵容推荐》原文（%s）：'
-            % '＋'.join('%s%s' % (q, s) for q, s in keys[:used]))
-    reply = (head + '\n\n' + body + cut +
-             '\n\n（原文摘录、未改写。天气与赛季会影响强度，别照抄阵容；'
-             '想看整篇可回复「争锋攻略」。）')
+    if overrides is not None:
+        overrides['pvp_lineup_pending'] = None
+        overrides.pop('pvp_lineup_partial', None)
+    head = ('《争锋竞技场简易百科·参考阵容推荐》（%s）：'
+            % '＋'.join('%s%s' % (q, s) for q, s in keys[:3]))
+    tail = '（攻略原文阵容，未改写；天气与赛季会影响强度，别照抄。想看整篇回复「争锋攻略」。）'
+    if truncated:
+        tail = '（篇幅所限仅显示前 %d 行，余下见原攻略。%s' % (CAP, tail[1:])
+    reply = head + '\n\n' + '\n'.join(parts) + '\n\n' + tail
     return {'reply': reply, 'tool_outputs': [], 'suggestions': [], 'fill_form': [],
-            'encounter_form': [], 'guide_files': [], 'guide_lib': '',
-            'from_kb': True, 'ok': True}
+            'encounter_form': [], 'guide_files': [], 'guide_lib': '', 'ok': True}
+
+
+def _handle_pvp_lineup(tools, msg: str, overrides: dict = None):
+    """争锋竞技场阵容推荐：先反问、再按后续回答定向出阵容（附表格图）。
+
+    首次触发：消息含 阵容/队伍/推荐 等词，且带争锋特有标记
+    （场质金/紫/蓝、体量小/中/大、具体舰名、命名队，或 竞技场/争锋/pvp 信号）。
+    · 已唯一定位（有场质/舰名/命名队，如 金大船/丹阳旗舰）→ 直接出，不反问；
+    · 仅体量或全无（如「中船」「推荐阵容」）→ 反问并记录 pvp_lineup_pending 跨轮，
+      追问轮补的维度会叠加（如「中船」→「金」=金中船）。
+    追问轮（pending 已置）：后续可只说「金大船」「丹阳旗舰」「索敌队」即定位，
+    含退出词则放弃反问交回原链路；仍含糊则再次反问。
+    """
+    m = (msg or '').strip()
+    if not m:
+        return None
+    pending = bool((overrides or {}).get('pvp_lineup_pending'))
+
+    if pending:
+        # 追问轮：不再要求含 pvp 关键词，按后续回答定位（并叠加上轮已给的局部规格）
+        if _PVP_EXIT_RE.search(m):
+            overrides['pvp_lineup_pending'] = None
+            overrides.pop('pvp_lineup_partial', None)
+            return None
+        qs2, ss2, ships2 = _pvp_extract_spec(m)
+        part = (overrides or {}).get('pvp_lineup_partial') or {}
+        # 后续完全没新增信息（仍含糊）→ 继续反问（保留上轮局部规格）
+        if not (qs2 or ss2 or ships2):
+            return _pvp_ask_reply(overrides, part)
+        # 后续补的维度优先；没补的维度沿用上轮反问时已携带的局部规格（如「中船」→「金」=金中）
+        qs = qs2 or part.get('qs', [])
+        ss = ss2 or part.get('ss', [])
+        ships = ships2 or part.get('ships', [])
+        return _pvp_answer(tools, qs, ss, ships, overrides)
+
+    # 首次：必须命中「阵容/队伍/推荐」类问法
+    if not _PVP_WANT_RE.search(m):
+        return None
+    qs, ss, ships = _pvp_extract_spec(m)
+    _has_pvp = bool(_PVP_LINEUP_RE.search(m))
+    # 无 pvp 信号时，必须带争锋特有标记（场质金/紫/蓝 / 体量小中大 / 具体舰名 / 命名队）才认作 PVP，
+    # 否则可能是 PvE 配队问法，交回原链路（不反问、不抢答）。
+    # 场质金/紫/蓝 是争锋独有稀有度档，见到即认作 PVP 阵容问法（如「紫场阵容推荐」→ 全部紫场）；
+    # 仅体量（如「中船」）也认作 PVP（争锋独有分档），但缺场质无法唯一定位 → 走反问。
+    _explicit = bool(qs or ss or ships
+                     or _PVP_TEAM_HINT_RE.search(m) or _PVP_TEAM_HINT_SMALL_RE.search(m))
+    if not (_has_pvp or _explicit):
+        return None
+    # 已有场质 / 舰名 / 命名队（team hint 内部已设 qs/ss）→ 能唯一定位，直接出；
+    # 仅体量 / 全无 → 反问（携带已给的局部规格，后续补场质即可组合，如「中船」→「金」=金中）
+    if qs or ships or _PVP_TEAM_HINT_RE.search(m) or _PVP_TEAM_HINT_SMALL_RE.search(m):
+        return _pvp_answer(tools, qs, ss, ships, overrides)
+    return _pvp_ask_reply(overrides, {'qs': qs, 'ss': ss, 'ships': ships})
 
 
 def _route_guide(tools, msg: str) -> dict:
@@ -2738,6 +2945,52 @@ def _handle_skin_query(tools, msg):
             'expression_hint': '微笑关心'}
 
 
+# ---- 性能优化小开关（战斗界面右上角「SKILL OFF/ON」）确定性路由意图（用户口径 2026-10-10）----
+# 问「性能优化小开关怎么用 / 反和谐怎么弄 / SKILL OFF 怎么关技能动画 / 帧率怎么调 90 帧」这类问题
+# （含反和谐相关问法：反和谐与性能优化共用同一个 extraConfig.json 配置，走同一路由）：
+# 信息库已有《性能优化小开关教程》图（攻略/5 …/1-性能优化小开关教程260107.png）
+# 与 OCR 摘要（img_001：配置路径 + Normal_fps/Limit_fps/Localization 参数），
+# 直接**确定性作答 + 内联教学图**，不调 LLM / 不走向量检索，
+# 避免「性能优化/反和谐」被当成泛化攻略问法交 RAG 后答偏或答成游戏简介。
+_PERF_TOGGLE_RE = re.compile(
+    r'性能优化|小开关|skill\s*(?:off|on)|帧率|帧数|\d{2,3}\s*帧|'
+    r'extraConfig|normal_fps|limit_fps|\bfps\b|'
+    r'反和谐|去和谐|去掉和谐|去除和谐|关和谐|开和谐|破和谐|被和谐|和谐了|和谐掉|'
+    r'和谐模式|和谐开关|和谐补丁|和谐遮挡|'
+    r'立绘和谐|模型和谐|和谐立绘|和谐模型', re.I)
+# top_image.path 相对 知识库/（=web_app 的 KB_STATIC_DIR），前端拼 /kb/ 后内联渲染
+_PERF_TOGGLE_IMAGE = {
+    'path': '攻略/5 立香也能看懂的一图流攻略合集/1-性能优化小开关教程260107.png',
+    'title': '性能优化小开关教程',
+}
+_PERF_TOGGLE_REPLY = (
+    '战斗界面**右上角的「SKILL OFF/ON」**就是性能优化小开关，用来开关技能动画演出：\n'
+    '· **SKILL OFF** → 关闭技能动画，低配机更流畅；\n'
+    '· **SKILL ON** → 恢复技能动画演出。\n'
+    '\n'
+    '想把帧率也拉满到 90 帧，改配置文件即可：\n'
+    '1. 路径：`Android/data/com.megagame.fuxiaou.fuxiaou/files/extraConfig.json`；\n'
+    '2. 把 `Normal_fps`、`Limit_fps` 都由 30 改成 90，`Localization` 保持 1；\n'
+    '3. 操作：把 `extraConfig.json` 后缀改成 `txt` → 文本编辑器打开改参数 → 保存后改回 `json`。\n'
+    '\n'
+    '反和谐也是改同一个 `extraConfig.json`：里面的 `Localization` 字段控制和谐/反和谐显示模式，'
+    '按你想要的版本设好即可（教程里让它保持 1）。\n'
+    '\n'
+    '优化后舰灵立绘更流畅、名字显示更清晰，教学攻略图见下。'
+)
+
+
+def _handle_perf_toggle(tools, msg):
+    """性能优化小开关（SKILL OFF/ON）怎么用：确定性答复 + 内联教学图（免费、不走 LLM）。
+    未命中返回 None，交回其它路由。"""
+    if not _PERF_TOGGLE_RE.search(msg or ''):
+        return None
+    return {'reply': _PERF_TOGGLE_REPLY,
+            'tool_outputs': [], 'suggestions': [], 'fill_form': [],
+            'encounter_form': [], 'guide_files': [], 'guide_lib': '', 'ok': True,
+            'top_image': dict(_PERF_TOGGLE_IMAGE)}
+
+
 # 主题介绍映射：主题词 → (检索词, 判定性引导问题)
 # 生活话题词（真实生活诉求：吃饭/累/心情/身体等）：命中即强制闲聊，不进任何工作/攻略路由。
 # 作 LLM 意图分类的兜底矫正——防止 LLM 偶发把「能帮我做饭吗」这类请求语气误判为攻略建议。
@@ -2849,18 +3102,24 @@ def _extract_multi_ship_names(msg: str, app, max_n: int = 6) -> list:
     return names[:max_n]
 
 
-def _is_theme_intro_ask(msg: str) -> bool:
-    """判定是否为「玩法介绍类」模糊输入：
-    - 含 是什么/什么玩法/好玩吗/什么游戏/介绍 等问句；
-    - 或裸词命中主题映射表 且 无具体操作词（怎么/攻略/模拟/伤害/推荐/配/打/查/数据 等）。"""
-    if re.search(r'是什么|什么玩法|好玩吗|什么游戏|什么类型|介绍下|介绍一下|给我介绍', msg):
-        return True
-    _bare = msg.strip().rstrip('！!？?。，,、 ')
-    if _bare in _THEME_INTRO:
-        if re.search(r'怎么|攻略|模拟|伤害|推荐|配|打|查|数据|保底|排行|加点|多少', msg):
+def _is_theme_intro_ask(msg: str, tools=None) -> bool:
+    """判定是否为「玩法介绍类」明确意图（用户规则 2026-10-07：游戏简介必须明确相关意图才答）：
+    (1) 含主题映射词（拂晓/这游戏/玩法/装备/练级/改造/活动/遭遇战/竞技场/拉古兹/无尽/萌新/新人…）
+        且 无具体操作词（怎么打/模拟/伤害/数据…）→ 即「带游戏名/系统名的咨询」；
+    (2) 无主语的笼统玩法问讯（纯问游戏怎么玩/好不好玩/是什么玩法，且不含任何角色名）。
+    不再用裸「是什么/什么类型」兜底——"是什么类型的装甲"这类角色属性追问不属游戏简介。"""
+    if any(k in msg for k in _THEME_INTRO):
+        if re.search(r'怎么|攻略|模拟|伤害|推荐|配|打|查|数据|保底|排行|加点|多少|强度|配队|就业', msg):
             return False  # 有具体操作词 → 走对应工具
         return True
-    return False
+    # 明确点名角色（如"介绍一下拜蒙/拜蒙的玩法"）→ 是角色查询，不是游戏简介
+    try:
+        if tools is not None and _resolve_ship_query(msg, tools):
+            return False
+    except Exception:
+        pass
+    # 无主语的笼统玩法问讯（不含任何主题/角色词，纯问游戏怎么玩/好不好玩/是什么玩法）
+    return bool(_VAGUE_GAMEPLAY_RE.search(msg))
 
 
 # 游戏简介实时读取（用户铁律 2026-09-10：游戏简介必须实时读取，不走预构建快照）。
@@ -2924,7 +3183,11 @@ def _handle_theme_intro(tools, msg, _bare) -> dict:
                 key = k
                 break
     if key is None:
-        key = '拂晓'
+        # 仅「无主语的笼统玩法问讯」才回落游戏概述；其余无明确相关意图的不强行答游戏简介
+        if _VAGUE_GAMEPLAY_RE.search(msg):
+            key = '拂晓'
+        else:
+            return None  # 无明确相关意图 → 不答游戏简介，交回上层路由
     # 泛新手词（萌新/新人）被子串命中，但整句其实点名了某个真实舰灵 →
     # 这是具体角色咨询（如「前卫厉害吗？新人自选88元选谁好」），不是泛泛入坑介绍。
     # 交回调用方回落角色/攻略链路，避免"新人"二字把具体问题截胡成萌新入门。
@@ -2986,8 +3249,15 @@ def _handle_theme_intro(tools, msg, _bare) -> dict:
                '萌新': '萌新入门', '新人': '萌新入门'}
     lib = lib_map.get(key, '')
     _disp = {'jjc': '竞技场', 'jzc': '竞技场'}.get(key, key)
+    # 游戏简介 / 新手类 → 除简介外，同时推荐新人相关攻略（打开攻略面板并列出新人类目）
+    _newbie_rec = ''
+    if key in ('拂晓', '这游戏', '萌新', '新人'):
+        lib = '萌新入门'
+        _newbie_rec = ('\n\n📘 新人推荐攻略：萌新入门 · 练级攻略 · 装备系统 · 舰灵改造。'
+                       '可直接问我「XX攻略」（如「萌新入门攻略」「练级攻略」）查看详情，'
+                       '或点开左侧攻略面板浏览。')
     return {'reply': ('关于「' + _disp + '」（分类：' + (topic or '综合') + '）：\n\n'
-                      + (info if info else f'知识库「{key}」相关内容如下。') + '\n\n' + ask),
+                      + (info if info else f'知识库「{key}」相关内容如下。') + '\n\n' + ask + _newbie_rec),
             'tool_outputs': [], 'suggestions': [], 'fill_form': [], 'encounter_form': [],
             'guide_files': [], 'guide_lib': lib, 'ok': True}
 
@@ -4659,7 +4929,53 @@ def _intent_guide(tools, msg, agent=None, overrides=None, decision=None):
     return _route_guide(tools, msg)
 
 
+# ---- 上下文追问拦截（用户反馈 2026-10-07）：上轮已讨论某角色（overrides['last_role'] 已记录），
+#   本句是无显式舰名、但明显是「关于那个角色的后续问题」（如「是什么类型的装甲」），
+#   必须作为该角色的上下文回答走角色查询分支，而不能被 _handle_theme_intro 兜底成「游戏简介」。
+#   返回该角色名表示「应按上下文追问处理」，否则返回 ''（走原路由）。
+_FOLLOWUP_ATTR = ('装甲', '类型', '属性', '技能', '强度', '耐久', '血量', '炮击', '雷击',
+                  '航空', '防空', '护甲', '特性', '就业', '配队', '阵容', '怎么打',
+                  '如何打', '厉害', '强吗', '值不值', '缺点', '优点', '玩法')
+_FOLLOWUP_Q = re.compile(r'是什么|怎么样|如何|多少|高吗|低吗|强不|弱不')
+# 无主语的笼统玩法问讯（不带任何角色/主题词，纯问游戏怎么玩/好不好玩/是什么玩法）：
+# 用于游戏简介「明确相关意图」判定，仅这类才回落游戏概述。
+_VAGUE_GAMEPLAY_RE = re.compile(
+    r'是什么玩法|什么玩法|什么游戏|怎么玩|怎么入门|怎么开始|怎么上手|玩法是什么|玩法介绍|怎么玩这个|好不好玩|好玩吗|玩法|游戏介绍')
+
+
+def _context_followup_target(msg: str, overrides, tools) -> str:
+    """识别「无主语的上下文追问」：返回应作为主语的 last_role，否则 ''。"""
+    subj = (overrides or {}).get('last_role', '') or ''
+    if not subj:
+        return ''
+    # 含玩法/系统主题词（遭遇战/装备/改造/活动/练级/拂晓/这游戏…）→ 是真正的玩法介绍，不抢
+    if any(k in msg for k in _THEME_INTRO):
+        return ''
+    # 消息已显式点名某角色 → 走正常角色查询，不视为对 last_role 的追问
+    try:
+        if tools is not None and _resolve_ship_query(msg, tools):
+            return ''
+    except Exception:
+        pass
+    # 追问信号：属性词 或 泛问答词（是什么/怎么样/多少/强吗…）
+    if any(w in msg for w in _FOLLOWUP_ATTR) or _FOLLOWUP_Q.search(msg):
+        return subj
+    return ''
+
+
 def _intent_theme_intro(tools, msg, agent=None, overrides=None, decision=None):
+    # 上下文追问优先：若本句是对上轮角色（last_role）的后续提问，转角色查询分支，
+    # 避免被 _handle_theme_intro 兜底成「游戏简介」
+    _subj = _context_followup_target(msg, overrides, tools)
+    if _subj:
+        _resolved = _subj + msg
+        _r = _intent_query(tools, _resolved, agent=agent, overrides=overrides, decision=decision)
+        if _r is not None:
+            return _r
+        _r = _ship_panel_reply(_subj, tools)
+        if _r is not None:
+            return _r
+        return None  # 角色查询无结果 → 交回上层，绝不再回落游戏简介
     bare = (msg or '').strip().rstrip('！!？?。，,、 ')
     return _handle_theme_intro(tools, msg, bare)
 
@@ -4953,7 +5269,7 @@ def route_work(tools, overrides, msg: str, agent=None, allow_intent_llm=True, up
     # 分类成功 → _li_is(*kinds) 按意图门控各分支，防止正则死板误路由；
     # 分类失败/超时 → 全放行走原正则链路（可用性兜底）；
     # 流程态输入（计算轮菜单/表单、好感补参追问）是结构化状态机输入，不过 LLM 分类。
-    if overrides.get('calc_state') or overrides.get('favor_pending'):
+    if overrides.get('calc_state') or overrides.get('favor_pending') or overrides.get('pvp_lineup_pending'):
         _li = None
         _li_gate = True
     elif allow_intent_llm:
@@ -5123,6 +5439,31 @@ def route_work(tools, overrides, msg: str, agent=None, allow_intent_llm=True, up
         if r is not None:
             return r
 
+    # ---- 弹种机制追问上下文拼接（用户反馈 2026-10-07）：上轮问过 克制/系数（overrides['last_mech'] 已记录），
+    # 本轮只说「重甲呢/那中甲呢/轻甲？」这类缺武器词的短追问 → 用上轮武器+弹种 + 本轮护甲 + 上轮指标
+    # 重组完整问句再查表，避免丢失原意落进 LLM（曾把"重甲呢"答成穿甲概率表）。
+    _lm = (overrides or {}).get('last_mech') or {}
+    _flw = re.search(r'轻甲|中甲|重甲', msg)
+    if _lm and _flw and not re.search(r'高平|两用|三式|近战|雷击|鱼雷|轰炸|驱逐|轻巡|重巡|战列|穿甲|高爆|通常弹|弹种', msg):
+        # 仅当整句基本就是「(那?)XX甲(呢/？)」式短追问：去掉甲词与 呢/那/？/对/的 后不应有残余
+        _rest = re.sub(r'轻甲|中甲|重甲|呢|那|？|\?|对|的', '', msg).strip()
+        if not _rest:
+            from tools.knowledge import _mech_weapon_ammo_label, _mech_metric_word
+            _wa = _lm.get('weapon_ammo') or _mech_weapon_ammo_label(msg)
+            _mt = _lm.get('metric') or _mech_metric_word(msg)
+            if _wa:
+                _syn = _wa + '对' + _flw.group() + _mt
+                _mtool = _tool(tools, 'ammo_mech_qa')
+                if _mtool:
+                    try:
+                        _sout = _mtool.call({'query': _syn})
+                    except Exception:
+                        _sout = None
+                    if _sout:
+                        text = _sout if isinstance(_sout, str) else str(_sout)
+                        return {'reply': text, 'tool_outputs': [text], 'suggestions': [], 'fill_form': [],
+                                'encounter_form': [], 'guide_files': [], 'guide_lib': '', 'ok': True}
+
     # ---- 克制/修正/系数类问题 → 弹种速查工具（确定性数值查表）----
     # 用户禁止乱编数据：克制系数曾落进 LLM 口胡（「高平两用炮对重甲 0.8」，真实按表 0.6）。
     # 凡 甲类 + 武器/弹种词 + 克制/修正/系数 → 先走 ammo_mech_qa 直查 mappings 同源表；
@@ -5138,6 +5479,14 @@ def route_work(tools, overrides, msg: str, agent=None, allow_intent_llm=True, up
                 _mout = None
             if _mout:
                 text = _mout if isinstance(_mout, str) else str(_mout)
+                # 记录弹种机制上下文（武器+弹种+指标），供后续「重甲呢」式追问拼接原意
+                try:
+                    from tools.knowledge import _mech_weapon_ammo_label, _mech_metric_word
+                    if re.search(r'克制|修正|系数', msg):
+                        overrides['last_mech'] = {'weapon_ammo': _mech_weapon_ammo_label(msg),
+                                                  'metric': _mech_metric_word(msg)}
+                except Exception:
+                    pass
                 return {'reply': text, 'tool_outputs': [text], 'suggestions': [], 'fill_form': [],
                         'encounter_form': [], 'guide_files': [], 'guide_lib': '', 'ok': True}
 
@@ -5415,19 +5764,34 @@ def route_work(tools, overrides, msg: str, agent=None, allow_intent_llm=True, up
 
     # ---- 玩法介绍类：非具体主题词/“XX是什么玩法” → 从知识库抽取介绍 + 判定性引导问题 ----
     # 伤害公式问句（"伤害计算公式是什么"）不当作玩法介绍，交下方公式拦截输出一图流
-    if _li is None and _is_theme_intro_ask(msg) and not ('伤害' in msg and _explain_q):
-        r = _handle_theme_intro(tools, msg, _bare)
-        if r is not None:
-            return r
+    if _li is None and _is_theme_intro_ask(msg, tools) and not ('伤害' in msg and _explain_q):
+        # 上下文追问（无主语追问上轮角色）→ 转角色查询，不回落游戏简介
+        _subj = _context_followup_target(msg, overrides, tools)
+        if _subj:
+            _r = _ship_panel_reply(_subj, tools)
+            if _r is not None:
+                return _r
+            # 角色查询无结果 → 继续往下走（攻略/问答兜底），不进游戏简介
+        else:
+            r = _handle_theme_intro(tools, msg, _bare)
+            if r is not None:
+                return r
     # ---- 模糊口语问句（"争锋是啥/啥玩意/干嘛的"）→ LLM 意图分析，不靠正则补词 ----
     # 触发：主题词命中 + 无明确操作词 + 正则问句未接住 → 让 LLM 判断是 介绍/攻略/其他
     if _li is None and not re.search(r'攻略|模拟|伤害|查|配|数据|保底|排行|加点|多少|怎么|如何|推荐|阵容|天赋|boss|白天|黑夜|前排|后排|打|算', msg) \
             and any(k in msg for k in _THEME_INTRO):
         intent = _classify_fuzzy_intent(msg)
         if intent == '介绍':
-            r = _handle_theme_intro(tools, msg, _bare)
-            if r is not None:
-                return r
+            # 上下文追问（无主语追问上轮角色）→ 转角色查询，不回落游戏简介
+            _subj = _context_followup_target(msg, overrides, tools)
+            if _subj:
+                _r = _ship_panel_reply(_subj, tools)
+                if _r is not None:
+                    return _r
+            else:
+                r = _handle_theme_intro(tools, msg, _bare)
+                if r is not None:
+                    return r
         elif intent == '攻略':
             r = _route_guide(tools, msg)
             if r is not None:
@@ -5724,9 +6088,16 @@ def route_work(tools, overrides, msg: str, agent=None, allow_intent_llm=True, up
                 if r is not None:
                     return r
         elif intent == '介绍':
-            r = _handle_theme_intro(tools, msg, _bare)
-            if r is not None:
-                return r
+            # 上下文追问（无主语追问上轮角色）→ 转角色查询，不回落游戏简介
+            _subj = _context_followup_target(msg, overrides, tools)
+            if _subj:
+                _r = _ship_panel_reply(_subj, tools)
+                if _r is not None:
+                    return _r
+            else:
+                r = _handle_theme_intro(tools, msg, _bare)
+                if r is not None:
+                    return r
         elif intent == '攻略':
             r = _route_guide(tools, msg)
             if r is not None:

@@ -16,7 +16,7 @@ import traceback
 
 
 def _pregate_result(tools, overrides, msg):
-    """三条业务前置闸（就业 / 天赋 / 争锋）逐个探。返回 (rule_id, result) 或 None。
+    """业务/主题前置闸（性能优化 / 就业 / 天赋 / 争锋）逐个探。返回 (rule_id, result) 或 None。
 
     抽成函数是为了让「前置闸是**门**还是**网**」变成运行期策略（见 route_work_dispatch）：
       gate （默认）→ 前置**先短路**（与改造前逐字一致）
@@ -26,11 +26,17 @@ def _pregate_result(tools, overrides, msg):
     if (overrides or {}).get('calc_state'):
         return None
     from core import calc_flow as _cf
-    for rule_id, fn_name in (('pregate.ship_use', '_handle_ship_use'),
+    for rule_id, fn_name in (('pregate.perf_toggle', '_handle_perf_toggle'),
+                             ('pregate.ship_use', '_handle_ship_use'),
                              ('pregate.talent_ask', '_handle_talent_ask'),
                              ('pregate.pvp_lineup', '_handle_pvp_lineup')):
         try:
-            r = getattr(_cf, fn_name)(tools, msg)
+            # 争锋阵容反问式需要跨轮记忆（pvp_lineup_pending），故把 overrides 传给它；
+            # 其余 handler 不接收该参数（保持原签名，多传会被忽略的逻辑见各自定义）。
+            if fn_name == '_handle_pvp_lineup':
+                r = getattr(_cf, fn_name)(tools, msg, overrides)
+            else:
+                r = getattr(_cf, fn_name)(tools, msg)
         except Exception:
             continue
         if r is not None:

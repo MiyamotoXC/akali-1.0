@@ -126,7 +126,7 @@ def run(script, args_list, verbose):
         print(f"  [错误] 找不到脚本：{script_path}")
         return False
     cmd = [PY, script_path] + args_list
-    print(f"\n▶ python {script} {' '.join(args_list)}")
+    print(f"\n> python {script} {' '.join(args_list)}")
     if verbose:
         r = subprocess.run(cmd, cwd=_HERE, capture_output=True, text=True, encoding="utf-8")
         if r.stdout:
@@ -267,12 +267,12 @@ def main():
             continue
         if not fn():
             ok = False
-            print(f"  ✗ {name} 失败，终止后续环节。")
+            print(f"  x {name} 失败，终止后续环节。")
             break
 
     print("\n" + "=" * 60)
     if ok:
-        print("构建完成 ✓")
+        print("构建完成 OK")
         print("产物：")
         for label, p in [("角色数据", RAW_JSON), ("攻略索引", GUIDE_INDEX), ("Agent 知识库", AGENT_KB),
                          ("攻略QA库", GUIDE_QA_JSON), ("攻略QA向量库", GUIDE_QA_NPZ),

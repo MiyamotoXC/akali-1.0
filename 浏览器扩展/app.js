@@ -1023,6 +1023,25 @@ function renderSecretaryReply(data, msgEl) {
         + '" alt="' + t + '"></div>';
     });
   }
+  // 头像行标记 <<SROW>>path~舰名~旗舰（项间 ;;）：渲染成「一排头像 + 名字」的攻略表格行
+  if (/&lt;&lt;SROW&gt;&gt;/.test(html)) {
+    const ts = credGet('arkly_api_token') || '';
+    const qs = ts ? '?token=' + encodeURIComponent(ts) : '';
+    html = html.replace(/&lt;&lt;SROW&gt;&gt;([^<\n]+)/g, function (m, payload) {
+      const items = payload.split(';;').map(function (it) {
+        const a = it.split('~');
+        const p = a[0] || '';
+        const t = a[1] || '';
+        const fl = a[2] === '1';
+        const img = p
+          ? '<img loading="lazy" src="' + resolveAsset('/avatar/' + p.replace(/\\/g, '/')) + qs + '" alt="' + t + '">'
+          : '<div class="ship-row-ph"></div>';
+        return '<div class="ship-row-item' + (fl ? ' hl' : '') + '">' + img
+          + '<div class="ship-row-name">' + t + '</div></div>';
+      }).join('');
+      return '<div class="ship-row">' + items + '</div>';
+    });
+  }
   // 原型史标记 <<STORY>>舰名：渲染为「历史上的故事」小按钮，点击弹窗查看
   if (/&lt;&lt;STORY&gt;&gt;/.test(html)) {
     html = html.replace(/&lt;&lt;STORY&gt;&gt;([^<\n]+)/g, function (m, name) {
@@ -2712,6 +2731,21 @@ function _fbAddReaction(msgEl, emoji) {
   box.appendChild(span);
 }
 
+// 猪/糖「好玩」表情：集中贴到对话框右下角的贴纸托盘（右对齐、向左累积，纯展示不上报）
+function _fbAddStickerTray(emoji) {
+  let tray = document.getElementById('stickerTray');
+  if (!tray) {
+    tray = document.createElement('div');
+    tray.id = 'stickerTray';
+    tray.className = 'sticker-tray';
+    document.body.appendChild(tray);
+  }
+  const span = document.createElement('span');
+  span.textContent = emoji;
+  tray.appendChild(span);
+  while (tray.children.length > 50) tray.removeChild(tray.firstChild);
+}
+
 // 提交一次反馈（等价旧 💡：POST /api/feedback，feedback_type=unsatisfied）
 function _fbSubmit(msgEl, emoji) {
   const conv = _fbCollectConversation(msgEl);
@@ -2756,7 +2790,7 @@ function _fbInPicker(node) {
 //     计算面板等点了**毫无效果**（不贴徽章、也不上报），避免让人误以为闲聊的反馈也计进去了。
 //   同一轮对话只上报一次，重复点 💡 不再重复提交。
 function _fbPick(msgEl, emoji, isFeedback) {
-  if (!isFeedback) { _fbAddReaction(msgEl, emoji); return; }   // 🍬/🐷：纯好玩，随处可贴
+  if (!isFeedback) { _fbAddStickerTray(emoji); return; }   // 🍬/🐷：纯好玩，集中贴到右下角托盘
   if (msgEl.getAttribute('data-from-kb') !== '1') return;      // 闲聊/固定话术等：💡 不生效
   _fbAddReaction(msgEl, emoji);
   if (_fbRoundDone(msgEl)) return;                             // 本轮已上报 → 不重复提交

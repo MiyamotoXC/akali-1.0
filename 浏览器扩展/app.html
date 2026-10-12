@@ -551,6 +551,17 @@
   .avatar-wrap { margin-bottom: 8px; text-align: left; }
   .avatar-img { width: 84px; height: 84px; object-fit: cover; border-radius: 12px;
     border: 2px solid var(--accent); background: #fff; display: block; box-shadow: 0 1px 4px rgba(0,0,0,0.12); }
+  /* 攻略头像行 <<SROW>>：一排头像 + 名字（仿攻略表格行；旗舰高亮） */
+  .ship-row { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0 10px; }
+  .ship-row-item { width: 64px; text-align: center; }
+  .ship-row-item img { width: 64px; height: 64px; object-fit: cover; border-radius: 8px;
+    border: 1px solid var(--line, #d8dee4); background: #fff; display: block; }
+  .ship-row-ph { width: 64px; height: 64px; border-radius: 8px;
+    border: 1px dashed var(--line, #d8dee4); background: #f2f5f7; }
+  .ship-row-name { font-size: 12px; line-height: 1.15; margin-top: 3px;
+    color: var(--ink, #33414c); word-break: break-all; }
+  .ship-row-item.hl img { border: 2px solid #e0a800; box-shadow: 0 0 0 2px #ffe08a; }
+  .ship-row-item.hl .ship-row-name { color: #b8860b; font-weight: 600; }
   /* 历史上的故事按钮：查询角色信息尾部的小按钮 */
   .story-btn { display: inline-block; margin: 6px 2px 2px 0; padding: 4px 12px;
     font-size: 14px; color: var(--accent); background: var(--accent-soft);
@@ -722,6 +733,19 @@
     background: rgba(255, 255, 255, .85); border: 1px solid var(--line);
     box-shadow: 0 1px 3px rgba(31, 58, 84, .12);
   }
+  /* 猪/糖「好玩」表情托盘：钉在对话框右下角，右对齐、向左累积（纯展示，不挡操作） */
+  .sticker-tray {
+    position: fixed; right: 12px; bottom: 76px;
+    max-width: 62vw; display: flex; flex-wrap: wrap;
+    justify-content: flex-end; align-content: flex-end; gap: 4px;
+    z-index: 50; pointer-events: none;
+  }
+  .sticker-tray span {
+    padding: 1px 7px; border-radius: 999px;
+    background: rgba(255, 255, 255, .85); border: 1px solid var(--line);
+    box-shadow: 0 1px 3px rgba(31, 58, 84, .12);
+    font-size: 18px; line-height: 1; user-select: none; -webkit-user-select: none;
+  }
 </style>
 </head>
 <body>
@@ -737,7 +761,7 @@
   <!-- 悬浮球：挂在标题栏阿卡莉头像下方，点击展开工具菜单；逻辑见 JS「功能菜单（悬浮球）」区块 -->
   <!-- open：参考图要求「悬浮窗开始默认是打开的」 -->
   <div class="fab-wrap open" id="fabWrap">
-    <button class="fab-ball flipped" id="fabBall" title="港区工具（底色环形显示剩余算力）">
+    <button class="fab-ball flipped" id="fabBall" title="港区工具（底色环形显示剩余算力；每周四刷新算力）">
       <span class="fab-flip">
         <span class="fab-face fab-face-front" aria-hidden="true"></span>
         <span class="fab-face fab-face-back">
@@ -808,7 +832,7 @@
     <!-- 算力提醒：只在剩余不足 10% 时自动出现（用户口径 2026-09-25：用户不需要
          常驻查看用量，到阈值提醒即可）。由 checkQuotaAlert() 填充。 -->
     <div class="quota-bar" id="quotaBar" style="display:none"
-         title="同一网络/设备共享，每周自动恢复；基础功能不受影响">
+         title="同一网络/设备共享，每周四刷新算力；基础功能不受影响">
       <span class="quota-dot"></span><span id="quotaText"></span>
     </div>
     <div class="input-row">

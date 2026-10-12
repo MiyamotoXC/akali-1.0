@@ -185,7 +185,7 @@ RULES: Tuple[Rule, ...] = (
          samples=(),
          ),
     Rule('pregate.pvp_lineup', 'converge', 'pregate', '通用工具/core/route_dispatch.py:46',
-         '_handle_pvp_lineup「争锋 中船 队伍推荐」→ 定向取原文块',
+         '_handle_pvp_lineup「争锋 中船 队伍推荐」→ 按原攻略格式出（段落＋头像行）',
          'route_dispatch.py:42「RAG 只捞到『金大船』那几块（正文写的是金中船/紫中船），体量词对不上」',
          retire_when='检索侧能按场质/体量分块命中（修完体量词对齐后可退场）',
          probe=_c(r'竞技场|争锋|pvp|jjc', re.I),

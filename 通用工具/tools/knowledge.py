@@ -302,13 +302,17 @@ class QueryGuide(BaseTool):
             lines.append("<<GUIDE_LIB>>")
             return "\n".join(lines)
 
-        # 1) topic_routing 主题名匹配（优先：主题名精准命中）
-        matched_docs = None
+        # 1) topic_routing 主题名匹配（大小写不敏感；命中多个主题则取并集，
+        #    避免被更短/更泛的主题名提前 break 而漏掉相关文档——例如 "PVP" 同时命中
+        #    PVP天赋 / PVP争锋 时，应把《争锋竞技场简易百科》一并列出）
+        kw_low = keyword.lower()
+        _matched_ids = set()
         for topic, ids in topic_routing.items():
-            if topic in keyword or keyword in topic:
-                matched_docs = [d for d in docs if d['id'] in ids]
-                break
-        # 2) query_patterns 正则匹配（按「命中词最长优先」：如"争锋竞技场"胜过宽泛"竞技场"）
+            tl = (topic or '').lower()
+            if tl and (tl in kw_low or kw_low in tl):
+                _matched_ids.update(ids)
+        matched_docs = [d for d in docs if d['id'] in _matched_ids] if _matched_ids else None
+        # 2) query_patterns 正则匹配（大小写不敏感；按「命中词最长优先」：如"争锋竞技场"胜过宽泛"竞技场"）
         if matched_docs is None:
             import re as _re
             best_len, best_docs = 0, None
@@ -316,12 +320,12 @@ class QueryGuide(BaseTool):
                 pat = qp.get('pattern', '')
                 if not pat:
                     continue
-                # keyword 命中 pattern 词，或 pattern 词出现在 keyword 中
+                # keyword 命中 pattern 词，或 pattern 词出现在 keyword 中（均大小写不敏感）
                 words = [w.strip() for w in _re.split(r'\|', pat) if w.strip()]
-                hit = _re.search(pat, keyword)
+                hit = _re.search(pat, keyword, _re.IGNORECASE)
                 if hit is None:
                     for w in words:
-                        if w and w in keyword:
+                        if w and w.lower() in kw_low:
                             hit = w
                             break
                 if hit:
@@ -332,11 +336,9 @@ class QueryGuide(BaseTool):
             matched_docs = best_docs
         # 3) 文档 title 子串匹配（指名具体文档）
         if matched_docs is None:
-            kw_low = keyword.lower()
             matched_docs = [d for d in docs if kw_low in d['title'].lower()]
         # 4) summary 全文兜底匹配
         if matched_docs is None:
-            kw_low = keyword.lower()
             matched_docs = [d for d in docs if kw_low in (d.get('summary') or '').lower()]
 
         if not matched_docs:
@@ -1566,7 +1568,20 @@ _FRAME_Q_RE = re.compile(r'还是|分别|对应|归属|区别|对比')
 #   ③ 轻量自检：命中但处置信边缘时，校验片段覆盖度，不足则「问题+缺口」补充检索
 # ======================================================================
 
-def _expand_queries_llm(query: str):
+def _context_block_from_history(history, max_turns=6):
+    """把最近几轮对话压成紧凑文本块，供检索改写/作答 LLM 理解指代与追问（多轮上下文能力）。"""
+    lines = []
+    for item in list(history or [])[-max_turns:]:
+        role = str((item or {}).get('role') or '')
+        content = str((item or {}).get('content') or '').strip()
+        if role == 'user' and content:
+            lines.append('用户：' + content[:300])
+        elif role == 'assistant' and content:
+            lines.append('阿卡莉：' + content[:300])
+    return '\n'.join(lines)
+
+
+def _expand_queries_llm(query: str, context=None):
     """低置信闸门触发：1 次 LLM 把问题拆成 2~3 个聚焦子查询。失败返回 []。"""
     try:
         from openai import OpenAI
@@ -1581,7 +1596,8 @@ def _expand_queries_llm(query: str):
                  '拆成 2~3 个更聚焦、互不重复的子查询，分别覆盖问题的不同侧面，'
                  '便于多路向量检索召回更全。保持原意与专有名词，不要改写风格。'
                  '只输出 JSON：{"queries":["子查询1","子查询2","子查询3"]}'},
-                {'role': 'user', 'content': query},
+                {'role': 'user', 'content': (('【最近几轮对话（仅供理解省略/指代/追问，补全完整问句）】\n'
+                                             + context + '\n\n用户问题：' + query) if context else query)},
             ],
             temperature=0.0,
             extra_body=cfg['generate_cfg']['extra_body'],
@@ -1597,13 +1613,13 @@ def _expand_queries_llm(query: str):
         return []
 
 
-def _multi_query_retrieve(query: str, max_results: int = 4):
+def _multi_query_retrieve(query: str, max_results: int = 4, context=None):
     """低置信闸门触发：扩展子查询 → 各 retrieve_guide → RRF 融合去重 → (order_indices, scores)。
 
     返回 None 表示无有效子查询或检索失败，调用方回落原 low 行为。
     scores 为各 chunk 在子查询中的最高向量分（供下方阈值过滤/重排复用）。
     """
-    subs = _expand_queries_llm(query)
+    subs = _expand_queries_llm(query, context)
     if not subs:
         return None
     data = _load_guide_qa()
@@ -1644,7 +1660,7 @@ def _multi_query_retrieve(query: str, max_results: int = 4):
     return order, max_scores
 
 
-def _selfcheck_llm(query: str, frag: str):
+def _selfcheck_llm(query: str, frag: str, context=None):
     """轻量自检：片段是否足够直接回答用户问题。充足返回 None；不足返回 {'gap':...}；失败返回 None。"""
     try:
         from openai import OpenAI
@@ -1658,7 +1674,9 @@ def _selfcheck_llm(query: str, frag: str):
                  '你是答案覆盖度校验器，不回答。给定用户问题与一段知识片段，'
                  '判断该片段是否足以直接、完整地回答用户问题。'
                  '只输出 JSON：{"sufficient":true/false,"gap":"若不足，用户还需知道什么（一句话，用于补充检索）"}'},
-                {'role': 'user', 'content': '用户问题：%s\n\n知识片段：%s' % (query, frag)},
+                {'role': 'user', 'content': (('【最近几轮对话（仅供理解省略/指代/追问）】\n'
+                                            + context + '\n\n用户问题：%s\n\n知识片段：%s' % (query, frag))
+                                           if context else '用户问题：%s\n\n知识片段：%s' % (query, frag))},
             ],
             temperature=0.0,
             extra_body=cfg['generate_cfg']['extra_body'],
@@ -1675,7 +1693,7 @@ def _selfcheck_llm(query: str, frag: str):
         return None
 
 
-def _selfcheck_supplement(query: str, base_order, base_scores, max_results: int, data):
+def _selfcheck_supplement(query: str, base_order, base_scores, max_results: int, data, context=None):
     """增强③：当前 top 片段处置信边缘时，校验覆盖度；不足则「问题+缺口」补充检索并并入。
 
     返回 (order, scores, top) 或 None（不补充/补充后仍弱）。
@@ -1688,14 +1706,14 @@ def _selfcheck_supplement(query: str, base_order, base_scores, max_results: int,
         return None
     if not frag:
         return None
-    suf = _selfcheck_llm(query, frag)
+    suf = _selfcheck_llm(query, frag, context)
     if not suf:
         return None
     gap = str(suf.get('gap') or '').strip()
     if not gap:
         return None
     aug = (query + ' ' + gap).strip()
-    mq = _multi_query_retrieve(aug, max_results)
+    mq = _multi_query_retrieve(aug, max_results, context)
     if not mq:
         return None
     order2, scores2 = mq
@@ -1715,7 +1733,7 @@ def _selfcheck_supplement(query: str, base_order, base_scores, max_results: int,
     return merged, comb, top2
 
 
-def _guide_rag_search(query: str, max_results: int = 4):
+def _guide_rag_search(query: str, max_results: int = 4, context=None):
     """攻略片段检索核心（向量 + 关键词 RRF 融合）→ (text, reason)。
 
     把原 GuideRAG.call 里的检索逻辑抽出来复用——GuideRAG（问题为中心）与
@@ -1783,7 +1801,7 @@ def _guide_rag_search(query: str, max_results: int = 4):
     if not len(order) or top < _GUIDE_QA_SCORE_SHOW:
         # 增强①：低置信闸门触发多查询改写（RRF 融合）；命中则就地提升、复用下方格式化
         if _agent_enhance_on():
-            mq = _multi_query_retrieve(query, max_results)
+            mq = _multi_query_retrieve(query, max_results, context)
             if mq:
                 order2, scores2 = mq
                 top2 = max((float(scores2[i]) for i in order2), default=0.0)
@@ -1796,7 +1814,7 @@ def _guide_rag_search(query: str, max_results: int = 4):
         # 增强③：命中但处置信边缘 [SHOW, SHOW+MARGIN) 时，轻量自检是否真正覆盖问题，
         # 不足则用「问题+缺口」补充检索（复用多查询改写）。高分命中时零额外开销。
         if _agent_enhance_on() and top < _GUIDE_QA_SCORE_SHOW + _SELFCHECK_MARGIN:
-            supp = _selfcheck_supplement(query, list(order), scores, max_results, data)
+            supp = _selfcheck_supplement(query, list(order), scores, max_results, data, context)
             if supp:
                 order, scores, top = supp
     order = _semantic_rerank(query, list(order), scores, data)
@@ -1862,13 +1880,14 @@ class GuideRAG(BaseTool):
     def call(self, params, **kwargs):
         params = self._verify_json_format_args(params)
         query = (params.get('query') or '').strip()
+        context = (params.get('context') or '')
         try:
             max_results = max(1, min(int(params.get('max_results') or 4), 8))
         except (ValueError, TypeError):
             max_results = 4
         if not query:
             return "请输入要检索的攻略问题。"
-        text, reason = _guide_rag_search(query, max_results)
+        text, reason = _guide_rag_search(query, max_results, context=context)
         if text:
             return text
         if reason == 'nobuild':
@@ -2210,6 +2229,162 @@ def _pvp_count_block(text, names_sorted):
     return counts
 
 
+def _pvp_build_table(keys, app=None):
+    """按场次 key 列表生成「参考阵容角色统计表」文本（攻略表格阵容部分，非原文散文）。
+
+    返回形如 `◆ 金·中船场：夕立（紫）×4、罗恩（金）×3 …` 的多行串；无命中返回 None。
+    app 可选，用于过滤信息不全的角色（与 PvpRoleRecommend 行为一致）。"""
+    blocks = _pvp_parse_lineups()
+    if not blocks or not keys:
+        return None
+    rarity = _pvp_rarity_map()
+    names_sorted = sorted(set(rarity) | set(_PVP_ALIAS), key=len, reverse=True)
+    out, multi, any_row = [], {}, False
+    for (q, s) in sorted(keys, key=lambda k: ('金紫蓝'.index(k[0]), '小中大'.index(k[1]))):
+        if (q, s) not in blocks:
+            continue
+        counts = _pvp_count_block(blocks[(q, s)], names_sorted)
+        if not counts:
+            continue
+        ranked = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[:8]
+        parts = []
+        for n, c in ranked:
+            real = _PVP_ALIAS.get(n, n)
+            # 信息不全的角色不推荐（缺任何基础信息视同"没有该角色"，推荐了也查不了/算不了）
+            if app is not None and real in getattr(app, 'storage', {}) \
+                    and not app.is_ship_complete(real):
+                continue
+            r = rarity.get(real, '')
+            tag = f'（{r}）' if r else ''
+            parts.append(f'{n}{tag}×{c}')
+            multi[real] = multi.get(real, 0) + 1
+        if parts:
+            out.append(f'◆ {q}·{s}船场：' + '、'.join(parts))
+            any_row = True
+    if not any_row:
+        return None
+    # 跨多场时给出泛用角色（与单场次统计互补，便于组队）
+    if len(keys) > 1:
+        vers = [n for n, c in sorted(multi.items(), key=lambda kv: -kv[1]) if c >= 3]
+        if vers:
+            out.append(f'——多场次泛用（≥3 种场次在列）：{"、".join(vers[:8])}')
+    return '\n'.join(out)
+
+
+def _pvp_ships_in_text(text):
+    """从场次原文里抽取出现的舰名（含攻略昵称，长名优先）；返回去重列表（可能含别名写法）。"""
+    rarity = _pvp_rarity_map()
+    names_sorted = sorted(set(rarity) | set(_PVP_ALIAS), key=len, reverse=True)
+    return list(_pvp_count_block(text, names_sorted).keys())
+
+
+def _pvp_ship_avatar(name):
+    """舰名 → 头像相对路径（图片素材库，复用 query.find_avatar，自动归一别名）；
+    找不到返回 ''。"""
+    try:
+        from tools.query import find_avatar
+        real = _PVP_ALIAS.get(name, name)
+        return find_avatar(real) or ''
+    except Exception:
+        return ''
+
+
+# 攻略头像行里的舰名 → 头像库规范名（补 find_avatar 覆盖不到的简称/昵称/代号）
+_PVP_ROW_ALIAS = {
+    '北卡': '北卡罗来纳', '明尼': '明尼阿波利斯', '欧根': '欧根亲王',
+    '贝法': '贝尔法斯特', '舍尔': '舍尔海军上将', '齐柏林改': '齐柏林伯爵改',
+    '卡米契亚': '卡米契亚·内拉', '伊丽莎白': '伊丽莎白女王',
+    '加里波第': '朱塞佩·加里波第', '卡约': '卡约杜伊利奥',
+    '伊势改': '伊势', '日向改': '日向', '内华达改': '内华达',
+    'CV16': '列克星敦(CV-16)', 'cv16': '列克星敦(CV-16)',
+}
+# 原稿 docx：头像行的舰名只存在这里（转 md 时丢了，图片无法回文本）
+_PVP_DOCX_PATH = os.path.join(KB_DIR, "攻略", "7 主题攻略-进阶玩法篇",
+                              "7.1 争锋竞技场简易百科.docx")
+_PVP_ROW_CACHE = {"mtime": None, "data": None}
+
+
+def _pvp_docx_sections():
+    """解析《7.1 争锋竞技场简易百科》docx「三、参考阵容推荐」→ {(场质,体量): [元素]}。
+
+    元素按原攻略顺序：
+      ('p', 文本)                 —— 段落（小标题/说明/优点/缺点/↑注释）
+      ('row', [舰名…], [旗舰下标…]) —— 头像行（表格一行 6 格：头像图 + 舰名，旗舰黄色高亮）
+    攻略 md 丢了头像行里的舰名（它们是图片），只有 docx 表格单元格保留文字，故直接读 docx；
+    mtime 感知缓存。"""
+    if not os.path.exists(_PVP_DOCX_PATH):
+        return {}
+    mt = os.path.getmtime(_PVP_DOCX_PATH)
+    if _PVP_ROW_CACHE["mtime"] == mt:
+        return _PVP_ROW_CACHE["data"]
+    W = '{http://schemas.openxmlformats.org/wordprocessingml/2006/main}'
+    body = None
+    try:
+        import zipfile
+        import xml.etree.ElementTree as ET
+        root = ET.fromstring(zipfile.ZipFile(_PVP_DOCX_PATH).read('word/document.xml'))
+        body = root.find(W + 'body')
+    except Exception:
+        body = None
+    data = {}
+    sec_re = re.compile(r'^[0-9０-９]+\s*[.、]?\s*([金紫蓝])([小中大])\s*(?:船|场)')
+    # 分组/篇章边界（（一）金场、（二）主力舰队（紫场）、四、结语）：遇到即结束当前场次，
+    # 否则下个分组的引言会被并进上一场次（尾部串味）。
+    grp_re = re.compile(r'^[（(][一二三四五六][）)]|^[一二三四五六]、')
+    cur, started, skip = None, False, False
+    for ch in (body if body is not None else []):
+        if ch.tag == W + 'p':
+            t = ''.join(x.text or '' for x in ch.iter(W + 't')).strip()
+            if not started:
+                if '参考阵容推荐' in t:
+                    started = True
+                continue
+            m = sec_re.match(t)
+            if m:
+                cur = (m.group(1), m.group(2))
+                data.setdefault(cur, [])
+                skip = False
+                continue
+            if grp_re.match(t):
+                cur = None
+                skip = False
+                continue
+            # 「特别备注」整段不输出（示例性备注，非阵容本体），直至下个场次/分组边界
+            if re.match(r'^特别备注', t):
+                skip = True
+                continue
+            if skip:
+                continue
+            if cur is not None and t:
+                data[cur].append(('p', t))
+        elif ch.tag == W + 'tbl' and started and cur is not None and not skip:
+            for tr in ch.findall(W + 'tr'):
+                names, hl = [], []
+                for tc in tr.findall(W + 'tc'):
+                    nm = ''.join(x.text or '' for x in tc.iter(W + 't')).strip()
+                    if not nm:
+                        continue
+                    if any(h.get(W + 'val') for h in tc.iter(W + 'highlight')):
+                        hl.append(len(names))
+                    names.append(nm)
+                if names:
+                    data[cur].append(('row', names, hl))
+    _PVP_ROW_CACHE["mtime"] = mt
+    _PVP_ROW_CACHE["data"] = data
+    return data
+
+
+def _pvp_row_marker(names, hl=()):
+    """一行舰名 → `<<SROW>>` 标记：每项 `头像相对路径~舰名~是否旗舰`，项间用 `;;` 分隔。
+    无头像的项路径留空（前端只显示名字）；旗舰项第三段为 1（前端高亮）。"""
+    hlset = set(hl or ())
+    items = []
+    for i, nm in enumerate(names):
+        p = _pvp_ship_avatar(_PVP_ROW_ALIAS.get(nm, nm))
+        items.append('%s~%s~%s' % (p, nm, '1' if i in hlset else '0'))
+    return '<<SROW>>' + ';;'.join(items)
+
+
 class PvpRoleRecommend(BaseTool):
     """【PVP角色推荐】从争锋竞技场攻略的参考阵容统计各场次高频角色，自动附稀有度。"""
     name = 'pvp_role_recommend'
@@ -2230,46 +2405,17 @@ class PvpRoleRecommend(BaseTool):
         blocks = _pvp_parse_lineups()
         if not blocks:
             return "参考阵容数据不可用（缺《7.1 争锋竞技场简易百科》）。"
-        rarity = _pvp_rarity_map()
-        _rec_app = self.cfg.get('app')   # 用于过滤信息不全的角色
-        # 匹配名表：正规舰名 + 攻略昵称，长名优先（别名命中折算回正规名再取稀有度）
-        names_sorted = sorted(set(rarity) | set(_PVP_ALIAS), key=len, reverse=True)
         # 用户过滤词：场质（金/紫/蓝）与体量（小/中/大）
         q_filter = [q for q in '金紫蓝' if q in query]
         s_filter = [s for s in '小中大' if s in query]
-        keys = sorted(blocks, key=lambda k: ('金紫蓝'.index(k[0]), '小中大'.index(k[1])))
-        out_lines = ['以下是争锋竞技场参考阵容的角色统计（来源：《争锋竞技场简易百科·参考阵容推荐》），出现越多越主流：']
-        multi = {}   # 跨场次泛用统计：正规名 → 出现场次数
-        any_row = False
-        for q, s in keys:
-            if q_filter and q not in q_filter:
-                continue
-            if s_filter and s not in s_filter:
-                continue
-            counts = _pvp_count_block(blocks[(q, s)], names_sorted)
-            if not counts:
-                continue
-            ranked = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[:8]
-            parts = []
-            for n, c in ranked:
-                real = _PVP_ALIAS.get(n, n)
-                # 信息不全的角色不推荐（缺任何基础信息视同"没有该角色"，推荐了也查不了/算不了）
-                if _rec_app is not None and real in _rec_app.storage \
-                        and not _rec_app.is_ship_complete(real):
-                    continue
-                r = rarity.get(real, '')
-                tag = f'（{r}）' if r else ''
-                parts.append(f'{n}{tag}×{c}')
-                multi[real] = multi.get(real, 0) + 1
-            out_lines.append(f'◆ {q}·{s}船场：' + '、'.join(parts))
-            any_row = True
-        if not any_row:
-            out_lines.append('（该场次参考阵容以图片为主，文本未列出具体角色，建议查阅原攻略。）')
-        vers = [n for n, c in sorted(multi.items(), key=lambda kv: -kv[1]) if c >= 3]
-        if vers:
-            out_lines.append(f'——多场次泛用（≥3 种场次在列）：{"、".join(vers[:8])}')
-        out_lines.append('提示：天气与赛季会影响具体强度，建议按阵容思路自行微调（回复「争锋攻略」可看原攻略）。')
-        return '\n'.join(out_lines)
+        keys = [(q, s) for q in '金紫蓝' for s in '小中大'
+                if (not q_filter or q in q_filter) and (not s_filter or s in s_filter)]
+        table = _pvp_build_table(keys, self.cfg.get('app'))
+        if not table:
+            return '（该场次参考阵容以图片为主，文本未列出具体角色，建议查阅原攻略。）'
+        return ('以下是争锋竞技场参考阵容的角色统计（来源：《争锋竞技场简易百科·参考阵容推荐》），出现越多越主流：\n'
+                + table
+                + '\n提示：天气与赛季会影响具体强度，建议按阵容思路自行微调（回复「争锋攻略」可看原攻略）。')
 
 
 # ======================================================================
@@ -2426,28 +2572,65 @@ def _ammo_mech_modifier(q: str):
     """
     if not q or not re.search(r'克制|修正|系数|伤害|打|增伤', q):
         return ''
-    armor = next((a for a in ('轻甲', '中甲', '重甲') if a in q), None)
-    if not armor:
+    # 支持「重甲和中甲」「轻甲、中甲」并列多主体：逐甲给系数，不再只取第一个
+    armors = [a for a in ('轻甲', '中甲', '重甲') if a in q]
+    if not armors:
         return ''
-    # 1) 特殊武器（含别名）
+    # 1) 特殊武器（含别名）：弹种无关，按 武器||装甲 直查；多护甲并列则逐甲给系数
     for word, weapon in _SPECIAL_WEAPON_WORDS:
         if word in q:
             ammo = next((a for a in ('穿甲', '高爆', '通常') if a in q), '')
-            return _modifier_line(weapon, ammo, armor)
-    # 2) 舰炮前缀 + 弹种
+            return '\n'.join(l for l in (_modifier_line(weapon, ammo, ar) for ar in armors) if l)
+    # 2) 舰炮前缀 + 弹种：多护甲并列逐甲给系数
     for prefix, weapon in _SHIP_GUN_PREFIX:
         if prefix in q:
             ammo = next((a for a in ('穿甲', '高爆', '通常') if a in q), '')
             if ammo:
-                return _modifier_line(weapon, ammo, armor)
+                return '\n'.join(l for l in (_modifier_line(weapon, ammo, ar) for ar in armors) if l)
             return ''
     # 3) 舰名 → 用户模板应答（2026-09-10）：先报 舰种（弹种）/航系判轰航雷航，再给系数
     ship_name = _match_ship_name(q)
     if ship_name:
-        rep = _ship_modifier_reply(ship_name, armor)
-        if rep:
-            return rep
+        reps = [_ship_modifier_reply(ship_name, ar) for ar in armors]
+        reps = [r for r in reps if r]
+        if reps:
+            return '\n'.join(reps)
     return ''
+
+
+def _mech_weapon_ammo_label(q: str) -> str:
+    """从弹种机制问句解析 武器+弹种 标签（如 '战列穿甲' / '高平炮'），供追问上下文拼接。"""
+    for word, weapon in _SPECIAL_WEAPON_WORDS:
+        if word in q:
+            return weapon  # 特殊武器弹种无关，直接用武器名
+    for prefix, weapon in _SHIP_GUN_PREFIX:
+        if prefix in q:
+            ammo = next((a for a in ('穿甲', '高爆', '通常') if a in q), '')
+            if ammo:
+                return prefix + ammo
+    ship = _match_ship_name(q)
+    if ship:
+        rec = _pvp_ship_ammo_map().get(ship)
+        if rec:
+            st = rec.get('ship_type', '')
+            ammo = rec.get('ammo_type', '')
+            w = _SHIP_MAIN_GUN.get(st, '')
+            if w and ammo:
+                return (w[:-1] if w.endswith('炮') else w) + ammo
+    return ''
+
+
+def _mech_metric_word(q: str) -> str:
+    """从弹种机制问句解析 指标词（克制/修正/系数/增伤），供追问上下文拼接。"""
+    if re.search(r'修正', q):
+        return '修正'
+    if re.search(r'系数', q):
+        return '系数'
+    if re.search(r'克制', q):
+        return '克制'
+    if re.search(r'增伤|伤害', q):
+        return '增伤'
+    return '克制系数'
 
 
 def _modifier_line(weapon: str, ammo: str, armor: str) -> str:

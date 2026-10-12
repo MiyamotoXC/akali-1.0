@@ -78,9 +78,10 @@ def _deadline_line(name, deadline, today, now, tail_prefix, label=''):
         return None
     if d == 0 and now and now.time() >= DEADLINE_TIME:
         return None      # 截止日 10:00 已过 → 已结束，不再提醒，避免让用户误以为还来得及
-    return '活动「%s」%s将于 %s（%s）%s 截止%s' % (
-        name, label, deadline.strftime('%m月%d日'), _deadline_when(d),
-        DEADLINE_TIME_LABEL, tail_prefix)
+    # 不展示真实月日（避免顶端日历提醒出现具体日期数字），仅留相对说法（今日/明天/后天）
+    # 与截止时刻（上午 10:00）；相对说法已能表达紧迫度。
+    return '活动「%s」%s将于 %s%s 截止%s' % (
+        name, label, _deadline_when(d), DEADLINE_TIME_LABEL, tail_prefix)
 
 
 def _deadline_items(ev, today, now=None):
@@ -114,13 +115,12 @@ def _start_items(ev, today, now=None):
         return []
     d = (today - start).days
     if d == -1:
-        return ['活动「%s」将于明日（%s）维护完成后开启，敬请期待。' % (
-            name, start.strftime('%m月%d日'))]
+        return ['活动「%s」将于明日维护完成后开启，敬请期待。' % name]
     if d == 0:
         if now and now.time() >= DEADLINE_TIME:
             return ['活动「%s」已于今日开启，快去参与吧。' % name]
-        return ['活动「%s」将于今日（%s）维护完成后开启，敬请期待。' % (
-            name, start.strftime('%m月%d日'))]
+        # 不展示真实月日，仅留「今日」相对说法
+        return ['活动「%s」将于今日维护完成后开启，敬请期待。' % name]
     if d == 1:
         return ['活动「%s」已开启第 2 天，别错过限时内容。' % name]
     return []

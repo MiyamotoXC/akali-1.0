@@ -14,6 +14,10 @@ _ATTR_NAMES = ("炮击", "雷击", "航空", "轰炸", "鱼雷", "索敌", "命�
 def _infer_damage_type(attr: str) -> str:
     """根据属性名推断伤害类型（与用户端 calc_flow._infer_damage_type 规则一致）"""
     a = attr or ''
+    # 碰撞/冲撞伤害等同近战伤害（用户口径 2026-10-06）：无论前置缩放属性是炮击/机动/装甲，
+    # 伤害类型一律归为近战，使其正确套用近战类增益与减免
+    if '冲撞' in a or '碰撞' in a:
+        return '近战'
     if '轰炸' in a and '航空' in a:
         return '轰炸机'
     if '鱼雷' in a and '航空' in a:

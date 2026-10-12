@@ -32,9 +32,43 @@ KB_DIR = os.path.normpath(os.path.join(os.path.dirname(os.path.dirname(os.path.d
 TALENT_MAP_FILE = os.path.join(KB_DIR, "底层数据", "产物", "talent_map.json")
 RAW_DATA_FILE = os.path.join(KB_DIR, "底层数据", "产物", "raw_data.json")
 TALENT_PVP_FILE = os.path.join(KB_DIR, "底层数据", "产物", "talent_pvp.json")
+TALENT_PVE_FILE = os.path.join(KB_DIR, "底层数据", "产物", "talent_pve.json")
 
 _TALENT_MAP_CACHE = None
 _TALENT_PVP_CACHE = None
+_TALENT_PVE_CACHE = None
+
+
+def format_talents_4x2(raw: dict) -> str:
+    """把角色天赋渲染成「四行二列」版式（每行左 A 右 B，共 4 行）。
+
+    数据契约：raw['talents'] 为 {行号: {A: {name, effect}, B: {name, effect}}}，
+    行号键为 '1'~'4'。兼容旧格式（值为纯字符串天赋名）。
+    处处复用同一段格式（查角色总览 / 查字段天赋 / 伤害计算天赋段），避免分叉。
+    """
+    talents = (raw or {}).get('talents') or {}
+    if not talents:
+        return "  天赋: 未配置"
+    lines = []
+    for row in ('1', '2', '3', '4'):
+        rd = talents.get(row)
+        if not rd:
+            continue
+        cells = []
+        for opt in ('A', 'B'):
+            od = rd.get(opt) or {}
+            if isinstance(od, dict):
+                tname = (od.get('name') or '').strip()
+                effect = (od.get('effect') or '').strip()
+            else:
+                tname = (od or '').strip()
+                effect = ''
+            if tname and effect:
+                cells.append("[%s%s] %s(%s)" % (row, opt, tname, effect))
+            else:
+                cells.append("[%s%s] %s" % (row, opt, tname) if tname else "-")
+        lines.append("  第%s行: %s | %s" % (row, cells[0], cells[1]))
+    return "\n".join(lines)
 
 
 def load_talent_map() -> dict:
@@ -442,6 +476,25 @@ def load_talent_pvp() -> dict:
     except Exception:
         _TALENT_PVP_CACHE = {}
     return _TALENT_PVP_CACHE
+
+
+def load_talent_pve() -> dict:
+    """读取 知识库/talent_pve.json（角色名 → 推荐编码），带模块级缓存。
+
+    该表通常缺失（PvE 点法暂与 PVP 一致），缺失时返回空 dict，
+    由调用方（天赋问法处理器）回退到 PVP 编码并明确标注，不冒充 PvE 专属。"""
+    global _TALENT_PVE_CACHE
+    if _TALENT_PVE_CACHE is not None:
+        return _TALENT_PVE_CACHE
+    if not os.path.exists(TALENT_PVE_FILE):
+        _TALENT_PVE_CACHE = {}
+        return _TALENT_PVE_CACHE
+    try:
+        with open(TALENT_PVE_FILE, encoding="utf-8") as f:
+            _TALENT_PVE_CACHE = json.load(f)
+    except Exception:
+        _TALENT_PVE_CACHE = {}
+    return _TALENT_PVE_CACHE
 
 
 def resolve_default_talent(app, ship_name: str, mode: str = 'pvp') -> dict:

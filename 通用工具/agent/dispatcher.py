@@ -516,7 +516,8 @@ def route_work_agent(tools, overrides, msg, agent=None, history=None):
         # ②检索分支：向量检索 → LLM 依据片段简答（约束式生成）；无命中则回落
         if is_retrieval(name):
             args = decision.get('args') or {}
-            r = _handle_guide_qa(tools, context_msg, search_query=(args.get('query') or ''))
+            r = _handle_guide_qa(tools, context_msg, search_query=(args.get('query') or ''),
+                                 history=route_history)
             if r is not None:
                 return r
             return _legacy_route_work(tools, overrides, context_msg, agent=agent, allow_intent_llm=True,

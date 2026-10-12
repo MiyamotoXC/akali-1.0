@@ -877,6 +877,63 @@ def extract_talent_pvp(filepath: str):
 
 
 # ======================================================================
+# PVE 天赋推荐表提取（知识库/底层数据/源文件/天赋表pve*.xlsx）
+# 布局与 PVP 表同款：名字行 → 下一行是编码，名字与编码在**同一列**。
+# 差异：① 图片列是空串（无 =DISPIMG），故按「下一行同列有编码」判定名字；
+#       ② 编码格可能是文本 '改前1211，改后1212'（本体取改前、·改取改后）。
+# 返回 {表名: (编码, 改造后编码或 None)}（表名如 '夕立/夏雨临'，需再归一化）。
+# ======================================================================
+
+_PVE_CODE_RE = re.compile(r'(\d{4})')
+
+
+def _parse_pve_code_cell(cell):
+    """PvE 编码格 → (编码, 改造后编码或 None)；非编码格返回 None。
+    '1122' / 1122.0      → ('1122', None)
+    '1111/1112'          → ('1111', None)  多套点法取第一套
+    '改前1211，改后1212' → ('1211', '1212')
+    """
+    if cell is None:
+        return None
+    s = str(cell).strip()
+    if not s:
+        return None
+    if '改前' in s and '改后' in s:
+        codes = _PVE_CODE_RE.findall(s)
+        return (codes[0], codes[1]) if len(codes) >= 2 else None
+    s = re.sub(r'\.0+$', '', s)          # 数字单元格 1122.0 → 1122
+    if _PVP_CODE_RE.match(s):
+        return s[:4], None
+    return None
+
+
+def extract_talent_pve(filepath: str):
+    """从 PVE 天赋表提取 角色名（原名/昵称）→ (推荐编码, 改造后编码或 None)。
+    返回 {表名: (编码, 改后编码或 None)}（表名如 '夕立/夏雨临'，需再归一化）。"""
+    try:
+        from python_calamine import CalamineWorkbook
+    except ImportError:
+        return {}
+    wb = CalamineWorkbook.from_path(filepath)
+    sheet = 'Sheet1' if 'Sheet1' in wb.sheet_names else wb.sheet_names[0]
+    rows = wb.get_sheet_by_name(sheet).to_python()
+
+    pairs = {}
+    for i in range(len(rows) - 1):
+        name_row, code_row = rows[i], rows[i + 1]
+        width = max(len(name_row), len(code_row))
+        for j in range(width):
+            name = name_row[j] if j < len(name_row) else None
+            if name is None or not str(name).strip():
+                continue
+            spec = _parse_pve_code_cell(code_row[j] if j < len(code_row) else None)
+            if spec is None:
+                continue
+            pairs.setdefault(str(name).strip(), spec)
+    return pairs
+
+
+# ======================================================================
 # 普攻列表专用提取（数值自动化表.xlsx 的「普攻列表」sheet）
 # 基准来源：普攻相关识别以本 sheet 为准（旧表 拂晓舰灵普攻倍率cd1.1.xlsx 已废弃删除）。
 # 7 个分节（驱逐舰/轻巡/重巡/战列、战巡/航母、装母/轻母/特殊），每船一行：

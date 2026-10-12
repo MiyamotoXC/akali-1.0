@@ -328,20 +328,8 @@ def _format_field_result(name: str, raw: dict, field: str, app) -> str:
     lines = [f"\n--- {name} - {field} ---"]
 
     if category == 'talent':
-        talents = raw.get('talents') or {}
-        if not talents:
-            lines.append("  天赋: 未配置")
-        else:
-            for row_key in sorted(talents, key=lambda x: int(x) if str(x).isdigit() else 99):
-                row = talents.get(row_key) or {}
-                for branch in ('A', 'B'):
-                    item = row.get(branch) or {}
-                    talent_name = str(item.get('name') or '').strip()
-                    effect = str(item.get('effect') or '').strip()
-                    if talent_name or effect:
-                        lines.append(f"  [{row_key}{branch}] {talent_name or '未命名'}")
-                        if effect:
-                            lines.append(f"  {effect}")
+        from .talent import format_talents_4x2
+        lines.append(format_talents_4x2(raw))
 
     elif category == 'panel_num':
         # 面板数值：从 raw_data.panel.面板 读取
