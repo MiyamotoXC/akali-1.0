@@ -2850,7 +2850,7 @@ def _query_words(text):
 """技能条件筛选工具（query_ships_by_skill）。
 
 设计原则（用户铁律）：所有查询输出一律来自信息库/工具原文，不走 LLM 逐字生成。
-- 条件词规则表（25 种 buff 效果 × 5 类目标 × 弹种/舰种）命中 → 0 token；
+- 条件词规则表（26 种效果 × 5 类目标 × 4 类技能槽位 × 弹种/舰种）命中 → 0 token；
 - 规则表未命中且明显在问"哪些舰灵具备某能力" → LLM 只把条件翻译成严格校验的短 JSON
   （temperature=0、字段白名单校验，失败即放弃），检索与名单输出仍 100% 由后端从信息库产生；
 - 输出仅角色名列表，不贴技能原文。
@@ -2953,18 +2953,71 @@ _TARGET_EXPAND = {
     '敌方': ('敌方',),
 }
 
+# 技能槽位（用户口径 2026-10-14）：键 = 用户说法，值 = raw_data skills 键名。
+# 「有回血有伤害的支援技」这类问法必须按槽位限定文本，不能拿其它槽位的命中凑名单。
+_SLOT_ALIASES = {
+    '支援技': 'SupportSkill',
+    '通常技': 'BattleSkill1',
+    '必杀技': 'BattleSkill2',
+    '旗舰技': 'LeaderSkill',
+}
+# 主动技能槽位（支援/通常/必杀）：旗舰光环与天赋不算"主动给队友上 buff"
+_ACTIVE_SLOTS = ('SupportSkill', 'BattleSkill1', 'BattleSkill2')
+# 槽位键名 → 用户说法（回复文案用）
+_SLOT_LABEL = {v: k for k, v in _SLOT_ALIASES.items()}
+
+# 「伤害」效果（技能本身造成伤害）：只作查询条件，不进 _BUFF_PATTERNS ——
+# 技能性质分类（_classify_ship_natures）不该给每个技能都挂一条「伤害」。
+_QUERY_EXTRA_PATTERNS = {
+    '伤害': (r'造成',),
+}
+# 效果总表（性质表 + 查询期扩展），倒排索引按此建桶
+_EFFECT_PATTERNS = {**_BUFF_PATTERNS, **_QUERY_EXTRA_PATTERNS}
+# 工具可接受的效果取值（含合成的「增益」泛桶）
+_QUERY_EFFECT_WORDS = tuple(_EFFECT_PATTERNS) + ('增益',)
+
+# 用户口语里「伤害」作效果诉求的判定：必须是「有伤害/带伤害/能打伤害」这类述宾结构；
+# 「带点燃伤害」「航空伤害加成/减免」里的伤害是名词后缀或属性词，不算独立条件（用户口径 2026-10-14）。
+_DMG_EFFECT_RE = re.compile(r'(有|带|能|会|可|打)伤害(?![加减提增抵免])')
+
+# 「增益」泛桶不收录的效果：伤害是打人能力，回血/吸血/控/点燃各成一类
+_GEN_BUFF_EXCLUDE = {'回血', '吸血', '点燃', '控制', '伤害'}
+
+# 条件归一表（别名/键 → 规范键）：规则表与 LLM 给的说法可能是同义词（治疗→回血、队友→全体），
+# 统一收敛到索引键，避免同义值被当成未知条件丢弃。
+_EFFECT_CANON = {}
+for _k, _aliases in _BUFF_ALIASES.items():
+    _EFFECT_CANON[_k] = _k
+    for _a in _aliases:
+        _EFFECT_CANON.setdefault(_a, _k)
+for _k in _QUERY_EFFECT_WORDS:
+    _EFFECT_CANON.setdefault(_k, _k)
+_TARGET_CANON = {}
+for _k, _aliases in _TARGET_ALIASES.items():
+    _TARGET_CANON[_k] = _k
+    for _a in _aliases:
+        _TARGET_CANON.setdefault(_a, _k)
+_SLOT_CANON = dict(_SLOT_ALIASES)
+
 
 def parse_skill_conditions(msg: str) -> dict:
     """把用户中文问题解析为结构化条件（规则表，0 token）。
-    返回 {"targets": [...], "buffs": [...], "ammo": [...], "ship_type": [...]}；
-    解析不到任何条件时返回 {}。"""
+    返回 {"targets": [...], "buffs": [...], "ammo": [...], "ship_type": [...], "slot": [...],
+          "combine": "and"|"or"}；解析不到任何条件时返回 {}。
+    多个效果默认取交集（「有回血有伤害的支援技」= 两者同时具备），句中明说「或」才算任一即可；
+    「技能槽位」须另有 目标/效果/弹种/舰种 条件才成立（单说「支援技多少秒」是 CD 问法，不是筛选）。"""
     cond = {}
     targets = [t for t, aliases in _TARGET_ALIASES.items() if any(a in msg for a in aliases)]
     if targets:
         cond['targets'] = targets
     buffs = [b for b, aliases in _BUFF_ALIASES.items() if any(a in msg for a in aliases)]
+    # 「伤害」= 技能本身造成伤害（「有伤害/能打伤害」）；名词后缀与属性词（点燃伤害/伤害加成）不算
+    if '伤害' not in buffs and _DMG_EFFECT_RE.search(msg):
+        buffs.append('伤害')
     if buffs:
         cond['buffs'] = buffs
+        # 多效果默认取交集，句中明说「或」才任一即可
+        cond['combine'] = 'or' if re.search(r'或者|或', msg) else 'and'
     ammo = [w for w in _AMMO_QUERY_WORDS if w in msg]
     if ammo:
         cond['ammo'] = ammo
@@ -2990,6 +3043,11 @@ def parse_skill_conditions(msg: str) -> dict:
         if '全体' not in cond['targets']:
             cond['targets'].append('全体')
         cond['buffs'] = ['增益']
+    # 技能槽位（支援技/通常技/必杀技/旗舰技）：需另有其它条件才算筛选，单说槽位不构成查询
+    slots = [s for s in _SLOT_ALIASES if s in msg]
+    if slots and (cond.get('buffs') or cond.get('targets') or cond.get('ammo')
+                  or cond.get('ship_type')):
+        cond['slot'] = slots
     return cond
 
 
@@ -3005,7 +3063,7 @@ def llm_parse_conditions(msg: str) -> dict:
         allowed = ('targets', 'buffs', 'ammo', 'ship_type')
         vocab = {
             'targets': tuple(_TARGET_ALIASES),
-            'buffs': tuple(_BUFF_ALIASES),
+            'buffs': _QUERY_EFFECT_WORDS,
             'ammo': _AMMO_QUERY_WORDS,
             'ship_type': _SHIP_TYPE_QUERY_WORDS,
         }
@@ -3036,6 +3094,9 @@ def llm_parse_conditions(msg: str) -> dict:
                 v = [str(x).strip() for x in vals if str(x).strip() in vocab[k]]
                 if v:
                     out[k] = v
+        # 多效果合并口径与规则表一致：默认同时具备，句中明说「或」才任一即可
+        if len(out.get('buffs') or []) > 1:
+            out['combine'] = 'or' if re.search(r'或者|或', msg) else 'and'
         return out if any(out.values()) else {}
     except Exception:
         return {}
@@ -3045,18 +3106,90 @@ def llm_parse_conditions(msg: str) -> dict:
 # 技能倒排索引（构建期一次，纯内存检索）
 # ======================================================================
 
+def _mark_hit(bucket: dict, name: str, buff: str, text: str) -> tuple:
+    """把「某角色的一段技能文本命中某效果」记进倒排桶，返回本次命中的目标键（不含 'any'）。
+    目标推断口径与改造前一致：
+    - 回血 = 具备"自我回复能力"（用户约定）：① 文本含「自身/自己」；或 ② 治疗对象是友方单位
+      （出战位/我方/舰队/前排/后排/队友…）——自己也是友方，血量低时同样会被奶到
+      （女灶神"为出战位血量最低舰灵维修"→ 算自奶）；③ 天赋自我回复同样走①②。
+    - 其余效果：取文本里出现的目标别名；未指明目标时默认算「自己」（移速目标含糊，不入桶）。"""
+    bm = bucket.setdefault(buff, {t: set() for t in _TARGET_ALIASES} | {'any': set()})
+    # 任何命中（技能/天赋、是否指明目标）都进 any 桶
+    bm['any'].add(name)
+    if buff == '回血':
+        _self = ('自身' in text or '自己' in text) or any(
+            a in text for a in ('出战位', '我方', '友方', '所属舰队', '全队', '全体', '舰队',
+                                '队友', '同伴', '前排', '后排', '友军'))
+        if _self:
+            bm['自己'].add(name)
+        hits = []
+        for t in ('全体', '前排', '后排'):
+            if any(a in text for a in _TARGET_ALIASES[t]):
+                bm[t].add(name)
+                hits.append(t)
+        return tuple(hits)
+    tgts = [t for t, aliases in _TARGET_ALIASES.items() if any(a in text for a in aliases)]
+    if not tgts:
+        # 移速等目标含糊（如"移动速度+30%"未指明对象），不做默认推断
+        if buff in ('移速',):
+            return ()
+        tgts = ['自己']
+    for t in tgts:
+        bm[t].add(name)
+    return tuple(tgts)
+
+
+def _team_buff_bucket(buff_index: dict, act_index: dict, act_all_index: dict) -> dict:
+    """「增益」泛桶：全队 buff 问法的匹配维度（强化类并集，排除 治疗/吸血/敌方效果）。
+    ——「哪些船能给全队buff」≠ 目标全体筛选，必须是"能给我方全体上强化增益"；
+    回血/吸血/点燃/控制/伤害不算 buff 强化（奶/控是另一类），故不入桶。
+    全体目标桶只算**主动技能且文本确为全队级**的命中（支援/通常/必杀）——
+    用户铁律：给全队 buff 不算旗舰光环/天赋，也不要"出战位/我方"等泛指队友的宽词。"""
+    gen = {'any': set()}
+    gen.update({t: set() for t in _TARGET_ALIASES})
+    for b, bm in buff_index.items():
+        if b in _GEN_BUFF_EXCLUDE or b == '增益':
+            continue
+        am = act_index.get(b) or {}
+        for t in bm:
+            if t == '全体':
+                gen['全体'] |= act_all_index.get(b, set())
+            elif t == 'any':
+                gen['any'] |= am.get('any', set())
+            else:
+                gen[t] |= bm[t]
+    return gen
+
+
+def _slot_buff_bucket(bucket: dict) -> dict:
+    """槽位内的「增益」泛桶：该槽位里命中过的强化类效果目标桶并集。
+    槽位由用户点名（如「支援技给全队上什么增益」），故不再按"主动/旗舰"口径二次过滤。"""
+    gen = {'any': set()}
+    gen.update({t: set() for t in _TARGET_ALIASES})
+    for b, bm in bucket.items():
+        if b in _GEN_BUFF_EXCLUDE or b == '增益':
+            continue
+        for t, s in bm.items():
+            gen[t] |= s
+    return gen
+
+
 def build_skill_index(app):
-    """扫描 raw_data（信息库）：buff×目标 倒排 + 弹种 + 舰种 索引。
+    """扫描 raw_data（信息库）：buff×目标 倒排 + 弹种 + 舰种 + 技能槽位 索引。
     只收录信息完整（is_ship_complete）的角色；文本来源：技能原文 + 天赋。
-    每个 buff 额外维护 'any' 桶（该效果能力全量，含未指明目标的文本）。"""
+    每个 buff 额外维护 'any' 桶（该效果能力全量，含未指明目标的文本）；
+    slots[槽位] 桶只收录**该槽位文本**里的命中（用户口径 2026-10-14：
+    「有回血有伤害的支援技」必须按支援技文本作答，别拿其它槽位的命中凑名单）。"""
     raw = getattr(app, 'raw_storage', {}) or {}
     buff_index = {b: ({t: set() for t in _TARGET_ALIASES} | {'any': set()})
-                  for b in _BUFF_PATTERNS}
+                  for b in _EFFECT_PATTERNS}
     # 主动命中集：只统计 支援技/通常技/必杀技（主动施加），旗舰技与天赋不算"给队友上 buff"
     act_index = {b: ({t: set() for t in _TARGET_ALIASES} | {'any': set()})
-                 for b in _BUFF_PATTERNS}
+                 for b in _EFFECT_PATTERNS}
     # 强全队主动集：文本确为全队级目标（全队/全体/全员/所属舰队/全舰/全团…）的主动技能命中
-    act_all_index = {b: set() for b in _BUFF_PATTERNS}
+    act_all_index = {b: set() for b in _EFFECT_PATTERNS}
+    # 槽位桶：{SupportSkill/BattleSkill1/BattleSkill2/LeaderSkill: {效果: {目标: set}}}
+    slot_index = {k: {} for k in _SLOT_ALIASES.values()}
     _TEAM_WORD = re.compile(r'全队|全体|全员|所属舰队|全舰|全团|我方全体|全体我方|舰队全体|我方舰队')
     ammo_index = {}
     stype_index = {}
@@ -3070,60 +3203,27 @@ def build_skill_index(app):
         st = panel.get('舰种')
         if st:
             stype_index.setdefault(str(st), set()).add(name)
-        skills = (data.get('skills') or {}) if isinstance(data, dict) else {}
         texts = _slot_texts(data)
-        for buff, pats in _BUFF_PATTERNS.items():
+        for buff, pats in _EFFECT_PATTERNS.items():
             for text, _slot in texts:
                 if not any(re.search(p, text) for p in pats):
                     continue
-                # 任何命中（技能/天赋、是否指明目标）都进 any 桶
-                buff_index[buff]['any'].add(name)
-                if _slot in ('SupportSkill', 'BattleSkill1', 'BattleSkill2'):
+                tgts = _mark_hit(buff_index, name, buff, text)
+                if _slot in slot_index:
+                    _mark_hit(slot_index[_slot], name, buff, text)
+                if _slot in _ACTIVE_SLOTS:
                     act_index[buff]['any'].add(name)
                     if _TEAM_WORD.search(text):
                         act_all_index[buff].add(name)
-                if buff == '回血':
-                    # 自奶 = 具备"自我回复能力"（用户约定）：
-                    # ① 文本含「自身/自己」；或
-                    # ② 治疗对象是友方单位（出战位/我方/舰队/前排/后排/队友…）——自己也是友方，
-                    #    血量低时同样会被奶到（女灶神"为出战位血量最低舰灵维修"→ 算自奶）；
-                    # ③ 天赋自我回复（天赋文本已并入 texts，同样走①②）。
-                    _self = ('自身' in text or '自己' in text) or any(
-                        a in text for a in ('出战位', '我方', '友方', '所属舰队', '全队', '全体', '舰队',
-                                            '队友', '同伴', '前排', '后排', '友军'))
-                    if _self:
-                        buff_index['回血']['自己'].add(name)
-                    for t in ('全体', '前排', '后排'):
-                        if any(a in text for a in _TARGET_ALIASES[t]):
-                            buff_index['回血'][t].add(name)
-                    continue
-                tgts = [t for t, aliases in _TARGET_ALIASES.items() if any(a in text for a in aliases)]
-                if not tgts:
-                    # 移速等目标含糊（如"移动速度+30%"未指明对象），不做默认推断
-                    if buff in ('移速',):
-                        continue
-                    tgts = ['自己']
-                for t in tgts:
-                    buff_index[buff][t].add(name)
-                    if _slot in ('SupportSkill', 'BattleSkill1', 'BattleSkill2'):
-                        act_index[buff][t].add(name)
-    # 「增益」泛桶：全队 buff 问法的匹配维度（强化类并集，排除 治疗/吸血/敌方效果）
-    # ——「哪些船能给全队buff」≠ 目标全体筛选，必须是"能给我方全体上强化增益"；
-    # 回血/吸血/点燃/控制 不算 buff 强化（奶/控是另一类），故不入桶。
-    # 全体目标桶只算**主动技能命中**（支援/通常/必杀）——用户铁律：给全队 buff 不算旗舰光环/天赋。
-    _GEN_BUFF_EXCLUDE = {'回血', '吸血', '点燃', '控制'}
-    gen = {'any': set()}
-    gen.update({t: set() for t in _TARGET_ALIASES})
-    for b, bm in buff_index.items():
-        if b in _GEN_BUFF_EXCLUDE:
-            continue
-        am = act_index.get(b, {})
-        for t, s in bm.items():
-            # 全体目标桶只算**主动技能且文本确为全队级**的命中（支援/通常/必杀）——
-            # 用户铁律：给全队 buff 不算旗舰光环/天赋，也不要"出战位/我方"等泛指队友的宽词
-            gen[t] |= (act_all_index.get(b, set()) if t == '全体' else (am.get(t, set()) if t == 'any' else s))
-    buff_index['增益'] = gen
-    return {'buffs': buff_index, 'ammo': ammo_index, 'ship_type': stype_index}
+                    # 回血的自奶/治疗对象已在 _mark_hit 里定桶，不重复计入主动目标桶（口径同改造前）
+                    if buff != '回血':
+                        for t in tgts:
+                            act_index[buff][t].add(name)
+    buff_index['增益'] = _team_buff_bucket(buff_index, act_index, act_all_index)
+    for bucket in slot_index.values():
+        bucket['增益'] = _slot_buff_bucket(bucket)
+    return {'buffs': buff_index, 'ammo': ammo_index, 'ship_type': stype_index,
+            'slots': slot_index}
 
 
 _INDEX_CACHE = {}
@@ -3172,11 +3272,92 @@ def _dedup_evolutions(names: list) -> list:
 
 def _describe(cond: dict) -> str:
     parts = []
-    for key, label in (('targets', '目标'), ('buffs', '加成'), ('ammo', '弹种'), ('ship_type', '舰种')):
-        vals = cond.get(key) or []
-        if vals:
+    for key, label in (('slot', '技能'), ('targets', '目标'), ('buffs', '加成'),
+                       ('ammo', '弹种'), ('ship_type', '舰种')):
+        vals = list(cond.get(key) or [])
+        if not vals:
+            continue
+        if key == 'slot':
+            # 槽位在条件里存的是 skills 键名，回复里回写成用户说法（支援技/通常技/必杀技/旗舰技）
+            vals = [_SLOT_LABEL.get(v, v) for v in vals]
+        if key == 'buffs' and len(vals) > 1:
+            # 多效果口径（用户 2026-10-14）：默认取交集（「有回血有伤害」= 同时具备），
+            # 句中明说「或」才任一即可 —— 回复里写清楚，免得用户误读名单
+            if cond.get('combine') == 'or':
+                parts.append('%s:%s（任一即可）' % (label, '或'.join(vals)))
+            else:
+                parts.append('%s:%s（需同时具备）' % (label, '+'.join(vals)))
+        else:
             parts.append('%s:%s' % (label, '/'.join(vals)))
     return '，'.join(parts) or '未指定'
+
+
+def _canon_conditions(cond: dict):
+    """条件归一 + 校验：别名一律收敛到索引键（治疗→回血、队友→全体、支援技→SupportSkill），
+    未知取值原样报给调用方（工具据此回明确提示，绝不静默吞掉条件后给假名单）。
+    返回 (规范条件, 不支持的值列表)。"""
+    out = {}
+    bad = []
+
+    def _dim(key, table):
+        vals = cond.get(key)
+        if not isinstance(vals, (list, tuple)):
+            return
+        got = []
+        for v in vals:
+            v = str(v).strip()
+            if not v:
+                continue
+            k = table.get(v)
+            if not k:
+                bad.append(v)
+            elif k not in got:
+                got.append(k)
+        if got:
+            out[key] = got
+
+    _dim('buffs', _EFFECT_CANON)
+    _dim('targets', _TARGET_CANON)
+    _dim('slot', _SLOT_CANON)
+    for key in ('ammo', 'ship_type'):
+        vals = cond.get(key)
+        if isinstance(vals, (list, tuple)):
+            got = [str(v).strip() for v in vals if str(v).strip()]
+            if got:
+                out[key] = got
+    if cond.get('combine') in ('and', 'or'):
+        out['combine'] = cond['combine']
+    elif len(out.get('buffs') or []) > 1:
+        out['combine'] = 'and'
+    return out, bad
+
+
+def _effect_hit(bucket: dict, buff: str, targets) -> set:
+    """取某效果在给定桶（全槽位桶 或 某槽位桶）里的命中集：
+    指定目标时按 _TARGET_EXPAND 取各目标桶的并集（问后排也算上全体型）；
+    未指定目标时取该效果的全量能力桶（含天赋/未指明目标的文本）。"""
+    bm = bucket.get(buff)
+    if not bm:
+        return set()
+    s = set()
+    if targets:
+        for t in targets:
+            for it in _TARGET_EXPAND.get(t, (t,)):
+                s |= bm.get(it, set())
+    else:
+        s |= bm.get('any', set())
+    return s
+
+
+def _slot_scope_bucket(idx: dict, slots) -> dict:
+    """把被点名的技能槽位的桶合并成一个查询桶（多槽位 = 并集）。"""
+    bucket = {}
+    for s in slots:
+        for b, bm in (idx.get('slots', {}).get(s) or {}).items():
+            dst = bucket.setdefault(b, {t: set() for t in _TARGET_ALIASES} | {'any': set()})
+            for t, st in bm.items():
+                dst.setdefault(t, set()).update(st)
+    return bucket
 
 
 # ======================================================================
@@ -3185,18 +3366,23 @@ def _describe(cond: dict) -> str:
 
 class SkillQuery(BaseTool):
     """按技能条件列举舰灵（信息库检索）。conditions: {"targets":[...], "buffs":[...],
-    "ammo":[...], "ship_type":[...]}，至少一项；输出仅角色名列表。"""
+    "ammo":[...], "ship_type":[...], "slot":[...], "combine":"and"|"or"}，至少一项；
+    输出仅角色名列表。"""
     name = 'query_ships_by_skill'
     description = ('列举满足技能效果条件的舰灵（信息库检索，只返回角色名列表）：'
                    '按 目标(自己/前排/全体/后排/敌方) × 加成(回血/吸血/炮击/雷击/航空/命中/装填/暴击/'
-                   '护盾/减伤/增伤/回避/攻速/移速/点燃/控制等) × 弹种(高爆/穿甲等) × 舰种 筛选。'
+                   '护盾/减伤/增伤/回避/攻速/移速/点燃/控制/反伤/伤害) × 技能槽位(支援技/通常技/必杀技/旗舰技) '
+                   '× 弹种(高爆/穿甲等) × 舰种 筛选。'
+                   '多个加成默认「需同时具备」（如「有回血有伤害的支援技」= 该支援技文本里既要回血又要造成伤害）；'
+                   '用户说「或/任一」时才填 "combine":"or"。'
                    '（注意：纯属性筛选——稀有度/阵营/是否改造组合，如「蓝白绿的驱逐」「没改造的金航母」——请用 ship_filter，不要混淆。）')
     parameters = {
         'type': 'object',
         'properties': {
             'conditions': {
                 'type': 'object',
-                'description': '结构化条件：{"targets":["自己","前排"],"buffs":["炮击"],"ammo":["高爆"]}，均可不填但至少填一项',
+                'description': '结构化条件：{"targets":["自己","前排"],"buffs":["炮击"],"ammo":["高爆"],'
+                               '"slot":["支援技"],"combine":"and"}，均可不填但至少填一项',
             },
         },
         'required': ['conditions'],
@@ -3205,31 +3391,35 @@ class SkillQuery(BaseTool):
     def call(self, params, **kwargs):
         params = self._verify_json_format_args(params)
         app = self.cfg['app']
-        cond = params.get('conditions') or {}
         idx = _get_index(app)
+        cond, bad = _canon_conditions(params.get('conditions') or {})
+        if bad:
+            return ('条件无法识别：%s。\n可用效果：%s；可用目标：%s；可用技能槽位：%s；'
+                    '弹种/舰种按数据实际值填。'
+                    % ('、'.join(bad), '、'.join(_QUERY_EFFECT_WORDS), '、'.join(_TARGET_ALIASES),
+                       '、'.join(_SLOT_ALIASES)))
 
-        sets = []
         buffs = cond.get('buffs') or []
         targets = cond.get('targets') or []
+        slots = cond.get('slot') or []
+        # 槽位条件：只在被点名的槽位文本里筛（用户口径 2026-10-14）
+        bucket = _slot_scope_bucket(idx, slots) if slots else idx['buffs']
+
+        sets = []
         if buffs:
-            s = set()
-            for b in buffs:
-                bm = idx['buffs'].get(b)
-                if not bm:
-                    continue
-                if targets:
-                    for t in targets:
-                        for it in _TARGET_EXPAND.get(t, (t,)):
-                            s |= bm.get(it, set())
-                else:
-                    # 未指定目标：「自奶」等宽口径 → 该效果的全量能力桶（含天赋/未指明目标的文本）
-                    s |= bm.get('any', set())
+            if cond.get('combine') == 'or':
+                s = set()
+                for b in buffs:
+                    s |= _effect_hit(bucket, b, targets)
+            else:
+                per = [_effect_hit(bucket, b, targets) for b in buffs]
+                s = set.intersection(*per) if per else set()
             sets.append(s)
         elif targets:
             s = set()
             for t in targets:
                 for it in _TARGET_EXPAND.get(t, (t,)):
-                    for bm in idx['buffs'].values():
+                    for bm in bucket.values():
                         s |= bm.get(it, set())
             sets.append(s)
         if cond.get('ammo'):
@@ -3238,8 +3428,11 @@ class SkillQuery(BaseTool):
             sets.append(_match_sets(idx, 'ship_type', cond['ship_type']))
 
         if not sets:
-            return ('筛选需要至少一个条件（目标/加成/弹种/舰种）。'
-                    '支持的说法如「自奶船」「给前排加移速的舰灵」「加炮击的高爆舰灵」「哪些船有护盾」。')
+            if slots:
+                return '技能槽位需与 加成/目标/弹种/舰种 组合使用，如「有回血有伤害的支援技」。'
+            return ('筛选需要至少一个条件（目标/加成/技能槽位/弹种/舰种）。'
+                    '支持的说法如「自奶船」「给前排加移速的舰灵」「加炮击的高爆舰灵」'
+                    '「有回血有伤害的支援技」「哪些船有护盾」。')
         result = set.intersection(*sets)
         order = {n: i for i, n in enumerate(getattr(app, 'raw_storage', {}) or {})}
         names = sorted(result, key=lambda n: order.get(n, 1 << 30))

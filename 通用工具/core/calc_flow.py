@@ -3454,6 +3454,43 @@ _UNIMPLEMENTED_SHIPS = (
 )
 _UNIMPLEMENTED_SHIP_RE = re.compile('|'.join(_UNIMPLEMENTED_SHIPS))
 
+# 单个角色的技能槽位问法（「雪风的支援技是什么」「电的支援技带回血吗」）：前缀是角色名，
+# 不含效果/目标条件词 —— 技能槽位条件反查早拦时必须让位给角色查询。
+# （「有回血有伤害的支援技」的前缀含效果词，不算单角色问法，仍归群体反查。）
+_SLOT_ASK_RE = re.compile(r'^([^\s，,。]{1,8}?)(?:的|之)?(?:支援技|通常技|必杀技|旗舰技)')
+
+
+def _is_single_ship_slot_ask(msg: str) -> bool:
+    """消息是否在点名单个角色的技能槽位（而非「有回血有伤害的支援技」这类群体条件句）。"""
+    m = _SLOT_ASK_RE.match(msg or '')
+    if not m:
+        return False
+    pre = m.group(1)
+    if '伤害' in pre or '回血' in pre:
+        return False
+    from tools.knowledge import _BUFF_ALIASES, _TARGET_ALIASES
+    for aliases in tuple(_BUFF_ALIASES.values()) + tuple(_TARGET_ALIASES.values()):
+        if any(a in pre for a in aliases):
+            return False
+    return True
+
+# 「舰灵群体 + 条件」反查的通用排除词（计算/攻略/配装/副本操作/求和数值比较都归原流程）：
+# 技能槽位早拦 与 通用技能条件筛选 共用同一闸门；「伤害」不作硬排除（'带点燃伤害' 的伤害是效果词后缀），
+# 但数值比较问法（伤害高/多少/最高）不拦，保留原数值/计算语义。
+_SHIP_QUERY_SKIP_RE = re.compile(
+    r'怎么|如何|攻略|推荐|配|算|保存|更新|记录|我的|装备|面板|设置|缓存|删除|'
+    r'之和|相加|总和|加起来|总共|合计|一共|'
+    r'优先|值得|先练|练级|培养|毕业|强度|'
+    r'伤害?(?:高|低|多|强|最高|最多|多少)|\d')
+
+# 资料未收录问法（用户反馈 2026-10-14）：「专武 = 专属装备 = 信物本体」这类问法信息库没收录，
+# 固定如实回复。此前会一路落到 LLM/攻略 RAG，实测 90s 超时被前端自动中止。
+# 「信物」在攻略库里只有 PVP 优先级内容，故仅当明显在问「哪些角色有」时才拦（推荐/优先级照旧走攻略）。
+_NO_DATA_RE = re.compile(r'专武|专属装备|专属武器|专属舰装')
+_NO_DATA_ASK_RE = re.compile(r'哪些|哪个|哪位|哪几|谁|有没有|都有|列表|盘点|大全|查询|查一下|查查')
+_NO_DATA_KB_RE = re.compile(r'推荐|优先|排行|排个|排序|选择|怎么|如何|好不好|值不值')
+_NO_DATA_REPLY = '指挥官是想问信物相关吗？暂时还没有录入，请等待后续系统更新'
+
 # ---- 能力/功能询问（用户口径 2026-09-09 二次修订：**LLM 意图分类驱动**，
 # _llm_intent_classify 加 capability 类；不用正则堆词——正则版漏判「我能输入啥」等口语变体）----
 _CAPABILITY_REPLY = (
@@ -3493,6 +3530,22 @@ def _get_app_from_tools(tools, agent=None):
         return getattr(agent, 'app', None) or agent
     t = _tool(tools, 'query_ship_info')
     return getattr(t, 'cfg', {}).get('app') if t else None
+
+
+def _msg_names_ship(msg: str, tools, agent=None) -> bool:
+    """消息里是否点名了已知舰灵（底层舰名子串 + 归一化名匹配，口径同 _handle_ship_attr_query）。
+    用于「技能槽位条件反查」早拦：点名角色的问法（「雪风的支援技带回血吗」）交角色查询，
+    不能被群体反查截胡。单字舰名（如「电」）不收——它太容易在普通句子里误命中。"""
+    app = _get_app_from_tools(tools, agent)
+    if app is None or not msg:
+        return False
+    from .name_service import _normalize
+    norm = _normalize(msg)
+    names = set(getattr(app, 'storage', {}) or {}) | set(getattr(app, 'raw_storage', {}) or {})
+    for n in names:
+        if n and len(n) >= 2 and (n in msg or _normalize(n) in norm):
+            return True
+    return False
 
 
 def _ship_talent_names(raw: dict) -> dict:
@@ -3591,7 +3644,8 @@ _SHIP_ATTR_CD_RE = re.compile(r'(冷却时间|冷却|(?<![a-zA-Z])cd(?![a-zA-Z])
 _SHIP_PRONOUN_RE = re.compile(r'他们|她们|它们|这些|那些|这批|那批|上面的|之前的|刚才的|上一批|之前筛|刚才筛|这十|那十|这几种|那几种')
 # 性质类问法的「列举/归属」信号词（避免把「X的炮击伤害」这类伤害/计算问法误判为性质列举）
 _NATURE_LIST_RE = re.compile(r'哪些|哪艘|哪条|哪些船|哪些舰|列表|列举|有什么|有哪些|带|会\b|具备|归类|分类|性质|技能性质|技能类型|技能效果|技能解析')
-_SHIP_NATURE_GENERIC_RE = re.compile(r'技能性质|技能分类|技能类型|技能效果|技能归类|技能解析')
+_SHIP_NATURE_GENERIC_RE = re.compile(r'技能性质|技能分类|技能类型|技能效果|技能归类|技能解析|'
+                                      r'(?:必杀技|通常技|支援技|旗舰技)性质')
 # 技能类型 → raw_data skills 键
 _SKILL_KEY = {
     '必杀技': 'BattleSkill2',
@@ -3619,9 +3673,11 @@ def _extract_skill_cd(app, name, kind):
     return int(m.group(1)) if m else None
 
 
-def _classify_ship_natures(app, name):
+def _classify_ship_natures(app, name, slot_kind=None):
     """按权威 _BUFF_PATTERNS 分类某舰灵四技能的性质。返回 {性质: [技能标签,...]}。
-    性质判定与 query_ships_by_skill 同源（tools.knowledge._BUFF_PATTERNS），避免两套语义漂移。"""
+    性质判定与 query_ships_by_skill 同源（tools.knowledge._BUFF_PATTERNS），避免两套语义漂移。
+    slot_kind（必杀技/通常技/支援技/旗舰技）非空 → 只看该槽位的技能文本（用户口径 2026-10-14：
+    「雪风的支援技带回血吗」必须按支援技回答，不能拿通常技的命中顶替）。"""
     from tools.knowledge import _BUFF_PATTERNS
     _, raw = app.get_raw_ship(name)
     if not raw:
@@ -3631,6 +3687,8 @@ def _classify_ship_natures(app, name):
     for nat, pats in _BUFF_PATTERNS.items():
         labels = []
         for label, key in _SKILL_LABEL_KEYS:
+            if slot_kind and label != slot_kind:
+                continue
             text = skills.get(key, '') or ''
             if any(re.search(p, text) for p in pats):
                 labels.append(label)
@@ -3685,6 +3743,14 @@ def _handle_ship_attr_query(tools, msg, agent=None, overrides=None):
     is_q, kind, attr_type = _is_ship_attr_query(m)
     if not is_q:
         return None
+    # 消息点名的技能槽位：性质只看该槽位（CD 问法的 kind 本身就是槽位）
+    slot_kind = None
+    if attr_type == 'cd':
+        slot_kind = kind
+    else:
+        _sm = _SHIP_ATTR_SKILL_RE.search(m)
+        if _sm:
+            slot_kind = '必杀技' if _sm.group(1) in ('必杀', '大招') else _sm.group(1)
     app = _get_app_from_tools(tools, agent)
     storage = getattr(app, 'storage', None)
     if not storage:
@@ -3751,13 +3817,14 @@ def _handle_ship_attr_query(tools, msg, agent=None, overrides=None):
                 'fill_form': [], 'encounter_form': [], 'guide_files': [], 'guide_lib': '', 'ok': True}
 
     # attr_type == 'nature' —— 分析分类
+    _slot_fix = ('%s · ' % slot_kind) if slot_kind else ''
     if kind == '__all__':
         # 通用分析：逐舰列举其全部技能性质，并附分类汇总
-        lines = ['《舰灵技能性质 · %s》' % cond_desc]
+        lines = ['《舰灵技能性质 · %s%s》' % (_slot_fix, cond_desc)]
         lines.append('共 %d 名（逐舰按性质归类）：' % len(rows))
         summ = {}
         for i, (name, na, st, ra) in enumerate(rows[:60], 1):
-            nat_map = _classify_ship_natures(app, name)
+            nat_map = _classify_ship_natures(app, name, slot_kind)
             tags = '、'.join('%s(%s)' % (n, '/'.join(l)) for n, l in nat_map.items()) or '（无显著性质）'
             lines.append('%d. %s（%s · %s · %s）：%s' % (i, name, na, st, ra, tags))
             for n in nat_map:
@@ -3771,10 +3838,10 @@ def _handle_ship_attr_query(tools, msg, agent=None, overrides=None):
                 'fill_form': [], 'encounter_form': [], 'guide_files': [], 'guide_lib': '', 'ok': True}
 
     # 具体性质：在舰船集内筛出具备该性质的舰灵，并标注由哪个技能承载（分析分类）
-    lines = ['《舰灵技能性质 · %s · %s》' % (kind, cond_desc)]
+    lines = ['《舰灵技能性质 · %s%s · %s》' % (_slot_fix, kind, cond_desc)]
     hit = []
     for name, na, st, ra in rows:
-        nat_map = _classify_ship_natures(app, name)
+        nat_map = _classify_ship_natures(app, name, slot_kind)
         if kind in nat_map:
             hit.append((name, na, st, ra, '/'.join(nat_map[kind])))
     if not hit:
@@ -5213,6 +5280,15 @@ def route_work(tools, overrides, msg: str, agent=None, allow_intent_llm=True, up
                 'tool_outputs': [], 'suggestions': [], 'fill_form': [],
                 'encounter_form': [], 'guide_files': [], 'guide_lib': '', 'ok': True}
 
+    # 0. 资料未收录问法（用户反馈 2026-10-14）：「专武 / 专属装备 / 专属武器」= 游戏里的信物
+    #    （专属装备）本体数据，信息库没有收录；「信物」也只在攻略库里存了 PVP 优先级。
+    #    这类问句既无「舰船名词 + 效果条件」可被技能反查拦下，也没有对应路由，会一路落到
+    #    LLM/攻略 RAG，实测 90s 超时（前端自动中止），故在这里如实固定回复。
+    if _NO_DATA_RE.search(msg) or ('信物' in msg and _NO_DATA_ASK_RE.search(msg)
+                                   and not _NO_DATA_KB_RE.search(msg)):
+        return {'reply': _NO_DATA_REPLY, 'tool_outputs': [], 'suggestions': [], 'fill_form': [],
+                'encounter_form': [], 'guide_files': [], 'guide_lib': '', 'ok': True}
+
     # 0. 舰船「用途 / 就业」问答（用户口径 2026-10-03）：在意图分发前确定性处理 ——
     #    否则「X 值得练吗」会被 evaluate（_handle_ship_compare）抢走、「X 有什么用」会被
     #    末端 RAG 兜底随机发挥。计算流程进行中不打断（放行给原流程）。
@@ -5310,6 +5386,22 @@ def route_work(tools, overrides, msg: str, agent=None, allow_intent_llm=True, up
 
     def _li_is(*kinds):
         return _li_gate or (_li or {}).get('intent') in kinds
+
+    # ---- 技能槽位条件反查（用户口径 2026-10-14）：「支援技/通常技/必杀技/旗舰技 + 效果」类问法
+    # 用规则表直出名单，且必须早于意图分发：这类问句既没有「哪些/谁」也不含舰船名词
+    # （如「有回血有伤害的支援技」），意图分类容易判成闲聊/攻略 —— 一旦交给 LLM 自由调工具，
+    # 它会自造目标与条件（实测回了「目标:后排，加成:回血/伤害」这种假名单），甚至响应超时。
+    # 点名角色的问法（「雪风的支援技带回血吗」）放行给角色查询。
+    if re.search(r'支援技|通常技|必杀技|旗舰技', msg) and not _SHIP_QUERY_SKIP_RE.search(msg) \
+            and not _is_single_ship_slot_ask(msg) and not _msg_names_ship(msg, tools, agent):
+        from tools.knowledge import parse_skill_conditions
+        _slot_cond = parse_skill_conditions(msg)
+        if _slot_cond.get('slot'):
+            _slot_text = _query_text(tools, 'query_ships_by_skill', {'conditions': _slot_cond})
+            if _slot_text is not None:
+                return {'reply': _slot_text, 'tool_outputs': [_slot_text], 'suggestions': [],
+                        'fill_form': [], 'encounter_form': [], 'guide_files': [],
+                        'guide_lib': '', 'ok': True}
 
     # 分类服务不可用时的生活话题兜底；分类成功时以模型分析为准。
     if _li is None and _LIFE_TOPIC_RE.search(msg) and not re.search(
@@ -5639,10 +5731,7 @@ def route_work(tools, overrides, msg: str, agent=None, allow_intent_llm=True, up
     _skill_cond_word = re.search(r'能|会|加|有|带|奶|盾|控|抗|回|提速|提升|强化|高爆|穿甲|减速|免伤|点燃|燃烧|灼烧', msg)
     if re.search(r'舰灵|舰娘|船|角色|驱逐|战列|航母|巡洋|维修|潜艇|重巡|轻巡|战巡|装母|轻母|'
                  r'重炮|水母|雷巡|航战|奶船|奶妈', msg) \
-            and not re.search(r'怎么|如何|攻略|推荐|配|算|保存|更新|记录|我的|装备|面板|设置|缓存|删除|'
-                              r'之和|相加|总和|加起来|总共|合计|一共|'
-                              r'优先|值得|先练|练级|培养|毕业|强度|'
-                              r'伤害?(?:高|低|多|强|最高|最多|多少)|\d', msg) \
+            and not _SHIP_QUERY_SKIP_RE.search(msg) \
             and (_li_is('query') or (_skill_q_word and _skill_cond_word)):
         # 属性/天赋筛选（舰种/尺寸/阵营/稀有度/改造状态/天赋，无技能效果词）→ 走 ship_filter，
         # 不抢去 query_ships_by_skill（后者无 refit/尺寸/完整性维度，会漏改造舰、混入中船）。
