@@ -3583,6 +3583,53 @@ def _handle_skill_slot_query(tools, msg: str, agent=None):
             'encounter_form': [], 'guide_files': [], 'guide_lib': '', 'ok': True}
 
 
+def _handle_ship_panel_talent_multi(tools, msg, agent=None):
+    """多舰名「面板 / 天赋」查询（用户口径 2026-10-14）：一句话点名 ≥2 艘舰灵且问面板/天赋，
+    逐艘调用 query_ship_info 出结果，保证多主体都被识别 —— 否则单舰工具只取首名会把后面的舰灵漏掉
+    （实测「赤城和南达科他面板」只回了赤城）。单舰（<2 个可识别名）交回 agent 原路径
+    （query_ship_info 全量详情，含头像/历史按钮）。
+    明确其它意图（计算/配装/攻略/模拟/对比…）一律放行交原路由，不抢。
+    返回 dict 或 None。"""
+    m = (msg or '').strip()
+    if not re.search(r'面板|天赋|天赋树', m):
+        return None
+    # 明确其它工具诉求 → 不抢（与 _handle_ship_compare 同口径）
+    if re.search(r'伤害|dps|DPS|期望|一击|一发|总伤', m):
+        return None
+    if re.search(r'配装|搭配|装备|攻略|阵容|加点|活动|关卡|遭遇战|模拟|pvp|PVP|boss|BOSS|'
+                 r'前排|后排|白天|防守|怎么|如何|怎样|求助|求教', m):
+        return None
+    app = _get_app_from_tools(tools, agent)
+    if app is None:
+        return None
+    # 抽取全部舰名：通用多实体抽取 + 底层名录子串兜底（口径同 _handle_ship_attr_query）
+    from .name_service import _normalize
+    norm_msg = _normalize(m)
+    seen, names = set(), []
+    for nm in (getattr(app, 'storage', {}) or {}):
+        if not nm or len(nm) < 2:
+            continue
+        if nm in m or _normalize(nm) in norm_msg:
+            if nm not in seen:
+                seen.add(nm); names.append(nm)
+    for nm in _extract_multi_ship_names(m, app, max_n=6):
+        if nm not in seen:
+            seen.add(nm); names.append(nm)
+    names = [n for n in names if app.is_ship_complete(n)]
+    if len(names) < 2:
+        return None
+    # 天赋 → 只取天赋块；面板 → 全量详情（含头像/历史，与单舰一致）
+    field = '天赋' if re.search(r'天赋|天赋树', m) else ''
+    blocks = []
+    for nm in names:
+        blocks.append(_query_text(tools, 'query_ship_info', {'ship_name': nm, 'field': field}))
+    reply = '\n\n'.join(b for b in blocks if b)
+    if not reply:
+        return None
+    return {'reply': reply, 'tool_outputs': blocks, 'suggestions': [], 'fill_form': [],
+            'encounter_form': [], 'guide_files': [], 'guide_lib': '', 'ok': True}
+
+
 def _ship_talent_names(raw: dict) -> dict:
     """取角色天赋名 → 效果 映射（raw_storage 单角色结构 {等级:{槽位:{name,effect}}}）。"""
     out = {}

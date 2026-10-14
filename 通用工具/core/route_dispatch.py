@@ -31,7 +31,8 @@ def _pregate_result(tools, overrides, msg):
                              ('pregate.talent_ask', '_handle_talent_ask'),
                              ('pregate.pvp_lineup', '_handle_pvp_lineup'),
                              ('pregate.no_data_ask', '_handle_no_data_ask'),
-                             ('pregate.skill_slot_query', '_handle_skill_slot_query')):
+                             ('pregate.skill_slot_query', '_handle_skill_slot_query'),
+                             ('pregate.panel_talent_multi', '_handle_ship_panel_talent_multi')):
         try:
             # 争锋阵容反问式需要跨轮记忆（pvp_lineup_pending），故把 overrides 传给它；
             # 天赋点法追问需要上下文继承上一轮查过的角色（overrides['last_role']），同样传 overrides。
