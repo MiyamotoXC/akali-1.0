@@ -3548,6 +3548,41 @@ def _msg_names_ship(msg: str, tools, agent=None) -> bool:
     return False
 
 
+def _handle_no_data_ask(tools, msg: str):
+    """资料未收录问法（用户反馈 2026-10-14）：「专武 / 专属装备 / 专属武器」= 游戏里的信物
+    （专属装备）本体数据，信息库没有收录；「信物」也只在攻略库里存了 PVP 优先级。
+    这类问句既无「舰船名词 + 效果条件」可被技能反查拦下，也没有对应路由，交给 LLM/攻略 RAG
+    会 90s 超时（前端自动中止），故在这里（前置闸，agent 之前）如实固定回复。
+    返回固定回复 dict 或 None（非此类问法）。"""
+    if _NO_DATA_RE.search(msg) or ('信物' in msg and _NO_DATA_ASK_RE.search(msg)
+                                   and not _NO_DATA_KB_RE.search(msg)):
+        return {'reply': _NO_DATA_REPLY, 'tool_outputs': [], 'suggestions': [], 'fill_form': [],
+                'encounter_form': [], 'guide_files': [], 'guide_lib': '', 'ok': True}
+    return None
+
+
+def _handle_skill_slot_query(tools, msg: str, agent=None):
+    """技能槽位条件反查（用户口径 2026-10-14）：「支援技/通常技/必杀技/旗舰技 + 效果/目标」类问法
+    用规则表直出名单，放在前置闸（agent 之前），因为：这类问句既没有「哪些/谁」也不含舰船名词
+    （如「有回血有伤害的支援技」），LLM 意图分类容易判成闲聊/攻略 —— 一旦交给 agent 自由调工具，
+    它会自造目标与条件（实测回了「目标:后排，加成:回血/伤害」这种假名单），甚至响应超时。
+    点名角色的问法（「雪风的支援技带回血吗」）放行给角色查询。无槽位条件时返回 None（不拦截）。"""
+    if not re.search(r'支援技|通常技|必杀技|旗舰技', msg):
+        return None
+    if _SHIP_QUERY_SKIP_RE.search(msg) or _is_single_ship_slot_ask(msg) \
+            or _msg_names_ship(msg, tools, agent):
+        return None
+    from tools.knowledge import parse_skill_conditions
+    _slot_cond = parse_skill_conditions(msg)
+    if not _slot_cond.get('slot'):
+        return None
+    _slot_text = _query_text(tools, 'query_ships_by_skill', {'conditions': _slot_cond})
+    if _slot_text is None:
+        return None
+    return {'reply': _slot_text, 'tool_outputs': [_slot_text], 'suggestions': [], 'fill_form': [],
+            'encounter_form': [], 'guide_files': [], 'guide_lib': '', 'ok': True}
+
+
 def _ship_talent_names(raw: dict) -> dict:
     """取角色天赋名 → 效果 映射（raw_storage 单角色结构 {等级:{槽位:{name,effect}}}）。"""
     out = {}
@@ -5280,14 +5315,11 @@ def route_work(tools, overrides, msg: str, agent=None, allow_intent_llm=True, up
                 'tool_outputs': [], 'suggestions': [], 'fill_form': [],
                 'encounter_form': [], 'guide_files': [], 'guide_lib': '', 'ok': True}
 
-    # 0. 资料未收录问法（用户反馈 2026-10-14）：「专武 / 专属装备 / 专属武器」= 游戏里的信物
-    #    （专属装备）本体数据，信息库没有收录；「信物」也只在攻略库里存了 PVP 优先级。
-    #    这类问句既无「舰船名词 + 效果条件」可被技能反查拦下，也没有对应路由，会一路落到
-    #    LLM/攻略 RAG，实测 90s 超时（前端自动中止），故在这里如实固定回复。
-    if _NO_DATA_RE.search(msg) or ('信物' in msg and _NO_DATA_ASK_RE.search(msg)
-                                   and not _NO_DATA_KB_RE.search(msg)):
-        return {'reply': _NO_DATA_REPLY, 'tool_outputs': [], 'suggestions': [], 'fill_form': [],
-                'encounter_form': [], 'guide_files': [], 'guide_lib': '', 'ok': True}
+    # 0. 资料未收录问法（专武/专属装备/信物本体）—— 见前置闸 _handle_no_data_ask（agent 之前已拦，
+    #    这里再兜一层，保证 legacy 模式也生效）。
+    _nda_r = _handle_no_data_ask(tools, msg)
+    if _nda_r is not None:
+        return _nda_r
 
     # 0. 舰船「用途 / 就业」问答（用户口径 2026-10-03）：在意图分发前确定性处理 ——
     #    否则「X 值得练吗」会被 evaluate（_handle_ship_compare）抢走、「X 有什么用」会被
@@ -5387,21 +5419,11 @@ def route_work(tools, overrides, msg: str, agent=None, allow_intent_llm=True, up
     def _li_is(*kinds):
         return _li_gate or (_li or {}).get('intent') in kinds
 
-    # ---- 技能槽位条件反查（用户口径 2026-10-14）：「支援技/通常技/必杀技/旗舰技 + 效果」类问法
-    # 用规则表直出名单，且必须早于意图分发：这类问句既没有「哪些/谁」也不含舰船名词
-    # （如「有回血有伤害的支援技」），意图分类容易判成闲聊/攻略 —— 一旦交给 LLM 自由调工具，
-    # 它会自造目标与条件（实测回了「目标:后排，加成:回血/伤害」这种假名单），甚至响应超时。
-    # 点名角色的问法（「雪风的支援技带回血吗」）放行给角色查询。
-    if re.search(r'支援技|通常技|必杀技|旗舰技', msg) and not _SHIP_QUERY_SKIP_RE.search(msg) \
-            and not _is_single_ship_slot_ask(msg) and not _msg_names_ship(msg, tools, agent):
-        from tools.knowledge import parse_skill_conditions
-        _slot_cond = parse_skill_conditions(msg)
-        if _slot_cond.get('slot'):
-            _slot_text = _query_text(tools, 'query_ships_by_skill', {'conditions': _slot_cond})
-            if _slot_text is not None:
-                return {'reply': _slot_text, 'tool_outputs': [_slot_text], 'suggestions': [],
-                        'fill_form': [], 'encounter_form': [], 'guide_files': [],
-                        'guide_lib': '', 'ok': True}
+    # ---- 技能槽位条件反查（用户口径 2026-10-14）：见前置闸 _handle_skill_slot_query（agent 之前已拦，
+    #    这里再兜一层，保证 legacy 模式也生效）----
+    _slot_r = _handle_skill_slot_query(tools, msg, agent=agent)
+    if _slot_r is not None:
+        return _slot_r
 
     # 分类服务不可用时的生活话题兜底；分类成功时以模型分析为准。
     if _li is None and _LIFE_TOPIC_RE.search(msg) and not re.search(

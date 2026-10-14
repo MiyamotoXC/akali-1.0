@@ -29,7 +29,9 @@ def _pregate_result(tools, overrides, msg):
     for rule_id, fn_name in (('pregate.perf_toggle', '_handle_perf_toggle'),
                              ('pregate.ship_use', '_handle_ship_use'),
                              ('pregate.talent_ask', '_handle_talent_ask'),
-                             ('pregate.pvp_lineup', '_handle_pvp_lineup')):
+                             ('pregate.pvp_lineup', '_handle_pvp_lineup'),
+                             ('pregate.no_data_ask', '_handle_no_data_ask'),
+                             ('pregate.skill_slot_query', '_handle_skill_slot_query')):
         try:
             # 争锋阵容反问式需要跨轮记忆（pvp_lineup_pending），故把 overrides 传给它；
             # 天赋点法追问需要上下文继承上一轮查过的角色（overrides['last_role']），同样传 overrides。
