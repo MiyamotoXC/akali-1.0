@@ -2655,11 +2655,13 @@ _PVP_EXIT_RE = re.compile(r'退出|换话题|不用了|算了|取消|不看了|�
 
 
 def _pvp_extract_spec(msg):
-    """从文本解析场次规格：返回 (qs, ss, ships)。
-    qs：场质集合（金/紫/蓝）；ss：体量集合（小/中/大）；ships：命中的已知舰名（已归一为正规名）。"""
+    """从文本解析场次规格：返回 (qs, ss, ships, flagship_intent)。
+    qs：场质集合（金/紫/蓝）；ss：体量集合（小/中/大）；ships：命中的已知舰名（已归一为正规名）；
+    flagship_intent：用户是否明确要「某舰当旗舰」的阵容（点名了舰且 msg 含「旗舰」）。"""
     qs = [q for q in '金紫蓝' if q in msg]
     ss = [s for s in '小中大' if s in msg]
     ships = []
+    flagship_intent = False
     try:
         from tools.knowledge import _PVP_ALIAS, _pvp_rarity_map
         rarity = _pvp_rarity_map() or {}
@@ -2671,13 +2673,15 @@ def _pvp_extract_spec(msg):
                 if c not in canon:
                     canon[c] = True
         ships = list(canon)
+        if ships and re.search(r'旗舰', msg):
+            flagship_intent = True
     except Exception:
         pass
     if _PVP_TEAM_HINT_RE.search(msg):
         qs, ss = ['金'], ['中']
     elif _PVP_TEAM_HINT_SMALL_RE.search(msg):
         qs, ss = ['金'], ['小']
-    return qs, ss, ships
+    return qs, ss, ships, flagship_intent
 
 
 def _pvp_ask_reply(overrides, partial=None):
@@ -2703,19 +2707,36 @@ def _pvp_ask_reply(overrides, partial=None):
     }
 
 
-def _pvp_answer(tools, qs, ss, ships, overrides):
+def _pvp_answer(tools, qs, ss, ships, overrides, flagship_intent=False):
     """按场次/舰名取《参考阵容推荐》，**按原攻略格式输出**：场次标题 + 原文段落
     （说明/优点/缺点/↑注释）+ 头像行（一排头像+舰名，取自攻略头像素材，旗舰高亮）。
-    不统计数量、不把头像堆在末尾。头像行数据取自 docx 原稿（md 丢了行内舰名）。"""
+    不统计数量、不把头像堆在末尾。头像行数据取自 docx 原稿（md 丢了行内舰名）。
+    ships 非空时做「具体小分类」下钻：直接去 docx 阵容行里找含该舰的行，只渲染这些具体
+    阵容，而非整场一锅端；指定旗舰意图（flagship_intent，如「丹阳旗舰」）时仅保留该舰
+    作旗舰的行。此前只查 md 段落文本、且整场吐出，会导致「只在阵容行里出现的旗舰」搜不到、
+    也无法定位到具体阵容。"""
     try:
-        from tools.knowledge import _pvp_parse_lineups
+        from tools.knowledge import (_pvp_parse_lineups, _pvp_docx_sections,
+                                     _pvp_row_marker, _PVP_ROW_ALIAS)
         blocks = _pvp_parse_lineups() or {}
+        secs = _pvp_docx_sections() or {}
     except Exception:
         return None
-    if not blocks:
-        if overrides is not None:
-            overrides['pvp_lineup_pending'] = None
+    if not secs:
         return None
+
+    def _row_has_ship(row_names, row_hl, ship):
+        """行内是否含某舰（头像行昵称/正规名双向归一）；返回 (出现, 是否旗舰)。"""
+        present, is_flag = False, False
+        hlset = set(row_hl or ())
+        for i, nm in enumerate(row_names):
+            c = _PVP_ROW_ALIAS.get(nm, nm)
+            if c == ship or nm == ship:
+                present = True
+                if i in hlset:
+                    is_flag = True
+        return present, is_flag
+
     # qs/ss 都为空（只给了舰名）时不做场次过滤，留给下方舰名检索分支处理；
     # 否则 (not qs or ...) 在空列表下恒为真，会误把全部块当成命中
     if qs or ss:
@@ -2723,63 +2744,154 @@ def _pvp_answer(tools, qs, ss, ships, overrides):
                 if (not qs or k[0] in qs) and (not ss or k[1] in ss)]
     else:
         keys = []
-    # 给了舰名但没给场次：搜含该舰的场次块（昵称已归一为正规名）
-    if not keys and ships:
-        hit = sorted({(q, s) for (q, s), text in blocks.items()
-                      if any(sh in text for sh in ships)},
-                     key=lambda k: ('金紫蓝'.index(k[0]), '小中大'.index(k[1])))
-        if len(hit) == 1:
-            keys = hit
-        elif len(hit) > 1:
-            # 舰名跨多场出场 → 反问具体场次（保持 pending，下一轮「金小」即可下钻）
-            if overrides is not None:
-                overrides['pvp_lineup_pending'] = True
-            labels = '、'.join('%s%s' % (q, s) for q, s in hit)
-            return {'reply': ('「%s」在多个场次都有出场：%s。你看哪个场次的阵容？直接说场次即可（如「金小」）。'
-                             % ('、'.join(ships[:3]), labels)),
-                    'tool_outputs': [], 'suggestions': [], 'fill_form': [],
-                    'encounter_form': [], 'guide_files': [], 'guide_lib': '', 'ok': True}
-        # hit == 0 → 落到下方「没检索到」
-    if not keys:
+
+    # ---- 含舰名：具体阵容（小分类）下钻 ----
+    matched = []  # [(场key, 场前导段落, [(行元素, 是否旗舰行), ...])]
+    cross_note = ''
+
+    def _sort_key(k):
+        return ('金紫蓝'.index(k[0]), '小中大'.index(k[1]))
+
+    def _collect(cand_keys):
+        """在候选场里收集含该舰的行（按场分组，标记是否旗舰行）；最多 6 个场。"""
+        res = []
+        for k in cand_keys[:6]:
+            elems = secs.get(k) or []
+            lead, seen_row, rows = [], False, []
+            for el in elems:
+                if el[0] == 'p':
+                    if not seen_row:
+                        lead.append(el[1])
+                    continue
+                if el[0] != 'row':
+                    continue
+                seen_row = True
+                if not any(_row_has_ship(el[1], el[2] if len(el) > 2 else (), sh)[0] for sh in ships):
+                    continue
+                is_flag = any(_row_has_ship(el[1], el[2] if len(el) > 2 else (), sh)[1] for sh in ships)
+                rows.append((el, is_flag))
+            if rows:
+                res.append((k, lead, rows))
+        return res
+
+    if ships:
+        # 没给定场次 → 候选场 = 所有含该舰行的场；给定了场次 → 仅这些场
+        if not keys:
+            keys = sorted({(q, s) for (q, s), elems in secs.items()
+                           if any(el[0] == 'row' and _row_has_ship(el[1], el[2] if len(el) > 2 else (), sh)[0]
+                                  for el in elems for sh in ships)},
+                          key=_sort_key)
+        matched = _collect(keys)
+        if flagship_intent:
+            flag_rows = [r for _, _, rows in matched for r in rows if r[1]]
+            if flag_rows:
+                # 指定场内确有旗舰行 → 只保留旗舰行（识别具体小分类）
+                matched = [(k, lead, [r for r in rows if r[1]]) for k, lead, rows in matched
+                           if any(r[1] for r in rows)]
+            else:
+                # 指定场内该舰非旗舰 → 跨全部场找它真正作旗舰的阵容，并提示
+                cross = _collect(sorted(secs.keys(), key=_sort_key))
+                cross_flag = [r for _, _, rows in cross for r in rows if r[1]]
+                if cross_flag:
+                    matched = [(k, lead, [r for r in rows if r[1]]) for k, lead, rows in cross
+                               if any(r[1] for r in rows)]
+                    cross_note = ('（你指定的场次里「%s」多为僚舰；它作为旗舰出现在：%s）'
+                                  % ('、'.join(ships[:3]),
+                                     '、'.join('%s%s' % (q, s) for q, s in [m[0] for m in matched])))
+                elif cross:
+                    # 任何场都不是旗舰 → 退化为「含该舰的行」跨场，并提示
+                    matched = cross
+                    cross_note = '（参考阵容里「%s」未作为旗舰出现，以下是含它的阵容）' % '、'.join(ships[:3])
+        else:
+            # 非旗舰意图：指定场没有该舰行 → 跨场定位，避免整场硬吐
+            if not matched:
+                cross = _collect(sorted(secs.keys(), key=_sort_key))
+                if cross:
+                    matched = cross
+                    cross_note = ('（你指定的场次里没找到「%s」，它出现在：%s）'
+                                  % ('、'.join(ships[:3]),
+                                     '、'.join('%s%s' % (q, s) for q, s in [m[0] for m in matched])))
+        if not matched:
+            # 行里完全没有该舰 → 退回「文字说明里提及该舰」的场次
+            block_hits = sorted({(q, s) for (q, s), text in blocks.items()
+                                if any(sh in text for sh in ships)},
+                               key=_sort_key)
+            if block_hits:
+                # 指定了场次却在该场完全找不到（连文字说明都没有）→ 不拿别的场整场替补，
+                # 诚实告知它出现在哪些场（仅文字说明，阵容图未收录头像行）
+                if (qs or ss) and not any(k in block_hits for k in keys):
+                    others = '、'.join('%s%s' % (q, s) for q, s in block_hits)
+                    if overrides is not None:
+                        overrides['pvp_lineup_pending'] = None
+                    return {'reply': ('参考阵容里在你要的「%s」没找到「%s」（阵容图未收录其头像行，'
+                                      '文字说明也未提及）。它出现在：%s（仅文字说明）。需要看哪个场直接说场次即可。'
+                                      % ('＋'.join('%s%s' % (q, s) for q, s in keys),
+                                         '、'.join(ships[:3]), others)),
+                            'tool_outputs': [], 'suggestions': [], 'fill_form': [],
+                            'encounter_form': [], 'guide_files': [], 'guide_lib': '', 'ok': True}
+                keys = block_hits  # 走下方整场渲染
+                cross_note = '（「%s」仅见于文字说明，阵容图可能未收录其头像行）' % '、'.join(ships[:3])
+            else:
+                if overrides is not None:
+                    overrides['pvp_lineup_pending'] = None
+                return {'reply': ('参考阵容里没找到「%s」所在的固定队伍（图片阵容可能未收录，或名称写法不同）。'
+                                  '你可以直接说场次（金/紫/蓝 × 小/中/大船），如「金大船」，或换个舰名试试。'
+                                  % '、'.join(ships[:3])),
+                        'tool_outputs': [], 'suggestions': [], 'fill_form': [],
+                        'encounter_form': [], 'guide_files': [], 'guide_lib': '', 'ok': True}
+
+    # 无舰名且没定位到场次 → 引导
+    if not ships and not keys:
         if overrides is not None:
             overrides['pvp_lineup_pending'] = None
-        tip = ('参考阵容按场次（金/紫/蓝 × 小/中/大船）分类，没检索到「%s」所在的固定队伍。'
-               '请直接告诉我场次，比如「金大船」「紫中船」。' % '、'.join(ships[:3])) \
-            if ships else '没找到对应场次的固定阵容，请确认场次（金/紫/蓝 × 小/中/大船），比如「金大船」「紫中船」。'
-        return {'reply': tip, 'tool_outputs': [], 'suggestions': [], 'fill_form': [],
+        return {'reply': '没找到对应场次的固定阵容，请确认场次（金/紫/蓝 × 小/中/大船），比如「金大船」「紫中船」。',
+                'tool_outputs': [], 'suggestions': [], 'fill_form': [],
                 'encounter_form': [], 'guide_files': [], 'guide_lib': '', 'ok': True}
-    # 按「原攻略格式」输出：场次标题 + 原文段落 + 头像行（一排头像+舰名，攻略头像素材）。
-    # 数据取自 docx 原稿（md 丢了头像行里的舰名）。头像行由 tools.knowledge 出 <<SROW>> 标记，
-    # 前端渲染成一排「头像图 + 名字」；旗舰按原稿黄色高亮。
-    try:
-        from tools.knowledge import _pvp_docx_sections, _pvp_row_marker
-        secs = _pvp_docx_sections() or {}
-    except Exception:
-        secs = {}
-    if not secs:
-        return None
-    CAP = 40                      # 单次最多渲染的头像行数（每行 6 艘），避免回复过长
+
+    # 渲染：有 matched → 仅下钻行；否则整场（无舰名 / 舰名仅见于文字说明的回退）
+    CAP = 40  # 单次最多渲染的头像行数，避免回复过长
     parts, rows_used, truncated = [], 0, False
-    for (q, s) in keys[:3]:
-        elems = secs.get((q, s)) or []
-        if not elems:
-            continue
-        parts.append('◆ %s·%s船场' % (q, s))
-        for el in elems:
-            if el[0] == 'p':
-                parts.append(el[1])
-            elif rows_used < CAP:
-                parts.append(_pvp_row_marker(el[1], el[2] if len(el) > 2 else ()))
-                rows_used += 1
-            else:
-                truncated = True
+    if matched:
+        for (q, s), lead, rows in matched:
+            parts.append('◆ %s·%s船场' % (q, s))
+            for p in lead:
+                parts.append(p)
+            for el, _f in rows:
+                if rows_used < CAP:
+                    parts.append(_pvp_row_marker(el[1], el[2] if len(el) > 2 else ()))
+                    rows_used += 1
+                else:
+                    truncated = True
+    else:
+        for (q, s) in keys[:3]:
+            elems = secs.get((q, s)) or []
+            if not elems:
+                continue
+            parts.append('◆ %s·%s船场' % (q, s))
+            for el in elems:
+                if el[0] == 'p':
+                    parts.append(el[1])
+                elif rows_used < CAP:
+                    parts.append(_pvp_row_marker(el[1], el[2] if len(el) > 2 else ()))
+                    rows_used += 1
+                else:
+                    truncated = True
     if not parts:
         return None
     if overrides is not None:
         overrides['pvp_lineup_pending'] = None
         overrides.pop('pvp_lineup_partial', None)
-    head = ('《争锋竞技场简易百科·参考阵容推荐》（%s）：'
-            % '＋'.join('%s%s' % (q, s) for q, s in keys[:3]))
+    if matched:
+        field_label = '作为旗舰的阵容' if flagship_intent else '含该舰的阵容'
+        head = ('《争锋竞技场简易百科·参考阵容推荐》—— 「%s」%s（%s）：'
+                % ('、'.join(ships[:3]),
+                   field_label,
+                   '＋'.join('%s%s' % (q, s) for q, s in [m[0] for m in matched])))
+    else:
+        head = ('《争锋竞技场简易百科·参考阵容推荐》（%s）：'
+                % '＋'.join('%s%s' % (q, s) for q, s in keys[:3]))
+    if cross_note:
+        head += cross_note
     tail = '（攻略原文阵容，未改写；天气与赛季会影响强度，别照抄。想看整篇回复「争锋攻略」。）'
     if truncated:
         tail = '（篇幅所限仅显示前 %d 行，余下见原攻略。%s' % (CAP, tail[1:])
@@ -2810,7 +2922,7 @@ def _handle_pvp_lineup(tools, msg: str, overrides: dict = None):
             overrides['pvp_lineup_pending'] = None
             overrides.pop('pvp_lineup_partial', None)
             return None
-        qs2, ss2, ships2 = _pvp_extract_spec(m)
+        qs2, ss2, ships2, flag2 = _pvp_extract_spec(m)
         part = (overrides or {}).get('pvp_lineup_partial') or {}
         # 后续完全没新增信息（仍含糊）→ 继续反问（保留上轮局部规格）
         if not (qs2 or ss2 or ships2):
@@ -2819,12 +2931,12 @@ def _handle_pvp_lineup(tools, msg: str, overrides: dict = None):
         qs = qs2 or part.get('qs', [])
         ss = ss2 or part.get('ss', [])
         ships = ships2 or part.get('ships', [])
-        return _pvp_answer(tools, qs, ss, ships, overrides)
+        return _pvp_answer(tools, qs, ss, ships, overrides, flag2)
 
     # 首次：必须命中「阵容/队伍/推荐」类问法
     if not _PVP_WANT_RE.search(m):
         return None
-    qs, ss, ships = _pvp_extract_spec(m)
+    qs, ss, ships, flag = _pvp_extract_spec(m)
     _has_pvp = bool(_PVP_LINEUP_RE.search(m))
     # 无 pvp 信号时，必须带争锋特有标记（场质金/紫/蓝 / 体量小中大 / 具体舰名 / 命名队）才认作 PVP，
     # 否则可能是 PvE 配队问法，交回原链路（不反问、不抢答）。
@@ -2837,7 +2949,7 @@ def _handle_pvp_lineup(tools, msg: str, overrides: dict = None):
     # 已有场质 / 舰名 / 命名队（team hint 内部已设 qs/ss）→ 能唯一定位，直接出；
     # 仅体量 / 全无 → 反问（携带已给的局部规格，后续补场质即可组合，如「中船」→「金」=金中）
     if qs or ships or _PVP_TEAM_HINT_RE.search(m) or _PVP_TEAM_HINT_SMALL_RE.search(m):
-        return _pvp_answer(tools, qs, ss, ships, overrides)
+        return _pvp_answer(tools, qs, ss, ships, overrides, flag)
     return _pvp_ask_reply(overrides, {'qs': qs, 'ss': ss, 'ships': ships})
 
 
