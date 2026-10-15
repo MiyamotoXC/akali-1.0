@@ -2903,8 +2903,9 @@ def _pvp_answer(tools, qs, ss, ships, overrides, flagship_intent=False):
 def _handle_pvp_lineup(tools, msg: str, overrides: dict = None):
     """争锋竞技场阵容推荐：先反问、再按后续回答定向出阵容（附表格图）。
 
-    首次触发：消息含 阵容/队伍/推荐 等词，且带争锋特有标记
-    （场质金/紫/蓝、体量小/中/大、具体舰名、命名队，或 竞技场/争锋/pvp 信号）。
+    首次触发：① 消息含 阵容/队伍/推荐 等词，或 ② 明确点名「某舰旗舰」
+    （争锋阵容里点旗舰=具体阵容问法，含 技/天赋/点法/技能 则交回技能链路）；
+    且带争锋特有标记（场质金/紫/蓝、体量小/中/大、具体舰名、命名队，或 竞技场/争锋/pvp 信号）。
     · 已唯一定位（有场质/舰名/命名队，如 金大船/丹阳旗舰）→ 直接出，不反问；
     · 仅体量或全无（如「中船」「推荐阵容」）→ 反问并记录 pvp_lineup_pending 跨轮，
       追问轮补的维度会叠加（如「中船」→「金」=金中船）。
@@ -2933,10 +2934,14 @@ def _handle_pvp_lineup(tools, msg: str, overrides: dict = None):
         ships = ships2 or part.get('ships', [])
         return _pvp_answer(tools, qs, ss, ships, overrides, flag2)
 
-    # 首次：必须命中「阵容/队伍/推荐」类问法
-    if not _PVP_WANT_RE.search(m):
-        return None
+    # 首次触发：命中「阵容/队伍/推荐」类问法，或明确点名「某舰旗舰」（争锋阵容里点旗舰=具体阵容问法）。
+    # 含「技/天赋/点法/技能」视为技能咨询，不在此触发（交回 talent_ask 等），避免误吞技能问法。
     qs, ss, ships, flag = _pvp_extract_spec(m)
+    wants_lineup = bool(_PVP_WANT_RE.search(m))
+    flagship_q = bool(ships and re.search(r'旗舰', m)
+                      and not re.search(r'技|天赋|点法|技能', m))
+    if not (wants_lineup or flagship_q):
+        return None
     _has_pvp = bool(_PVP_LINEUP_RE.search(m))
     # 无 pvp 信号时，必须带争锋特有标记（场质金/紫/蓝 / 体量小中大 / 具体舰名 / 命名队）才认作 PVP，
     # 否则可能是 PvE 配队问法，交回原链路（不反问、不抢答）。
